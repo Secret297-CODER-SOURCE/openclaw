@@ -13,6 +13,7 @@ import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
+import { piiSessions } from "../../../pii-guard/index.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -113,7 +114,6 @@ import {
 } from "./compaction-timeout.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
-
 type PromptBuildHookRunner = {
   hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
   runBeforePromptBuild: (
@@ -287,6 +287,7 @@ function summarizeSessionContext(messages: AgentMessage[]): {
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
+  const pii = piiSessions.get(params.sessionId);
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
   const runAbortController = new AbortController();
@@ -1012,10 +1013,9 @@ export async function runEmbeddedAttempt(
       let promptErrorSource: "prompt" | "compaction" | null = null;
       try {
         const promptStartedAt = Date.now();
-
-        // Run before_prompt_build hooks to allow plugins to inject prompt context.
-        // Legacy compatibility: before_agent_start is also checked for context fields.
-        let effectivePrompt = params.prompt;
+        const rawUserPrompt = params.prompt;
+        const { text: sanitizedPrompt } = pii.sanitize(rawUserPrompt);
+        let effectivePrompt = sanitizedPrompt;
         const hookCtx = {
           agentId: hookAgentId,
           sessionKey: params.sessionKey,
@@ -1310,7 +1310,16 @@ export async function runEmbeddedAttempt(
         .slice()
         .toReversed()
         .find((m) => m.role === "assistant");
-
+      if (lastAssistant && typeof lastAssistant.content === "string") {
+        lastAssistant.content = pii.restore(lastAssistant.content);
+      } else if (lastAssistant && Array.isArray(lastAssistant.content)) {
+        lastAssistant.content = lastAssistant.content.map((block) => {
+          if (block && typeof block === "object" && typeof block.text === "string") {
+            return { ...block, text: pii.restore(block.text) };
+          }
+          return block;
+        });
+      }
       const toolMetasNormalized = toolMetas
         .filter(
           (entry): entry is { toolName: string; meta?: string } =>
