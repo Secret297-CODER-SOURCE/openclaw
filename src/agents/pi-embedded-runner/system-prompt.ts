@@ -1,7 +1,7 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
-import { buildPiiSystemPromptAddon } from "../../pii-guard/system-prompt";
+import { buildPiiSystemPromptAddon } from "../../pii-guard/system-prompt.js";
 import type { ResolvedTimeFormat } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { buildAgentSystemPrompt, type PromptMode } from "../system-prompt.js";

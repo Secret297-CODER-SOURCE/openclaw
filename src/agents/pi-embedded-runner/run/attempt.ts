@@ -1310,12 +1310,16 @@ export async function runEmbeddedAttempt(
         .slice()
         .toReversed()
         .find((m) => m.role === "assistant");
-      if (lastAssistant && typeof lastAssistant.content === "string") {
-        lastAssistant.content = pii.restore(lastAssistant.content);
-      } else if (lastAssistant && Array.isArray(lastAssistant.content)) {
+      if (lastAssistant && Array.isArray(lastAssistant.content)) {
         lastAssistant.content = lastAssistant.content.map((block) => {
-          if (block && typeof block === "object" && typeof block.text === "string") {
-            return { ...block, text: pii.restore(block.text) };
+          // Безопасно восстанавливаем только если есть поле text типа string
+          if (
+            block &&
+            typeof block === "object" &&
+            "text" in block &&
+            typeof (block as { text: string }).text === "string"
+          ) {
+            return { ...block, text: pii.restore((block as { text: string }).text) };
           }
           return block;
         });
