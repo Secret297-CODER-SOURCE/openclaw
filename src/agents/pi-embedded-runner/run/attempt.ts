@@ -908,11 +908,30 @@ export async function runEmbeddedAttempt(
         onToolResult: params.onToolResult,
         onReasoningStream: params.onReasoningStream,
         onReasoningEnd: params.onReasoningEnd,
-        onBlockReply: params.onBlockReply,
+        // FIX(pii-guard): wrap streaming callbacks — restore tokens before delivery to user
+        onBlockReply: params.onBlockReply
+          ? async (payload: { text?: string; [k: string]: unknown }) => {
+              const restored =
+                typeof payload.text === "string"
+                  ? { ...payload, text: pii.restore(payload.text) }
+                  : payload;
+              return params.onBlockReply!(restored as Parameters<typeof params.onBlockReply>[0]);
+            }
+          : undefined,
         onBlockReplyFlush: params.onBlockReplyFlush,
         blockReplyBreak: params.blockReplyBreak,
         blockReplyChunking: params.blockReplyChunking,
-        onPartialReply: params.onPartialReply,
+        onPartialReply: params.onPartialReply
+          ? async (payload: { text?: string; [k: string]: unknown }) => {
+              const restored =
+                typeof payload.text === "string"
+                  ? { ...payload, text: pii.restore(payload.text) }
+                  : payload;
+              return params.onPartialReply!(
+                restored as Parameters<typeof params.onPartialReply>[0],
+              );
+            }
+          : undefined,
         onAssistantMessageStart: params.onAssistantMessageStart,
         onAgentEvent: params.onAgentEvent,
         enforceFinalTag: params.enforceFinalTag,
@@ -1032,7 +1051,8 @@ export async function runEmbeddedAttempt(
         });
         {
           if (hookResult?.prependContext) {
-            effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
+            // FIX(pii-guard): use sanitizedPrompt, not params.prompt (raw unsanitized text)
+            effectivePrompt = `${hookResult.prependContext}\n\n${sanitizedPrompt}`;
             log.debug(
               `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
             );
@@ -1312,7 +1332,7 @@ export async function runEmbeddedAttempt(
         .find((m) => m.role === "assistant");
       if (lastAssistant && Array.isArray(lastAssistant.content)) {
         lastAssistant.content = lastAssistant.content.map((block) => {
-          // Безопасно восстанавливаем только если есть поле text типа string
+          // FIX(pii-guard): восстанавливаем токены в тексте ответа
           if (
             block &&
             typeof block === "object" &&
@@ -1323,6 +1343,13 @@ export async function runEmbeddedAttempt(
           }
           return block;
         });
+      }
+
+      // FIX(pii-guard): восстанавливаем токены в assistantTexts — именно они идут в replyPayloads
+      // onBlockReply/onPartialReply уже обёрнуты выше, но assistantTexts используется
+      // в buildReplyPayloads при block-streaming off. Восстанавливаем in-place.
+      for (let i = 0; i < assistantTexts.length; i++) {
+        assistantTexts[i] = pii.restore(assistantTexts[i]);
       }
       const toolMetasNormalized = toolMetas
         .filter(
