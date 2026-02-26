@@ -1,0 +1,9 @@
+{
+  "id": "files",
+  "channels": ["files"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,1 @@
+export { TelegramPlugin } from "./TelegramPlugin";
