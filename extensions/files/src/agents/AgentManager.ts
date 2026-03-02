@@ -131,10 +131,17 @@ export class AgentManager {
   // ─── Private ──────────────────────────────────────────────────────────────
 
   private spawn(record: AgentRecord): BaseAgent {
+    // Pass manager reference to BotAgents so they can run /listagents, /startagent, /stopagent
+    const managerRef = {
+      list: () => this.list(),
+      start: (id: string) => this.start(id),
+      stop: (id: string) => this.stop(id),
+    };
+
     const agent =
       record.type === "userbot"
         ? new UserBotAgent(record, this.storage, this.logger)
-        : new BotAgent(record, this.storage, this.logger);
+        : new BotAgent(record, this.storage, this.logger, managerRef);
 
     agent.on("event", (e: TelegramEvent) => {
       this.eventListeners.forEach((fn) => fn(e));

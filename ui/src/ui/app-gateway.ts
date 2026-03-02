@@ -28,6 +28,11 @@ import {
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import {
+  loadTelegramAgents,
+  type TelegramAgentEvent,
+  type TelegramAgentRecord,
+} from "./controllers/telegram.ts";
+import {
   resolveGatewayErrorDetailCode,
   type GatewayEventFrame,
   type GatewayHelloOk,
@@ -294,6 +299,42 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "cron" && host.tab === "cron") {
     void loadCron(host as unknown as Parameters<typeof loadCron>[0]);
+  }
+
+  // Handle Telegram plugin push events (broadcast from TelegramPlugin via ctx.broadcast)
+  if (evt.event === "telegram.event") {
+    const payload = evt.payload as TelegramAgentEvent | undefined;
+    if (payload) {
+      const thost = host as unknown as {
+        telegramRecentEvents: TelegramAgentEvent[];
+        telegramAgents: TelegramAgentRecord[];
+        tab: Tab;
+        connected: boolean;
+        client: import("./gateway.ts").GatewayBrowserClient | null;
+        telegramLoading: boolean;
+      };
+      // Prepend to ring buffer (max 100)
+      thost.telegramRecentEvents = [payload, ...(thost.telegramRecentEvents ?? [])].slice(0, 100);
+      // Patch agent status in-place for instant feedback on status_change events
+      if (payload.type === "status_change" && Array.isArray(thost.telegramAgents)) {
+        thost.telegramAgents = thost.telegramAgents.map((a) =>
+          a.id === payload.agentId
+            ? {
+                ...a,
+                status: (payload.payload?.status as TelegramAgentRecord["status"]) ?? a.status,
+                ...(payload.payload?.error != null
+                  ? { lastError: String(payload.payload.error as string | number) }
+                  : {}),
+              }
+            : a,
+        );
+      }
+      // Reload full list if telegram tab is active
+      if (thost.tab === "telegram") {
+        void loadTelegramAgents(thost as unknown as Parameters<typeof loadTelegramAgents>[0]);
+      }
+    }
+    return;
   }
 
   if (evt.event === "device.pair.requested" || evt.event === "device.pair.resolved") {

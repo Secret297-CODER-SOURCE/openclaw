@@ -238,6 +238,27 @@ export class OpenClawApp extends LitElement {
   @state() agentSkillsReport: SkillStatusReport | null = null;
   @state() agentSkillsAgentId: string | null = null;
 
+  // --- Telegram agents tab ---
+  @state() telegramLoading = false;
+  @state() telegramError: string | null = null;
+  @state() telegramAgents: import("./controllers/telegram.ts").TelegramAgentRecord[] = [];
+  @state() telegramSelectedId: string | null = null;
+  @state() telegramBusy = false;
+  @state() telegramBusyAgentId: string | null = null;
+  @state() telegramAuthStep: "idle" | "awaiting_code" | "done" | "error" = "idle";
+  @state() telegramAuthError: string | null = null;
+  @state() telegramRecentEvents: import("./controllers/telegram.ts").TelegramAgentEvent[] = [];
+  @state() telegramCreateName = "";
+  @state() telegramCreateType: "userbot" | "bot" = "bot";
+  @state() telegramCreatePhone = "";
+  @state() telegramCreateToken = "";
+  @state() telegramOtpCode = "";
+  @state() telegramOtpPassword = "";
+  @state() telegramSelectedBehaviors: unknown[] = [];
+  @state() telegramActivePanel: import("./views/telegram.ts").TelegramPanel = "overview";
+  @state() telegramBehaviorsJson = "[]";
+  @state() telegramBehaviorsJsonError: string | null = null;
+
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
   @state() sessionsError: string | null = null;

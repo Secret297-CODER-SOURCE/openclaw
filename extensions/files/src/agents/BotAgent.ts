@@ -6,13 +6,31 @@ import { TelegramStorage } from "../storage/TelegramStorage";
 import { AgentRecord, BotCredentials, BehaviorConfig, ILogger } from "../types";
 import { BaseAgent } from "./BaseAgent";
 
+/** Minimal manager interface to avoid circular import with AgentManager */
+export interface IAgentManagerRef {
+  list(): AgentRecord[];
+  start(id: string): Promise<void>;
+  stop(id: string): Promise<void>;
+}
+
 export class BotAgent extends BaseAgent {
   private bot: Bot | null = null;
   private creds: BotCredentials;
+  /** Optional manager reference for owner-only management commands */
+  private managerRef: IAgentManagerRef | null;
+  /** Owner chat ID from TG_OWNER_CHAT_ID env var — required for management commands */
+  private ownerChatId: string | null;
 
-  constructor(record: AgentRecord, storage: TelegramStorage, logger: ILogger) {
+  constructor(
+    record: AgentRecord,
+    storage: TelegramStorage,
+    logger: ILogger,
+    managerRef?: IAgentManagerRef,
+  ) {
     super(record, storage, logger);
     this.creds = record.credentials as BotCredentials;
+    this.managerRef = managerRef ?? null;
+    this.ownerChatId = process.env.TG_OWNER_CHAT_ID ?? null;
   }
 
   async start(): Promise<void> {
@@ -75,6 +93,12 @@ export class BotAgent extends BaseAgent {
     if (this.record.status === "running") this.bot!.start();
   }
 
+  /** Returns true if the message sender is the configured owner */
+  private isOwner(ctx: Context): boolean {
+    if (!this.ownerChatId) return false;
+    return String(ctx.chat?.id) === this.ownerChatId;
+  }
+
   private setupBaseHandlers() {
     if (!this.bot) return;
     this.bot.command("start", (ctx) => ctx.reply("👋 Online and ready."));
@@ -85,6 +109,79 @@ export class BotAgent extends BaseAgent {
         { parse_mode: "HTML" },
       );
     });
+
+    // ── Owner-only management commands ────────────────────────────────────────
+    // Set TG_OWNER_CHAT_ID env var to enable these commands.
+
+    this.bot.command("listagents", (ctx) => {
+      if (!this.isOwner(ctx)) return;
+      const mgr = this.managerRef;
+      if (!mgr) {
+        ctx.reply("Agent manager not available.");
+        return;
+      }
+      const records = mgr.list();
+      if (records.length === 0) {
+        ctx.reply("No agents configured.");
+        return;
+      }
+      const lines = records.map(
+        (r) =>
+          `• <b>${r.name}</b> [${r.type}] — ${r.status}${r.lastError ? `\n  ⚠️ ${r.lastError}` : ""}`,
+      );
+      ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+    });
+
+    this.bot.command("startagent", async (ctx) => {
+      if (!this.isOwner(ctx)) return;
+      const mgr = this.managerRef;
+      if (!mgr) {
+        ctx.reply("Agent manager not available.");
+        return;
+      }
+      const name = ctx.message?.text?.split(" ").slice(1).join(" ").trim();
+      if (!name) {
+        ctx.reply("Usage: /startagent <name>");
+        return;
+      }
+      const record = mgr.list().find((r) => r.name === name);
+      if (!record) {
+        ctx.reply(`Agent "${name}" not found.`);
+        return;
+      }
+      try {
+        await mgr.start(record.id);
+        ctx.reply(`✅ Agent <b>${name}</b> started.`, { parse_mode: "HTML" });
+      } catch (e) {
+        ctx.reply(`❌ Failed: ${String(e)}`);
+      }
+    });
+
+    this.bot.command("stopagent", async (ctx) => {
+      if (!this.isOwner(ctx)) return;
+      const mgr = this.managerRef;
+      if (!mgr) {
+        ctx.reply("Agent manager not available.");
+        return;
+      }
+      const name = ctx.message?.text?.split(" ").slice(1).join(" ").trim();
+      if (!name) {
+        ctx.reply("Usage: /stopagent <name>");
+        return;
+      }
+      const record = mgr.list().find((r) => r.name === name);
+      if (!record) {
+        ctx.reply(`Agent "${name}" not found.`);
+        return;
+      }
+      try {
+        await mgr.stop(record.id);
+        ctx.reply(`✅ Agent <b>${name}</b> stopped.`, { parse_mode: "HTML" });
+      } catch (e) {
+        ctx.reply(`❌ Failed: ${String(e)}`);
+      }
+    });
+
     this.bot.on("message:text", (ctx) => this.handleText(ctx));
     this.bot.catch((err) => this.logger.error(`[TG:${this.name}] bot error`, { err: err.message }));
   }

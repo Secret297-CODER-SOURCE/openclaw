@@ -156,6 +156,26 @@ export type AppViewState = {
   agentSkillsError: string | null;
   agentSkillsReport: SkillStatusReport | null;
   agentSkillsAgentId: string | null;
+  // --- Telegram agents tab ---
+  telegramLoading: boolean;
+  telegramError: string | null;
+  telegramAgents: import("./controllers/telegram.ts").TelegramAgentRecord[];
+  telegramSelectedId: string | null;
+  telegramBusy: boolean;
+  telegramBusyAgentId: string | null;
+  telegramAuthStep: "idle" | "awaiting_code" | "done" | "error";
+  telegramAuthError: string | null;
+  telegramRecentEvents: import("./controllers/telegram.ts").TelegramAgentEvent[];
+  telegramCreateName: string;
+  telegramCreateType: "userbot" | "bot";
+  telegramCreatePhone: string;
+  telegramCreateToken: string;
+  telegramOtpCode: string;
+  telegramOtpPassword: string;
+  telegramSelectedBehaviors: unknown[];
+  telegramActivePanel: import("./views/telegram.ts").TelegramPanel;
+  telegramBehaviorsJson: string;
+  telegramBehaviorsJsonError: string | null;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;

@@ -62,6 +62,17 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
+import {
+  loadTelegramAgents,
+  createTelegramAgent,
+  deleteTelegramAgent,
+  startTelegramAgent,
+  stopTelegramAgent,
+  restartTelegramAgent,
+  authStartTelegramAgent,
+  authSubmitTelegramAgent,
+  setBehaviorsTelegramAgent,
+} from "./controllers/telegram.ts";
 import { icons } from "./icons.ts";
 import { TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 import { renderAgents } from "./views/agents.ts";
@@ -78,6 +89,8 @@ import { renderNodes } from "./views/nodes.ts";
 import { renderOverview } from "./views/overview.ts";
 import { renderSessions } from "./views/sessions.ts";
 import { renderSkills } from "./views/skills.ts";
+import { renderTelegramManager } from "./views/telegram.ts";
+import type { TelegramPanel } from "./views/telegram.ts";
 
 const AVATAR_DATA_RE = /^data:/i;
 const AVATAR_HTTP_RE = /^https?:\/\//i;
@@ -488,6 +501,115 @@ export function renderApp(state: AppViewState) {
                     return;
                   }
                   await loadCronRuns(state, state.cronRunsJobId);
+                },
+              })
+            : nothing
+        }
+
+        ${
+          state.tab === "telegram"
+            ? renderTelegramManager({
+                loading: state.telegramLoading,
+                error: state.telegramError,
+                agents: state.telegramAgents,
+                selectedAgentId: state.telegramSelectedId,
+                activePanel: state.telegramActivePanel,
+                busy: state.telegramBusy,
+                busyAgentId: state.telegramBusyAgentId,
+                authStep: state.telegramAuthStep,
+                authError: state.telegramAuthError,
+                recentEvents: state.telegramRecentEvents,
+                createName: state.telegramCreateName,
+                createType: state.telegramCreateType,
+                createPhone: state.telegramCreatePhone,
+                createToken: state.telegramCreateToken,
+                otpCode: state.telegramOtpCode,
+                otpPassword: state.telegramOtpPassword,
+                behaviorsJson: state.telegramBehaviorsJson,
+                behaviorsJsonError: state.telegramBehaviorsJsonError,
+                onRefresh: () => void loadTelegramAgents(state),
+                onSelectAgent: (id) => {
+                  state.telegramSelectedId = id;
+                  state.telegramActivePanel = "overview";
+                  state.telegramAuthStep = "idle";
+                  state.telegramOtpCode = "";
+                  state.telegramOtpPassword = "";
+                  state.telegramAuthError = null;
+                  // Pre-fill behaviors JSON with current agent's behaviors
+                  const agent = state.telegramAgents.find((a) => a.id === id);
+                  state.telegramBehaviorsJson = JSON.stringify(agent?.behaviors ?? [], null, 2);
+                  state.telegramBehaviorsJsonError = null;
+                },
+                onSelectPanel: (panel: TelegramPanel) => {
+                  state.telegramActivePanel = panel;
+                },
+                onCreateNameChange: (v) => {
+                  state.telegramCreateName = v;
+                },
+                onCreateTypeChange: (v) => {
+                  state.telegramCreateType = v;
+                },
+                onCreatePhoneChange: (v) => {
+                  state.telegramCreatePhone = v;
+                },
+                onCreateTokenChange: (v) => {
+                  state.telegramCreateToken = v;
+                },
+                onCreateSubmit: async () => {
+                  const creds =
+                    state.telegramCreateType === "userbot"
+                      ? { type: "userbot" as const, phoneNumber: state.telegramCreatePhone }
+                      : { type: "bot" as const, token: state.telegramCreateToken };
+                  await createTelegramAgent(state, state.telegramCreateName, creds);
+                  state.telegramCreateName = "";
+                  state.telegramCreatePhone = "";
+                  state.telegramCreateToken = "";
+                },
+                onDelete: (id) => void deleteTelegramAgent(state, id),
+                onStart: (id) => void startTelegramAgent(state, id),
+                onStop: (id) => void stopTelegramAgent(state, id),
+                onRestart: (id) => void restartTelegramAgent(state, id),
+                onAuthStart: (id) => {
+                  state.telegramAuthStep = "awaiting_code";
+                  void authStartTelegramAgent(state, id);
+                },
+                onOtpCodeChange: (v) => {
+                  state.telegramOtpCode = v;
+                },
+                onOtpPasswordChange: (v) => {
+                  state.telegramOtpPassword = v;
+                },
+                onAuthSubmit: async (id) => {
+                  try {
+                    await authSubmitTelegramAgent(
+                      state,
+                      id,
+                      state.telegramOtpCode,
+                      state.telegramOtpPassword || undefined,
+                    );
+                    state.telegramAuthStep = "done";
+                    state.telegramOtpCode = "";
+                    state.telegramOtpPassword = "";
+                  } catch {
+                    state.telegramAuthStep = "error";
+                  }
+                },
+                onBehaviorsJsonChange: (v) => {
+                  state.telegramBehaviorsJson = v;
+                  try {
+                    JSON.parse(v);
+                    state.telegramBehaviorsJsonError = null;
+                  } catch (e) {
+                    state.telegramBehaviorsJsonError = String(e);
+                  }
+                },
+                onBehaviorsSave: async (id) => {
+                  try {
+                    const parsed = JSON.parse(state.telegramBehaviorsJson);
+                    await setBehaviorsTelegramAgent(state, id, parsed);
+                  } catch (e) {
+                    state.telegramBehaviorsJsonError = String(e);
+                  }
                 },
               })
             : nothing
