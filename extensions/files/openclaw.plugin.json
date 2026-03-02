@@ -1,6 +1,5 @@
 {
-  "id": "files",
-  "channels": ["files"],
+  "id": "telegram-manager",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
