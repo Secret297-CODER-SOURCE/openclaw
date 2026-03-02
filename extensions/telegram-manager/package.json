@@ -3,8 +3,15 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "devDependencies": {
-    "openclaw": "workspace:*"
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
+    "better-sqlite3": "^12.6.2",
+    "grammy": "^1.41.0",
+    "node-cron": "^4.2.1",
+    "telegram": "^2.26.22"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
   },
   "openclaw": {
     "extensions": [
