@@ -176,6 +176,12 @@ export type AppViewState = {
   telegramActivePanel: import("./views/telegram.ts").TelegramPanel;
   telegramBehaviorsJson: string;
   telegramBehaviorsJsonError: string | null;
+  // Telegram credentials setup overlay
+  telegramApiIdConfigured: boolean | null; // null = not yet loaded
+  telegramSetupApiId: string;
+  telegramSetupApiHash: string;
+  telegramSetupSaving: boolean;
+  telegramSetupError: string | null;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;

@@ -72,6 +72,7 @@ import {
   authStartTelegramAgent,
   authSubmitTelegramAgent,
   setBehaviorsTelegramAgent,
+  saveTelegramCredentials,
 } from "./controllers/telegram.ts";
 import { icons } from "./icons.ts";
 import { TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
@@ -527,6 +528,11 @@ export function renderApp(state: AppViewState) {
                 otpPassword: state.telegramOtpPassword,
                 behaviorsJson: state.telegramBehaviorsJson,
                 behaviorsJsonError: state.telegramBehaviorsJsonError,
+                apiIdConfigured: state.telegramApiIdConfigured,
+                setupApiId: state.telegramSetupApiId,
+                setupApiHash: state.telegramSetupApiHash,
+                setupSaving: state.telegramSetupSaving,
+                setupError: state.telegramSetupError,
                 onRefresh: () => void loadTelegramAgents(state),
                 onSelectAgent: (id) => {
                   state.telegramSelectedId = id;
@@ -609,6 +615,26 @@ export function renderApp(state: AppViewState) {
                     await setBehaviorsTelegramAgent(state, id, parsed);
                   } catch (e) {
                     state.telegramBehaviorsJsonError = String(e);
+                  }
+                },
+                onSetupApiIdChange: (v) => {
+                  state.telegramSetupApiId = v;
+                },
+                onSetupApiHashChange: (v) => {
+                  state.telegramSetupApiHash = v;
+                },
+                onSetupSave: async () => {
+                  try {
+                    await saveTelegramCredentials(
+                      state,
+                      state.telegramSetupApiId,
+                      state.telegramSetupApiHash,
+                    );
+                    // Clear sensitive fields from state after successful save
+                    state.telegramSetupApiId = "";
+                    state.telegramSetupApiHash = "";
+                  } catch {
+                    // Error is already stored in state.telegramSetupError
                   }
                 },
               })

@@ -22,6 +22,8 @@ const TELEGRAM_METHODS = [
   "telegram.tool.call",
   "telegram.events.get",
   "telegram.parsed.get",
+  "telegram.config.get",
+  "telegram.config.set",
 ] as const;
 
 const plugin = {

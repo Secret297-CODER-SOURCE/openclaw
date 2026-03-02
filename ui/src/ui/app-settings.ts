@@ -26,7 +26,7 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { loadSkills } from "./controllers/skills.ts";
-import { loadTelegramAgents } from "./controllers/telegram.ts";
+import { loadTelegramAgents, loadTelegramConfig } from "./controllers/telegram.ts";
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
@@ -201,6 +201,7 @@ export async function refreshActiveTab(host: SettingsHost) {
     await loadCron(host);
   }
   if (host.tab === "telegram") {
+    await loadTelegramConfig(host as unknown as OpenClawApp);
     await loadTelegramAgents(host as unknown as OpenClawApp);
   }
   if (host.tab === "skills") {

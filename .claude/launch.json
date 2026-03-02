@@ -1,0 +1,24 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "gateway-dev",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["gateway:dev"],
+      "port": 18789,
+      "autoPort": false
+    },
+    {
+      "name": "docs-dev",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["docs:dev"],
+      "port": 3000
+    },
+    {
+      "name": "ui-dev",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["ui:dev"],
+      "port": 5173
+    }
+  ]
+}

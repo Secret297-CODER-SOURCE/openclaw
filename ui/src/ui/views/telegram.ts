@@ -27,6 +27,12 @@ export type TelegramProps = {
   // Behavior editor (raw JSON)
   behaviorsJson: string;
   behaviorsJsonError: string | null;
+  // Credentials setup (null = not yet loaded, false = not configured, true = ok)
+  apiIdConfigured: boolean | null;
+  setupApiId: string;
+  setupApiHash: string;
+  setupSaving: boolean;
+  setupError: string | null;
   // Callbacks
   onRefresh: () => void;
   onSelectAgent: (id: string | null) => void;
@@ -46,22 +52,41 @@ export type TelegramProps = {
   onAuthSubmit: (id: string) => void;
   onBehaviorsJsonChange: (v: string) => void;
   onBehaviorsSave: (id: string) => void;
+  onSetupApiIdChange: (v: string) => void;
+  onSetupApiHashChange: (v: string) => void;
+  onSetupSave: () => void;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const STATUS_COLORS: Record<string, string> = {
-  running: "var(--color-green, #22c55e)",
-  starting: "var(--color-yellow, #eab308)",
-  error: "var(--color-red, #ef4444)",
-  stopped: "var(--color-muted, #6b7280)",
-};
+function statusChipClass(status: string): string {
+  switch (status) {
+    case "running":
+      return "chip chip-ok";
+    case "starting":
+      return "chip chip-warn";
+    case "error":
+      return "chip chip-danger";
+    default:
+      return "chip";
+  }
+}
 
-function statusDot(status: string) {
-  const color = STATUS_COLORS[status] ?? STATUS_COLORS.stopped;
-  return html`<span
-    style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px;"
-  ></span>`;
+function avatarStyle(status: string): string {
+  switch (status) {
+    case "running":
+      return "background: var(--ok); color: white;";
+    case "starting":
+      return "background: var(--warn); color: white;";
+    case "error":
+      return "background: var(--danger); color: white;";
+    default:
+      return "";
+  }
+}
+
+function agentInitial(name: string): string {
+  return name.trim().slice(0, 1).toUpperCase() || "T";
 }
 
 function isBusy(props: TelegramProps, agentId: string): boolean {
@@ -72,63 +97,47 @@ function isBusy(props: TelegramProps, agentId: string): boolean {
 
 function renderSidebar(props: TelegramProps) {
   return html`
-    <div class="agents-sidebar">
-      <div class="agents-sidebar-header">
-        <span class="agents-sidebar-title">Agents</span>
-        <button
-          class="icon-btn"
-          title="Refresh"
-          @click=${props.onRefresh}
-          ?disabled=${props.loading}
-        >
-          ↺
+    <section class="card agents-sidebar">
+      <div class="row" style="justify-content: space-between;">
+        <div>
+          <div class="card-title">Agents</div>
+          <div class="card-sub">${props.agents.length} configured.</div>
+        </div>
+        <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onRefresh}>
+          ${props.loading ? "Loading…" : "Refresh"}
         </button>
       </div>
 
-      ${
-        props.loading
-          ? html`
-              <div class="agents-sidebar-loading">Loading…</div>
-            `
-          : nothing
-      }
-      ${
-        props.error
-          ? html`<div class="callout danger" style="margin:8px">${props.error}</div>`
-          : nothing
-      }
+      ${props.error ? html`<div class="callout danger" style="margin-top: 12px;">${props.error}</div>` : nothing}
 
-      <ul class="agents-list" role="list">
-        ${props.agents.map(
-          (agent) => html`
-            <li
-              class="agents-list-item ${props.selectedAgentId === agent.id ? "selected" : ""}"
-              role="button"
-              tabindex="0"
-              @click=${() => props.onSelectAgent(agent.id)}
-              @keydown=${(e: KeyboardEvent) => e.key === "Enter" && props.onSelectAgent(agent.id)}
-            >
-              <div class="agents-list-item-name">
-                ${statusDot(agent.status)}${agent.name}
-              </div>
-              <div class="agents-list-item-meta">
-                <span class="badge">${agent.type}</span>
-                <span style="font-size:0.75em;color:var(--color-muted)">${agent.status}</span>
-              </div>
-            </li>
-          `,
-        )}
+      <div class="agent-list" style="margin-top: 12px;">
         ${
           props.agents.length === 0 && !props.loading
             ? html`
-                <li class="agents-list-empty">No agents yet</li>
+                <div class="muted">No agents yet.</div>
               `
-            : nothing
+            : props.agents.map(
+                (agent) => html`
+                  <button
+                    type="button"
+                    class="agent-row ${props.selectedAgentId === agent.id ? "active" : ""}"
+                    @click=${() => props.onSelectAgent(agent.id)}
+                  >
+                    <div class="agent-avatar" style="${avatarStyle(agent.status)}">
+                      ${agentInitial(agent.name)}
+                    </div>
+                    <div class="agent-info">
+                      <div class="agent-title">${agent.name}</div>
+                      <div class="agent-sub">${agent.type} · ${agent.status}</div>
+                    </div>
+                  </button>
+                `,
+              )
         }
-      </ul>
+      </div>
 
       ${renderCreateForm(props)}
-    </div>
+    </section>
   `;
 }
 
@@ -141,60 +150,68 @@ function renderCreateForm(props: TelegramProps) {
     (isUserbot ? props.createPhone.trim() !== "" : props.createToken.trim() !== "");
 
   return html`
-    <div class="callout" style="margin:8px;padding:10px">
-      <div style="font-weight:600;margin-bottom:8px">Add agent</div>
-
-      <input
-        class="input"
-        type="text"
-        placeholder="Name"
-        .value=${props.createName}
-        @input=${(e: InputEvent) => props.onCreateNameChange((e.target as HTMLInputElement).value)}
-        style="width:100%;margin-bottom:6px"
-      />
-
-      <select
-        class="input"
-        .value=${props.createType}
-        @change=${(e: Event) =>
-          props.onCreateTypeChange((e.target as HTMLSelectElement).value as "userbot" | "bot")}
-        style="width:100%;margin-bottom:6px"
-      >
-        <option value="bot">Bot (token)</option>
-        <option value="userbot">Userbot (phone)</option>
-      </select>
-
-      ${
-        isUserbot
-          ? html`<input
-            class="input"
+    <section class="card" style="margin-top: 4px;">
+      <div class="card-title">Add agent</div>
+      <div class="stack" style="margin-top: 12px;">
+        <div class="field">
+          <span>Name</span>
+          <input
             type="text"
-            placeholder="+79991234567"
-            .value=${props.createPhone}
-            @input=${(e: InputEvent) =>
-              props.onCreatePhoneChange((e.target as HTMLInputElement).value)}
-            style="width:100%;margin-bottom:6px"
-          />`
-          : html`<input
-            class="input"
-            type="password"
-            placeholder="Bot token from @BotFather"
-            .value=${props.createToken}
-            @input=${(e: InputEvent) =>
-              props.onCreateTokenChange((e.target as HTMLInputElement).value)}
-            style="width:100%;margin-bottom:6px"
-          />`
-      }
+            placeholder="e.g. my-bot"
+            .value=${props.createName}
+            @input=${(e: InputEvent) => props.onCreateNameChange((e.target as HTMLInputElement).value)}
+          />
+        </div>
 
-      <button
-        class="btn btn-primary"
-        style="width:100%"
-        ?disabled=${!canSubmit || props.busy}
-        @click=${props.onCreateSubmit}
-      >
-        ${props.busy && props.busyAgentId === "new" ? "Creating…" : "Create"}
-      </button>
-    </div>
+        <div class="field">
+          <span>Type</span>
+          <select
+            .value=${props.createType}
+            @change=${(e: Event) =>
+              props.onCreateTypeChange((e.target as HTMLSelectElement).value as "userbot" | "bot")}
+          >
+            <option value="bot">Bot (token)</option>
+            <option value="userbot">Userbot (phone)</option>
+          </select>
+        </div>
+
+        ${
+          isUserbot
+            ? html`
+                <div class="field">
+                  <span>Phone number</span>
+                  <input
+                    type="text"
+                    placeholder="+79991234567"
+                    .value=${props.createPhone}
+                    @input=${(e: InputEvent) =>
+                      props.onCreatePhoneChange((e.target as HTMLInputElement).value)}
+                  />
+                </div>
+              `
+            : html`
+                <div class="field">
+                  <span>Bot token</span>
+                  <input
+                    type="password"
+                    placeholder="Token from @BotFather"
+                    .value=${props.createToken}
+                    @input=${(e: InputEvent) =>
+                      props.onCreateTokenChange((e.target as HTMLInputElement).value)}
+                  />
+                </div>
+              `
+        }
+
+        <button
+          class="btn primary"
+          ?disabled=${!canSubmit || props.busy}
+          @click=${props.onCreateSubmit}
+        >
+          ${props.busy && props.busyAgentId === "new" ? "Creating…" : "Create"}
+        </button>
+      </div>
+    </section>
   `;
 }
 
@@ -209,11 +226,12 @@ function renderPanelTabs(props: TelegramProps, agent: TelegramAgentRecord) {
   ];
 
   return html`
-    <div class="agents-panel-tabs">
+    <div class="agent-tabs">
       ${tabs.map(
         (tab) => html`
           <button
-            class="agents-panel-tab ${props.activePanel === tab.id ? "active" : ""}"
+            type="button"
+            class="agent-tab ${props.activePanel === tab.id ? "active" : ""}"
             @click=${() => props.onSelectPanel(tab.id)}
           >
             ${tab.label}
@@ -230,37 +248,59 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
   const busy = isBusy(props, agent.id);
 
   return html`
-    <div class="agents-panel-content">
-      <div class="callout" style="margin-bottom:12px">
-        <table class="kv-table">
-          <tr><td>ID</td><td><code>${agent.id}</code></td></tr>
-          <tr><td>Type</td><td>${agent.type}</td></tr>
-          <tr>
-            <td>Status</td>
-            <td>${statusDot(agent.status)}${agent.status}</td>
-          </tr>
-          ${
-            agent.credentials.phoneNumber
-              ? html`<tr><td>Phone</td><td>${agent.credentials.phoneNumber}</td></tr>`
-              : nothing
-          }
-          <tr><td>Sent</td><td>${agent.stats.sent}</td></tr>
-          <tr><td>Received</td><td>${agent.stats.received}</td></tr>
-          <tr><td>Parsed</td><td>${agent.stats.parsed}</td></tr>
-          ${
-            agent.lastError
-              ? html`<tr>
-                <td>Last error</td>
-                <td style="color:var(--color-red)">${agent.lastError}</td>
-              </tr>`
-              : nothing
-          }
-        </table>
+    <section class="card">
+      <div class="card-title">Overview</div>
+      <div class="card-sub">Status, stats, and lifecycle controls.</div>
+
+      <div class="agents-overview-grid" style="margin-top: 16px;">
+        <div class="agent-kv">
+          <div class="label">ID</div>
+          <div class="mono">${agent.id}</div>
+        </div>
+        <div class="agent-kv">
+          <div class="label">Type</div>
+          <div>${agent.type}</div>
+        </div>
+        <div class="agent-kv">
+          <div class="label">Status</div>
+          <div><span class="${statusChipClass(agent.status)}">${agent.status}</span></div>
+        </div>
+        ${
+          agent.credentials.phoneNumber
+            ? html`
+                <div class="agent-kv">
+                  <div class="label">Phone</div>
+                  <div>${agent.credentials.phoneNumber}</div>
+                </div>
+              `
+            : nothing
+        }
       </div>
 
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <div class="agents-overview-grid" style="margin-top: 16px;">
+        <div class="stat">
+          <div class="stat-label">Sent</div>
+          <div class="stat-value">${agent.stats.sent}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Received</div>
+          <div class="stat-value">${agent.stats.received}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Parsed</div>
+          <div class="stat-value">${agent.stats.parsed}</div>
+        </div>
+      </div>
+
+      ${
+        agent.lastError
+          ? html`<div class="callout danger" style="margin-top: 16px;">${agent.lastError}</div>`
+          : nothing
+      }
+
+      <div class="row" style="margin-top: 20px; flex-wrap: wrap;">
         <button
-          class="btn btn-primary"
+          class="btn primary"
           ?disabled=${busy || agent.status === "running" || agent.status === "starting"}
           @click=${() => props.onStart(agent.id)}
         >
@@ -273,15 +313,11 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
         >
           Stop
         </button>
-        <button
-          class="btn"
-          ?disabled=${busy}
-          @click=${() => props.onRestart(agent.id)}
-        >
+        <button class="btn" ?disabled=${busy} @click=${() => props.onRestart(agent.id)}>
           Restart
         </button>
         <button
-          class="btn btn-danger"
+          class="btn danger"
           ?disabled=${busy}
           @click=${() => {
             if (confirm(`Delete agent "${agent.name}"?`)) {
@@ -292,7 +328,7 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
           Delete
         </button>
       </div>
-    </div>
+    </section>
   `;
 }
 
@@ -303,86 +339,83 @@ function renderAuthPanel(props: TelegramProps, agent: TelegramAgentRecord) {
   const { authStep, authError } = props;
 
   return html`
-    <div class="agents-panel-content">
-      <div class="callout" style="margin-bottom:12px">
-        <p style="margin:0 0 8px 0">
-          Authenticate as <strong>${agent.credentials.phoneNumber ?? "unknown"}</strong>.
-          Requires <code>TG_API_ID</code> and <code>TG_API_HASH</code> env vars.
-        </p>
-        ${
-          agent.status === "error" && agent.lastError?.includes("Not authorized")
-            ? html`
-                <div class="callout danger" style="margin-bottom: 8px">Not authorized — complete auth below.</div>
-              `
-            : nothing
-        }
+    <section class="card">
+      <div class="card-title">Auth</div>
+      <div class="card-sub">
+        Authenticate as <strong>${agent.credentials.phoneNumber ?? "unknown"}</strong>. Sends an
+        OTP to the phone number registered with Telegram.
       </div>
+
+      ${
+        agent.status === "error" && agent.lastError?.includes("Not authorized")
+          ? html`
+              <div class="callout danger" style="margin-top: 12px">Not authorized — complete auth below.</div>
+            `
+          : nothing
+      }
 
       ${
         authStep === "idle" || authStep === "done"
           ? html`
-            <button
-              class="btn btn-primary"
-              ?disabled=${busy}
-              @click=${() => props.onAuthStart(agent.id)}
-            >
-              ${busy ? "Sending code…" : "Send OTP to phone"}
-            </button>
-          `
+              <div style="margin-top: 16px;">
+                <button
+                  class="btn primary"
+                  ?disabled=${busy}
+                  @click=${() => props.onAuthStart(agent.id)}
+                >
+                  ${busy ? "Sending code…" : "Send OTP to phone"}
+                </button>
+              </div>
+            `
           : nothing
       }
 
       ${
         authStep === "awaiting_code"
           ? html`
-            <div class="callout" style="margin-bottom:12px;padding:10px">
-              <p style="margin:0 0 8px 0;color:var(--color-yellow)">
-                ⚠️ Code sent. Submit within 5 minutes.
-              </p>
-              <input
-                class="input"
-                type="text"
-                placeholder="OTP code (e.g. 12345)"
-                .value=${props.otpCode}
-                @input=${(e: InputEvent) =>
-                  props.onOtpCodeChange((e.target as HTMLInputElement).value)}
-                style="width:100%;margin-bottom:6px"
-              />
-              <input
-                class="input"
-                type="password"
-                placeholder="2FA password (leave blank if none)"
-                .value=${props.otpPassword}
-                @input=${(e: InputEvent) =>
-                  props.onOtpPasswordChange((e.target as HTMLInputElement).value)}
-                style="width:100%;margin-bottom:8px"
-              />
-              <button
-                class="btn btn-primary"
-                ?disabled=${busy || props.otpCode.trim() === ""}
-                @click=${() => props.onAuthSubmit(agent.id)}
-              >
-                ${busy ? "Submitting…" : "Submit code"}
-              </button>
-            </div>
-          `
+              <div class="stack" style="margin-top: 16px;">
+                <div class="callout">Code sent. Submit within 5 minutes.</div>
+                <div class="field">
+                  <span>OTP code</span>
+                  <input
+                    type="text"
+                    placeholder="e.g. 12345"
+                    .value=${props.otpCode}
+                    @input=${(e: InputEvent) =>
+                      props.onOtpCodeChange((e.target as HTMLInputElement).value)}
+                  />
+                </div>
+                <div class="field">
+                  <span>2FA password (leave blank if none)</span>
+                  <input
+                    type="password"
+                    placeholder="Optional"
+                    .value=${props.otpPassword}
+                    @input=${(e: InputEvent) =>
+                      props.onOtpPasswordChange((e.target as HTMLInputElement).value)}
+                  />
+                </div>
+                <button
+                  class="btn primary"
+                  ?disabled=${busy || props.otpCode.trim() === ""}
+                  @click=${() => props.onAuthSubmit(agent.id)}
+                >
+                  ${busy ? "Submitting…" : "Submit code"}
+                </button>
+              </div>
+            `
           : nothing
       }
 
       ${
         authStep === "done"
           ? html`
-              <div class="callout" style="color: var(--color-green)">✓ Authorized. Session saved.</div>
+              <div class="callout" style="margin-top: 12px; color: var(--ok)">Authorized. Session saved.</div>
             `
           : nothing
       }
-
-      ${
-        authError
-          ? html`<div class="callout danger" style="margin-top:8px">${authError}</div>`
-          : nothing
-      }
-    </div>
+      ${authError ? html`<div class="callout danger" style="margin-top: 12px;">${authError}</div>` : nothing}
+    </section>
   `;
 }
 
@@ -392,36 +425,35 @@ function renderBehaviorsPanel(props: TelegramProps, agent: TelegramAgentRecord) 
   const busy = isBusy(props, agent.id);
 
   return html`
-    <div class="agents-panel-content">
-      <p style="margin:0 0 8px 0;font-size:0.85em;color:var(--color-muted)">
-        Edit behaviors as JSON. Supported types:
-        <code>auto_reply</code>, <code>monitor</code>, <code>broadcast</code>,
-        <code>parser</code>.
-      </p>
-      <textarea
-        class="input"
-        rows="16"
-        style="width:100%;font-family:monospace;font-size:0.8em"
-        .value=${props.behaviorsJson}
-        @input=${(e: InputEvent) =>
-          props.onBehaviorsJsonChange((e.target as HTMLTextAreaElement).value)}
-      ></textarea>
-      ${
-        props.behaviorsJsonError
-          ? html`<div class="callout danger" style="margin-top:4px;font-size:0.85em">
-            ${props.behaviorsJsonError}
-          </div>`
-          : nothing
-      }
-      <button
-        class="btn btn-primary"
-        style="margin-top:8px"
-        ?disabled=${busy || !!props.behaviorsJsonError}
-        @click=${() => props.onBehaviorsSave(agent.id)}
-      >
-        ${busy ? "Saving…" : "Save behaviors"}
-      </button>
-    </div>
+    <section class="card">
+      <div class="card-title">Behaviors</div>
+      <div class="card-sub">
+        Edit behaviors as JSON. Supported types: <code>auto_reply</code>, <code>monitor</code>,
+        <code>broadcast</code>, <code>parser</code>.
+      </div>
+      <div class="stack" style="margin-top: 16px;">
+        <div class="field">
+          <textarea
+            rows="16"
+            .value=${props.behaviorsJson}
+            @input=${(e: InputEvent) =>
+              props.onBehaviorsJsonChange((e.target as HTMLTextAreaElement).value)}
+          ></textarea>
+        </div>
+        ${
+          props.behaviorsJsonError
+            ? html`<div class="callout danger">${props.behaviorsJsonError}</div>`
+            : nothing
+        }
+        <button
+          class="btn primary"
+          ?disabled=${busy || !!props.behaviorsJsonError}
+          @click=${() => props.onBehaviorsSave(agent.id)}
+        >
+          ${busy ? "Saving…" : "Save behaviors"}
+        </button>
+      </div>
+    </section>
   `;
 }
 
@@ -431,40 +463,35 @@ function renderEventsPanel(props: TelegramProps, agentId: string) {
   const events = props.recentEvents.filter((e) => e.agentId === agentId);
 
   return html`
-    <div class="agents-panel-content">
-      ${
-        events.length === 0
-          ? html`
-              <div style="color: var(--color-muted); font-size: 0.85em">No events yet.</div>
-            `
-          : html`
-            <table class="kv-table" style="font-size:0.8em;width:100%">
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Type</th>
-                  <th>Payload</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${events.slice(0, 50).map(
-                  (evt) => html`
-                    <tr>
-                      <td style="white-space:nowrap;color:var(--color-muted)">
-                        ${new Date(evt.timestamp).toLocaleTimeString()}
-                      </td>
-                      <td><span class="badge">${evt.type}</span></td>
-                      <td style="font-family:monospace;word-break:break-all">
+    <section class="card">
+      <div class="card-title">Events</div>
+      <div class="card-sub">Recent agent events (last 50).</div>
+      <div class="list" style="margin-top: 16px;">
+        ${
+          events.length === 0
+            ? html`
+                <div class="muted">No events yet.</div>
+              `
+            : events.slice(0, 50).map(
+                (evt) => html`
+                  <div class="list-item">
+                    <div class="list-main">
+                      <div class="list-title">
+                        <span class="chip">${evt.type}</span>
+                      </div>
+                      <div class="list-sub mono" style="word-break: break-all;">
                         ${JSON.stringify(evt.payload).slice(0, 120)}
-                      </td>
-                    </tr>
-                  `,
-                )}
-              </tbody>
-            </table>
-          `
-      }
-    </div>
+                      </div>
+                    </div>
+                    <div class="list-meta">
+                      <div>${new Date(evt.timestamp).toLocaleTimeString()}</div>
+                    </div>
+                  </div>
+                `,
+              )
+        }
+      </div>
+    </section>
   `;
 }
 
@@ -475,22 +502,32 @@ function renderDetail(props: TelegramProps) {
 
   if (!agent) {
     return html`
-      <div class="agents-main">
-        <div style="color: var(--color-muted); padding: 24px">
-          Select an agent from the list, or create one.
+      <section class="agents-main">
+        <div class="card">
+          <div class="card-title">Select an agent</div>
+          <div class="card-sub">Pick an agent from the list, or create a new one.</div>
         </div>
-      </div>
+      </section>
     `;
   }
 
   return html`
-    <div class="agents-main">
-      <div class="agents-detail-header">
-        <h2 class="agents-detail-title">
-          ${statusDot(agent.status)}${agent.name}
-          <span class="badge" style="margin-left:4px">${agent.type}</span>
-        </h2>
-      </div>
+    <section class="agents-main">
+      <section class="card agent-header">
+        <div class="agent-header-main">
+          <div class="agent-avatar agent-avatar--lg" style="${avatarStyle(agent.status)}">
+            ${agentInitial(agent.name)}
+          </div>
+          <div>
+            <div class="card-title">${agent.name}</div>
+            <div class="card-sub">Telegram ${agent.type} agent.</div>
+          </div>
+        </div>
+        <div class="agent-header-meta">
+          <span class="${statusChipClass(agent.status)}">${agent.status}</span>
+          <span class="agent-pill">${agent.type}</span>
+        </div>
+      </section>
 
       ${renderPanelTabs(props, agent)}
 
@@ -502,7 +539,88 @@ function renderDetail(props: TelegramProps) {
       }
       ${props.activePanel === "behaviors" ? renderBehaviorsPanel(props, agent) : nothing}
       ${props.activePanel === "events" ? renderEventsPanel(props, agent.id) : nothing}
-    </div>
+    </section>
+  `;
+}
+
+// ─── Credentials setup overlay ───────────────────────────────────────────────
+
+function renderCredentialsCard(props: TelegramProps) {
+  const canSave =
+    !props.setupSaving && props.setupApiId.trim() !== "" && props.setupApiHash.trim() !== "";
+  return html`
+    <section class="card" style="width: 100%; max-width: 480px;">
+      <div class="card-title">Telegram API credentials</div>
+      <div class="card-sub">
+        Get your credentials at
+        <a href="https://my.telegram.org" target="_blank" rel="noopener">my.telegram.org</a>
+        → API development tools. Required to run any Telegram agent.
+      </div>
+      <div class="stack" style="margin-top: 16px;">
+        <div class="field">
+          <span>API ID</span>
+          <input
+            type="text"
+            placeholder="e.g. 12345678"
+            .value=${props.setupApiId}
+            @input=${(e: InputEvent) =>
+              props.onSetupApiIdChange((e.target as HTMLInputElement).value)}
+          />
+        </div>
+        <div class="field">
+          <span>API Hash</span>
+          <input
+            type="password"
+            placeholder="32-character hex string"
+            .value=${props.setupApiHash}
+            @input=${(e: InputEvent) =>
+              props.onSetupApiHashChange((e.target as HTMLInputElement).value)}
+          />
+        </div>
+        ${props.setupError ? html`<div class="callout danger">${props.setupError}</div>` : nothing}
+        <button class="btn primary" ?disabled=${!canSave} @click=${props.onSetupSave}>
+          ${props.setupSaving ? "Saving…" : "Save credentials"}
+        </button>
+      </div>
+    </section>
+  `;
+}
+
+/** Renders the detail area; when credentials are not configured, blurs it and
+ *  shows a setup card overlay so the user can enter API ID / API Hash. */
+function renderDetailArea(props: TelegramProps) {
+  const needsSetup = props.apiIdConfigured === false;
+
+  if (!needsSetup) {
+    return renderDetail(props);
+  }
+
+  return html`
+    <section class="agents-main" style="position: relative; overflow: hidden;">
+      <!-- blurred placeholder so the layout doesn't collapse -->
+      <div style="filter: blur(3px); pointer-events: none; user-select: none;">
+        <section class="card">
+          <div class="card-title" style="opacity: 0.5;">Telegram Agents</div>
+          <div class="card-sub" style="opacity: 0.5;">API credentials required to manage agents.</div>
+        </section>
+      </div>
+      <!-- centered overlay -->
+      <div
+        style="
+          position: absolute;
+          inset: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          backdrop-filter: blur(6px);
+          -webkit-backdrop-filter: blur(6px);
+          background: rgba(0, 0, 0, 0.12);
+          padding: 24px;
+        "
+      >
+        ${renderCredentialsCard(props)}
+      </div>
+    </section>
   `;
 }
 
@@ -511,7 +629,7 @@ function renderDetail(props: TelegramProps) {
 export function renderTelegramManager(props: TelegramProps) {
   return html`
     <div class="tab-container agents-layout">
-      ${renderSidebar(props)} ${renderDetail(props)}
+      ${renderSidebar(props)} ${renderDetailArea(props)}
     </div>
   `;
 }

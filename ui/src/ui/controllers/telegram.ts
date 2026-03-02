@@ -226,6 +226,56 @@ export async function setBehaviorsTelegramAgent(
   });
 }
 
+// ─── Credentials config ───────────────────────────────────────────────────────
+
+type TelegramConfigState = TelegramState & {
+  telegramApiIdConfigured: boolean | null;
+  telegramSetupSaving: boolean;
+  telegramSetupError: string | null;
+};
+
+export async function loadTelegramConfig(state: TelegramConfigState): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  try {
+    const res = await state.client!.request<{
+      configured: boolean;
+      apiId: number | null;
+      apiHashSet: boolean;
+    }>("telegram.config.get", {});
+    state.telegramApiIdConfigured = res?.configured ?? false;
+  } catch {
+    // Plugin may not be loaded yet — treat as unknown
+    state.telegramApiIdConfigured = null;
+  }
+}
+
+export async function saveTelegramCredentials(
+  state: TelegramConfigState & { telegramSetupApiId: string; telegramSetupApiHash: string },
+  apiId: string,
+  apiHash: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  state.telegramSetupSaving = true;
+  state.telegramSetupError = null;
+  try {
+    await state.client!.request("telegram.config.set", {
+      apiId: parseInt(apiId, 10),
+      apiHash: apiHash.trim(),
+    });
+    state.telegramApiIdConfigured = true;
+    await loadTelegramAgents(state);
+  } catch (err) {
+    state.telegramSetupError = String(err);
+    throw err;
+  } finally {
+    state.telegramSetupSaving = false;
+  }
+}
+
 // ─── Tool calls ───────────────────────────────────────────────────────────────
 
 export async function callTelegramTool(

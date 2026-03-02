@@ -132,6 +132,31 @@ export class TelegramPlugin implements GatewayPlugin {
           respond(this.manager.getParsed(p.agentId, p.limit));
           break;
 
+        // ── Plugin credentials config ──────────────────────────────────────
+
+        case "telegram.config.get": {
+          const cfg = this.storage.loadPluginConfig();
+          respond({
+            configured: cfg !== null,
+            apiId: cfg?.apiId ?? null,
+            // Never return the hash in plaintext; only signal whether it's set
+            apiHashSet: !!cfg?.apiHash,
+          });
+          break;
+        }
+
+        case "telegram.config.set": {
+          const apiId = parseInt(String(p.apiId ?? "0"), 10);
+          const apiHash = String(p.apiHash ?? "").trim();
+          if (!apiId || !apiHash) {
+            fail("apiId and apiHash are required");
+            break;
+          }
+          this.storage.savePluginConfig({ apiId, apiHash });
+          respond({ ok: true });
+          break;
+        }
+
         default:
           fail(`Unknown method: ${msg.method}`);
       }

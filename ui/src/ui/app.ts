@@ -258,6 +258,12 @@ export class OpenClawApp extends LitElement {
   @state() telegramActivePanel: import("./views/telegram.ts").TelegramPanel = "overview";
   @state() telegramBehaviorsJson = "[]";
   @state() telegramBehaviorsJsonError: string | null = null;
+  // Telegram credentials setup overlay
+  @state() telegramApiIdConfigured: boolean | null = null; // null = unknown (not yet loaded)
+  @state() telegramSetupApiId = "";
+  @state() telegramSetupApiHash = "";
+  @state() telegramSetupSaving = false;
+  @state() telegramSetupError: string | null = null;
 
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;

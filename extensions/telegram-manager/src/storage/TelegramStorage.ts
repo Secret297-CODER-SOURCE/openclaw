@@ -4,11 +4,18 @@ import path from "path";
 import Database from "better-sqlite3";
 import { AgentRecord, BehaviorConfig, TelegramEvent } from "../types";
 
+export type TelegramPluginConfig = {
+  apiId: number;
+  apiHash: string;
+};
+
 export class TelegramStorage {
   private db: Database.Database;
+  private configFile: string;
 
   constructor(dataDir: string) {
     fs.mkdirSync(dataDir, { recursive: true });
+    this.configFile = path.join(dataDir, "plugin-config.json");
     this.db = new Database(path.join(dataDir, "telegram.db"));
     this.db.pragma("journal_mode = WAL");
     this.migrate();
@@ -164,6 +171,44 @@ export class TelegramStorage {
         .prepare("SELECT * FROM tg_parsed WHERE agent_id=? ORDER BY id DESC LIMIT ?")
         .all(agentId, limit) as any[]
     ).map((r) => ({ ...r, content: JSON.parse(r.content) }));
+  }
+
+  // ─── Plugin credentials config ───────────────────────────────────────────
+
+  /** Persist apiId + apiHash to a JSON file in the plugin data directory. */
+  savePluginConfig(cfg: TelegramPluginConfig): void {
+    fs.writeFileSync(this.configFile, JSON.stringify(cfg, null, 2), "utf-8");
+  }
+
+  /**
+   * Load apiId + apiHash.
+   * Priority: plugin-config.json → TG_API_ID / TG_API_HASH env vars.
+   * Returns null when neither source has both values.
+   */
+  loadPluginConfig(): TelegramPluginConfig | null {
+    let apiId = 0;
+    let apiHash = "";
+
+    // Try file-based config first
+    try {
+      if (fs.existsSync(this.configFile)) {
+        const data = JSON.parse(fs.readFileSync(this.configFile, "utf-8")) as Record<
+          string,
+          unknown
+        >;
+        apiId = parseInt(String(data.apiId ?? "0"), 10);
+        apiHash = String(data.apiHash ?? "");
+      }
+    } catch {
+      // ignore parse errors, fall through to env
+    }
+
+    // Env vars override or fill in missing values
+    if (process.env.TG_API_ID) apiId = parseInt(process.env.TG_API_ID, 10);
+    if (process.env.TG_API_HASH) apiHash = process.env.TG_API_HASH;
+
+    if (!apiId || !apiHash) return null;
+    return { apiId, apiHash };
   }
 
   private toRecord(row: any): AgentRecord {

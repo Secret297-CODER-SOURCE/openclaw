@@ -26,9 +26,14 @@ export class UserBotAgent extends BaseAgent {
     this.setStatus("starting");
 
     try {
-      const apiId = parseInt(process.env.TG_API_ID ?? "0");
-      const apiHash = process.env.TG_API_HASH ?? "";
-      if (!apiId || !apiHash) throw new Error("TG_API_ID / TG_API_HASH not configured");
+      const apiCfg = this.storage.loadPluginConfig();
+      if (!apiCfg) {
+        throw new Error(
+          "Telegram API credentials not configured. " +
+            "Set them in the Telegram Agents tab or via TG_API_ID / TG_API_HASH env vars.",
+        );
+      }
+      const { apiId, apiHash } = apiCfg;
 
       const session = new StringSession(this.creds.sessionString ?? "");
       this.client = new TelegramClient(session, apiId, apiHash, {
@@ -69,8 +74,13 @@ export class UserBotAgent extends BaseAgent {
   // ─── Auth flow ────────────────────────────────────────────────────────────
 
   async authStart(): Promise<void> {
-    const apiId = parseInt(process.env.TG_API_ID ?? "0");
-    const apiHash = process.env.TG_API_HASH ?? "";
+    const apiCfg = this.storage.loadPluginConfig();
+    if (!apiCfg) {
+      throw new Error(
+        "Telegram API credentials not configured. Set them in the Telegram Agents tab.",
+      );
+    }
+    const { apiId, apiHash } = apiCfg;
     this.client = new TelegramClient(new StringSession(""), apiId, apiHash, {
       connectionRetries: 3,
     });
@@ -80,8 +90,10 @@ export class UserBotAgent extends BaseAgent {
 
   async authSubmit(code: string, password?: string): Promise<void> {
     if (!this.client) throw new Error("Call authStart first");
+    const apiCfg = this.storage.loadPluginConfig();
+    if (!apiCfg) throw new Error("Telegram API credentials not configured.");
     await this.client.signInUser(
-      { apiId: parseInt(process.env.TG_API_ID!), apiHash: process.env.TG_API_HASH! },
+      { apiId: apiCfg.apiId, apiHash: apiCfg.apiHash },
       {
         phoneNumber: this.creds.phoneNumber,
         phoneCode: async () => code,
