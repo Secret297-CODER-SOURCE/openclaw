@@ -322,12 +322,6 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/files:
-    devDependencies:
-      openclaw:
-        specifier: workspace:*
-        version: link:../..
-
   extensions/google-gemini-cli-auth:
     devDependencies:
       openclaw:
@@ -479,6 +473,12 @@ importers:
         version: link:../..
 
   extensions/telegram:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
+  extensions/telegram-manager:
     devDependencies:
       openclaw:
         specifier: workspace:*

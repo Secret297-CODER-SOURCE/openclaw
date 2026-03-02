@@ -30,10 +30,10 @@ This fork adds a **Telegram Manager Module** — a full userbot/bot automation s
 
 This fork adds the following on top of the original openclaw:
 
-| Change                                                          | Location                  |
-| --------------------------------------------------------------- | ------------------------- |
-| **Telegram Manager Module** (userbot + bot agents, 4 behaviors) | `extensions/files/`       |
-| `ui/src/ui/app-render.ts` — minor UI render adjustments         | `ui/src/ui/app-render.ts` |
+| Change                                                          | Location                       |
+| --------------------------------------------------------------- | ------------------------------ |
+| **Telegram Manager Module** (userbot + bot agents, 4 behaviors) | `extensions/telegram-manager/` |
+| `ui/src/ui/app-render.ts` — minor UI render adjustments         | `ui/src/ui/app-render.ts`      |
 
 Everything else is the original openclaw codebase. To pull upstream updates:
 
@@ -73,7 +73,7 @@ openclaw agent --message "Ship checklist" --thinking high
 
 ## Telegram Manager Module
 
-> **Location:** `extensions/files/`
+> **Location:** `extensions/telegram-manager/`
 > **Type:** OpenClaw plugin extension
 > **Adds:** Telegram user account automation (userbot) and bot account automation
 
@@ -132,7 +132,7 @@ Add these to `~/.profile` or `~/.zshrc` so they persist.
 In your gateway entry point (`gateway/src/index.ts` or equivalent) add:
 
 ```typescript
-import { TelegramPlugin } from "../../extensions/files/src/TelegramPlugin";
+import { TelegramPlugin } from "../../extensions/telegram-manager/src/TelegramPlugin";
 
 const telegramPlugin = new TelegramPlugin();
 gateway.registerPlugin(telegramPlugin);
