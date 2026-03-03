@@ -51,6 +51,23 @@ export class UserBotAgent extends BaseAgent {
         ...(apiCfg.proxy ? { proxy: apiCfg.proxy } : {}),
       });
 
+      // gramjs's _updateLoop fires TIMEOUT every ~40s when there are no incoming
+      // updates (normal long-poll behaviour). It calls console.error(err) directly
+      // when client._log.canSend("error") is true, causing log noise.
+      // Fix: route errors through our logger (swallowing expected TIMEOUT), and
+      // prevent the companion console.error by returning false for "error" level.
+      const clientAny = this.client as unknown as Record<string, unknown>;
+      const logObj = clientAny._log as { canSend: (level: string) => boolean } | undefined;
+      if (logObj && typeof logObj.canSend === "function") {
+        const origCanSend = logObj.canSend.bind(logObj);
+        // eslint-disable-next-line no-param-reassign
+        logObj.canSend = (level: string) => level !== "error" && origCanSend(level);
+      }
+      clientAny._errorHandler = async (err: unknown) => {
+        if (err instanceof Error && err.message === "TIMEOUT") return;
+        this.logger.warn(`[TG:${this.name}] gramjs error`, { e: String(err) });
+      };
+
       await this.client.connect();
 
       if (!(await this.client.isUserAuthorized())) {
