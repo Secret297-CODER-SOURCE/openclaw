@@ -41,7 +41,11 @@ class I18nManager {
   }
 
   public async setLocale(locale: Locale) {
-    if (this.locale === locale) {
+    const alreadyActive = this.locale === locale;
+    // Only skip if locale matches AND translations are already loaded.
+    // loadLocale() sets this.locale synchronously but never loads translation data,
+    // so after a page reload we must still lazy-load even when the locale appears set.
+    if (alreadyActive && this.translations[locale]) {
       return;
     }
 

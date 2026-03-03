@@ -100,8 +100,16 @@ export class AgentManager {
   async authSubmit(id: string, code: string, password?: string): Promise<void> {
     const agent = this.get_or_throw(id);
     if (!(agent instanceof UserBotAgent)) throw new Error("Only userbot agents support auth");
+    // Auth itself: throws on bad code / 2FA required / network error during sign-in.
     await agent.authSubmit(code, password);
-    await agent.start();
+    // Best-effort start: session is already saved, so a connectivity failure here
+    // must not be reported back as an auth failure. The user can start the agent
+    // manually once the network is reachable.
+    agent.start().catch((e) =>
+      this.logger.warn(`[TG:${id}] auto-start after auth failed (will need manual start)`, {
+        e: String(e),
+      }),
+    );
   }
 
   // ─── Tools ────────────────────────────────────────────────────────────────
