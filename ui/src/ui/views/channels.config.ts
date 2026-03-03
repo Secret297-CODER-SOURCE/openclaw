@@ -103,6 +103,36 @@ function renderExtraChannelFields(value: Record<string, unknown>) {
   `;
 }
 
+// When no structured schema is available for the channel (channel plugin not
+// installed), render a raw JSON textarea so the user can still view and edit
+// the channel config (e.g. add a bot token, adjust allowFrom, etc.).
+function renderRawChannelEditor(props: ChannelConfigFormProps) {
+  const configValue = props.configValue ?? {};
+  const value = resolveChannelValue(configValue, props.channelId);
+  const jsonStr = JSON.stringify(value, null, 2);
+
+  const handleChange = (e: Event) => {
+    const target = e.target as HTMLTextAreaElement;
+    try {
+      const parsed = JSON.parse(target.value) as unknown;
+      props.onPatch(["channels", props.channelId], parsed);
+    } catch {
+      // Invalid JSON — don't patch until it parses cleanly
+    }
+  };
+
+  return html`
+    <div style="margin-top: 8px;">
+      <textarea
+        style="width: 100%; min-height: 100px; font-family: var(--font-mono, monospace); font-size: 12px; resize: vertical; box-sizing: border-box;"
+        ?disabled=${props.disabled}
+        .value=${jsonStr}
+        @change=${handleChange}
+      ></textarea>
+    </div>
+  `;
+}
+
 export function renderChannelConfigForm(props: ChannelConfigFormProps) {
   const analysis = analyzeConfigSchema(props.schema);
   const normalized = analysis.schema;
@@ -112,8 +142,9 @@ export function renderChannelConfigForm(props: ChannelConfigFormProps) {
     `;
   }
   const node = resolveSchemaNode(normalized, ["channels", props.channelId]);
+  // No typed schema for this channel (channel plugin not installed) — show raw editor.
   if (!node) {
-    return null;
+    return renderRawChannelEditor(props);
   }
   const configValue = props.configValue ?? {};
   const value = resolveChannelValue(configValue, props.channelId);
