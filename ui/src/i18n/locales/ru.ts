@@ -175,6 +175,19 @@ export const ru: TranslationMap = {
     selectAgentTitle: "Выберите агента",
     selectAgentDesc: "Выберите агента из списка или создайте нового.",
     deleteConfirm: 'Удалить агента "{name}"?',
+    // Прокси
+    proxyOptional: "Необязательный SOCKS5-прокси",
+    proxyTitle: "SOCKS5-прокси",
+    proxyDesc:
+      "Маршрутизировать подключения Telegram через SOCKS5-прокси (полезно, если прямой доступ к DC Telegram заблокирован).",
+    proxyHost: "Хост прокси",
+    proxyPort: "Порт прокси",
+    proxyUsername: "Имя пользователя",
+    proxyPassword: "Пароль",
+    proxyActive: "Активный прокси",
+    proxySave: "Сохранить прокси",
+    proxyClear: "Удалить прокси",
+    optional: "необязательно",
   },
   instances: {
     title: "Подключённые экземпляры",

@@ -10,6 +10,7 @@
 import path from "path";
 import { AgentManager } from "./agents/AgentManager";
 import { TelegramStorage } from "./storage/TelegramStorage";
+import type { ProxyConfig } from "./storage/TelegramStorage";
 import { GatewayPlugin, IGatewayContext, GatewayMessage, HttpRoute, TelegramEvent } from "./types";
 
 export class TelegramPlugin implements GatewayPlugin {
@@ -141,6 +142,11 @@ export class TelegramPlugin implements GatewayPlugin {
             apiId: cfg?.apiId ?? null,
             // Never return the hash in plaintext; only signal whether it's set
             apiHashSet: !!cfg?.apiHash,
+            // Proxy info (password never returned)
+            proxyConfigured: !!(cfg?.proxy?.ip && cfg?.proxy?.port),
+            proxyIp: cfg?.proxy?.ip ?? null,
+            proxyPort: cfg?.proxy?.port ?? null,
+            proxyUsername: cfg?.proxy?.username ?? null,
           });
           break;
         }
@@ -152,7 +158,51 @@ export class TelegramPlugin implements GatewayPlugin {
             fail("apiId and apiHash are required");
             break;
           }
-          this.storage.savePluginConfig({ apiId, apiHash });
+          // Optional proxy fields
+          const proxyIp = String(p.proxyIp ?? "").trim();
+          const proxyPort = parseInt(String(p.proxyPort ?? "0"), 10);
+          const proxy: ProxyConfig | undefined =
+            proxyIp && proxyPort
+              ? {
+                  socksType: 5,
+                  ip: proxyIp,
+                  port: proxyPort,
+                  ...(p.proxyUsername ? { username: String(p.proxyUsername) } : {}),
+                  ...(p.proxyPassword ? { password: String(p.proxyPassword) } : {}),
+                }
+              : undefined;
+          this.storage.savePluginConfig({ apiId, apiHash, ...(proxy ? { proxy } : {}) });
+          respond({ ok: true });
+          break;
+        }
+
+        // Proxy-only update — preserves existing apiId/apiHash, only modifies proxy
+        case "telegram.config.setProxy": {
+          const existing = this.storage.loadPluginConfig();
+          if (!existing) {
+            fail("API credentials not configured yet");
+            break;
+          }
+          const proxyIp = String(p.proxyIp ?? "").trim();
+          const proxyPort = parseInt(String(p.proxyPort ?? "0"), 10);
+          // Pass clear:true to remove proxy without changing credentials
+          if (p.clear) {
+            this.storage.savePluginConfig({ ...existing, proxy: undefined });
+            respond({ ok: true, cleared: true });
+            break;
+          }
+          if (!proxyIp || !proxyPort) {
+            fail("proxyIp and proxyPort are required (or pass clear:true to remove proxy)");
+            break;
+          }
+          const proxy: ProxyConfig = {
+            socksType: 5,
+            ip: proxyIp,
+            port: proxyPort,
+            ...(p.proxyUsername ? { username: String(p.proxyUsername) } : {}),
+            ...(p.proxyPassword ? { password: String(p.proxyPassword) } : {}),
+          };
+          this.storage.savePluginConfig({ ...existing, proxy });
           respond({ ok: true });
           break;
         }

@@ -24,6 +24,7 @@ const TELEGRAM_METHODS = [
   "telegram.parsed.get",
   "telegram.config.get",
   "telegram.config.set",
+  "telegram.config.setProxy",
 ] as const;
 
 const plugin = {

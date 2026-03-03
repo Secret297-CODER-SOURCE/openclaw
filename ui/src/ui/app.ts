@@ -262,8 +262,22 @@ export class OpenClawApp extends LitElement {
   @state() telegramApiIdConfigured: boolean | null = null; // null = unknown (not yet loaded)
   @state() telegramSetupApiId = "";
   @state() telegramSetupApiHash = "";
+  @state() telegramSetupProxyIp = "";
+  @state() telegramSetupProxyPort = "";
+  @state() telegramSetupProxyUsername = "";
+  @state() telegramSetupProxyPassword = "";
   @state() telegramSetupSaving = false;
   @state() telegramSetupError: string | null = null;
+  // Telegram proxy settings (accessible after initial setup)
+  @state() telegramProxyConfigured = false;
+  @state() telegramProxyIp = "";
+  @state() telegramProxyPort = "";
+  @state() telegramProxyEditIp = "";
+  @state() telegramProxyEditPort = "";
+  @state() telegramProxyEditUsername = "";
+  @state() telegramProxyEditPassword = "";
+  @state() telegramProxySaving = false;
+  @state() telegramProxyError: string | null = null;
 
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;

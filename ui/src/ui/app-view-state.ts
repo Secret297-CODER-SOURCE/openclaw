@@ -180,8 +180,22 @@ export type AppViewState = {
   telegramApiIdConfigured: boolean | null; // null = not yet loaded
   telegramSetupApiId: string;
   telegramSetupApiHash: string;
+  telegramSetupProxyIp: string;
+  telegramSetupProxyPort: string;
+  telegramSetupProxyUsername: string;
+  telegramSetupProxyPassword: string;
   telegramSetupSaving: boolean;
   telegramSetupError: string | null;
+  // Telegram proxy settings (accessible after initial setup)
+  telegramProxyConfigured: boolean;
+  telegramProxyIp: string;
+  telegramProxyPort: string;
+  telegramProxyEditIp: string;
+  telegramProxyEditPort: string;
+  telegramProxyEditUsername: string;
+  telegramProxyEditPassword: string;
+  telegramProxySaving: boolean;
+  telegramProxyError: string | null;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;

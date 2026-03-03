@@ -32,8 +32,23 @@ export type TelegramProps = {
   apiIdConfigured: boolean | null;
   setupApiId: string;
   setupApiHash: string;
+  // Proxy fields on the credentials card (used during initial setup)
+  setupProxyIp: string;
+  setupProxyPort: string;
+  setupProxyUsername: string;
+  setupProxyPassword: string;
   setupSaving: boolean;
   setupError: string | null;
+  // Proxy settings (accessible after initial setup via empty-state panel)
+  proxyConfigured: boolean;
+  proxyIp: string;
+  proxyPort: string;
+  proxyEditIp: string;
+  proxyEditPort: string;
+  proxyEditUsername: string;
+  proxyEditPassword: string;
+  proxySaving: boolean;
+  proxyError: string | null;
   // Callbacks
   onRefresh: () => void;
   onSelectAgent: (id: string | null) => void;
@@ -55,7 +70,17 @@ export type TelegramProps = {
   onBehaviorsSave: (id: string) => void;
   onSetupApiIdChange: (v: string) => void;
   onSetupApiHashChange: (v: string) => void;
+  onSetupProxyIpChange: (v: string) => void;
+  onSetupProxyPortChange: (v: string) => void;
+  onSetupProxyUsernameChange: (v: string) => void;
+  onSetupProxyPasswordChange: (v: string) => void;
   onSetupSave: () => void;
+  onProxyEditIpChange: (v: string) => void;
+  onProxyEditPortChange: (v: string) => void;
+  onProxyEditUsernameChange: (v: string) => void;
+  onProxyEditPasswordChange: (v: string) => void;
+  onProxySave: () => void;
+  onProxyClear: () => void;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -510,6 +535,7 @@ function renderDetail(props: TelegramProps) {
           <div class="card-title">${t("ui.selectAgentTitle")}</div>
           <div class="card-sub">${t("ui.selectAgentDesc")}</div>
         </div>
+        ${renderProxyPanel(props)}
       </section>
     `;
   }
@@ -578,10 +604,142 @@ function renderCredentialsCard(props: TelegramProps) {
               props.onSetupApiHashChange((e.target as HTMLInputElement).value)}
           />
         </div>
+
+        <!-- Optional SOCKS5 proxy section -->
+        <details style="margin-top: 4px;">
+          <summary style="cursor: pointer; font-size: 0.85em; opacity: 0.75;">
+            ${t("ui.proxyOptional")}
+          </summary>
+          <div class="stack" style="margin-top: 10px;">
+            <div class="field">
+              <span>${t("ui.proxyHost")}</span>
+              <input
+                type="text"
+                placeholder="e.g. 127.0.0.1"
+                .value=${props.setupProxyIp}
+                @input=${(e: InputEvent) =>
+                  props.onSetupProxyIpChange((e.target as HTMLInputElement).value)}
+              />
+            </div>
+            <div class="field">
+              <span>${t("ui.proxyPort")}</span>
+              <input
+                type="text"
+                placeholder="e.g. 1080"
+                .value=${props.setupProxyPort}
+                @input=${(e: InputEvent) =>
+                  props.onSetupProxyPortChange((e.target as HTMLInputElement).value)}
+              />
+            </div>
+            <div class="field">
+              <span>${t("ui.proxyUsername")}</span>
+              <input
+                type="text"
+                placeholder="${t("ui.optional")}"
+                .value=${props.setupProxyUsername}
+                @input=${(e: InputEvent) =>
+                  props.onSetupProxyUsernameChange((e.target as HTMLInputElement).value)}
+              />
+            </div>
+            <div class="field">
+              <span>${t("ui.proxyPassword")}</span>
+              <input
+                type="password"
+                placeholder="${t("ui.optional")}"
+                .value=${props.setupProxyPassword}
+                @input=${(e: InputEvent) =>
+                  props.onSetupProxyPasswordChange((e.target as HTMLInputElement).value)}
+              />
+            </div>
+          </div>
+        </details>
+
         ${props.setupError ? html`<div class="callout danger">${props.setupError}</div>` : nothing}
         <button class="btn primary" ?disabled=${!canSave} @click=${props.onSetupSave}>
           ${props.setupSaving ? t("ui.saving") : t("ui.saveCredentials")}
         </button>
+      </div>
+    </section>
+  `;
+}
+
+// ─── Proxy settings panel (accessible after initial setup) ────────────────────
+
+function renderProxyPanel(props: TelegramProps) {
+  const canSave =
+    !props.proxySaving && props.proxyEditIp.trim() !== "" && props.proxyEditPort.trim() !== "";
+
+  return html`
+    <section class="card" style="margin-top: 12px;">
+      <div class="card-title">${t("ui.proxyTitle")}</div>
+      <div class="card-sub">${t("ui.proxyDesc")}</div>
+
+      ${
+        props.proxyConfigured
+          ? html`
+              <div class="callout" style="margin-top: 12px;">
+                ${t("ui.proxyActive")}: <code>${props.proxyIp}:${props.proxyPort}</code>
+              </div>
+            `
+          : nothing
+      }
+
+      <div class="stack" style="margin-top: 14px;">
+        <div class="field">
+          <span>${t("ui.proxyHost")}</span>
+          <input
+            type="text"
+            placeholder="e.g. 127.0.0.1"
+            .value=${props.proxyEditIp}
+            @input=${(e: InputEvent) =>
+              props.onProxyEditIpChange((e.target as HTMLInputElement).value)}
+          />
+        </div>
+        <div class="field">
+          <span>${t("ui.proxyPort")}</span>
+          <input
+            type="text"
+            placeholder="e.g. 1080"
+            .value=${props.proxyEditPort}
+            @input=${(e: InputEvent) =>
+              props.onProxyEditPortChange((e.target as HTMLInputElement).value)}
+          />
+        </div>
+        <div class="field">
+          <span>${t("ui.proxyUsername")}</span>
+          <input
+            type="text"
+            placeholder="${t("ui.optional")}"
+            .value=${props.proxyEditUsername}
+            @input=${(e: InputEvent) =>
+              props.onProxyEditUsernameChange((e.target as HTMLInputElement).value)}
+          />
+        </div>
+        <div class="field">
+          <span>${t("ui.proxyPassword")}</span>
+          <input
+            type="password"
+            placeholder="${t("ui.optional")}"
+            .value=${props.proxyEditPassword}
+            @input=${(e: InputEvent) =>
+              props.onProxyEditPasswordChange((e.target as HTMLInputElement).value)}
+          />
+        </div>
+        ${props.proxyError ? html`<div class="callout danger">${props.proxyError}</div>` : nothing}
+        <div class="row">
+          <button class="btn primary" ?disabled=${!canSave} @click=${props.onProxySave}>
+            ${props.proxySaving ? t("ui.saving") : t("ui.proxySave")}
+          </button>
+          ${
+            props.proxyConfigured
+              ? html`
+                  <button class="btn danger" ?disabled=${props.proxySaving} @click=${props.onProxyClear}>
+                    ${t("ui.proxyClear")}
+                  </button>
+                `
+              : nothing
+          }
+        </div>
       </div>
     </section>
   `;

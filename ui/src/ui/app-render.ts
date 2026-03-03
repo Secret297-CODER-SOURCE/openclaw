@@ -73,6 +73,7 @@ import {
   authSubmitTelegramAgent,
   setBehaviorsTelegramAgent,
   saveTelegramCredentials,
+  saveTelegramProxy,
 } from "./controllers/telegram.ts";
 import { icons } from "./icons.ts";
 import { TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
@@ -531,8 +532,21 @@ export function renderApp(state: AppViewState) {
                 apiIdConfigured: state.telegramApiIdConfigured,
                 setupApiId: state.telegramSetupApiId,
                 setupApiHash: state.telegramSetupApiHash,
+                setupProxyIp: state.telegramSetupProxyIp,
+                setupProxyPort: state.telegramSetupProxyPort,
+                setupProxyUsername: state.telegramSetupProxyUsername,
+                setupProxyPassword: state.telegramSetupProxyPassword,
                 setupSaving: state.telegramSetupSaving,
                 setupError: state.telegramSetupError,
+                proxyConfigured: state.telegramProxyConfigured,
+                proxyIp: state.telegramProxyIp,
+                proxyPort: state.telegramProxyPort,
+                proxyEditIp: state.telegramProxyEditIp,
+                proxyEditPort: state.telegramProxyEditPort,
+                proxyEditUsername: state.telegramProxyEditUsername,
+                proxyEditPassword: state.telegramProxyEditPassword,
+                proxySaving: state.telegramProxySaving,
+                proxyError: state.telegramProxyError,
                 onRefresh: () => void loadTelegramAgents(state),
                 onSelectAgent: (id) => {
                   state.telegramSelectedId = id;
@@ -623,6 +637,18 @@ export function renderApp(state: AppViewState) {
                 onSetupApiHashChange: (v) => {
                   state.telegramSetupApiHash = v;
                 },
+                onSetupProxyIpChange: (v) => {
+                  state.telegramSetupProxyIp = v;
+                },
+                onSetupProxyPortChange: (v) => {
+                  state.telegramSetupProxyPort = v;
+                },
+                onSetupProxyUsernameChange: (v) => {
+                  state.telegramSetupProxyUsername = v;
+                },
+                onSetupProxyPasswordChange: (v) => {
+                  state.telegramSetupProxyPassword = v;
+                },
                 onSetupSave: async () => {
                   try {
                     await saveTelegramCredentials(
@@ -633,8 +659,49 @@ export function renderApp(state: AppViewState) {
                     // Clear sensitive fields from state after successful save
                     state.telegramSetupApiId = "";
                     state.telegramSetupApiHash = "";
+                    state.telegramSetupProxyIp = "";
+                    state.telegramSetupProxyPort = "";
+                    state.telegramSetupProxyUsername = "";
+                    state.telegramSetupProxyPassword = "";
                   } catch {
                     // Error is already stored in state.telegramSetupError
+                  }
+                },
+                onProxyEditIpChange: (v) => {
+                  state.telegramProxyEditIp = v;
+                },
+                onProxyEditPortChange: (v) => {
+                  state.telegramProxyEditPort = v;
+                },
+                onProxyEditUsernameChange: (v) => {
+                  state.telegramProxyEditUsername = v;
+                },
+                onProxyEditPasswordChange: (v) => {
+                  state.telegramProxyEditPassword = v;
+                },
+                onProxySave: async () => {
+                  try {
+                    await saveTelegramProxy(
+                      state,
+                      state.telegramProxyEditIp,
+                      state.telegramProxyEditPort,
+                      state.telegramProxyEditUsername,
+                      state.telegramProxyEditPassword,
+                    );
+                    state.telegramProxyEditPassword = "";
+                  } catch {
+                    // Error is stored in state.telegramProxyError
+                  }
+                },
+                onProxyClear: async () => {
+                  try {
+                    await saveTelegramProxy(state, "", "", "", "", true);
+                    state.telegramProxyEditIp = "";
+                    state.telegramProxyEditPort = "";
+                    state.telegramProxyEditUsername = "";
+                    state.telegramProxyEditPassword = "";
+                  } catch {
+                    // Error is stored in state.telegramProxyError
                   }
                 },
               })

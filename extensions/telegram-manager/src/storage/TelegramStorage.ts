@@ -4,9 +4,18 @@ import path from "path";
 import Database from "better-sqlite3";
 import { AgentRecord, BehaviorConfig, TelegramEvent } from "../types";
 
+export type ProxyConfig = {
+  socksType: 5;
+  ip: string;
+  port: number;
+  username?: string;
+  password?: string;
+};
+
 export type TelegramPluginConfig = {
   apiId: number;
   apiHash: string;
+  proxy?: ProxyConfig;
 };
 
 export class TelegramStorage {
@@ -189,6 +198,8 @@ export class TelegramStorage {
     let apiId = 0;
     let apiHash = "";
 
+    let proxy: ProxyConfig | undefined;
+
     // Try file-based config first
     try {
       if (fs.existsSync(this.configFile)) {
@@ -198,6 +209,21 @@ export class TelegramStorage {
         >;
         apiId = parseInt(String(data.apiId ?? "0"), 10);
         apiHash = String(data.apiHash ?? "");
+        // Load optional proxy config
+        if (data.proxy && typeof data.proxy === "object") {
+          const p = data.proxy as Record<string, unknown>;
+          const pIp = String(p.ip ?? "").trim();
+          const pPort = parseInt(String(p.port ?? "0"), 10);
+          if (pIp && pPort) {
+            proxy = {
+              socksType: 5,
+              ip: pIp,
+              port: pPort,
+              ...(p.username ? { username: String(p.username) } : {}),
+              ...(p.password ? { password: String(p.password) } : {}),
+            };
+          }
+        }
       }
     } catch {
       // ignore parse errors, fall through to env
@@ -208,7 +234,7 @@ export class TelegramStorage {
     if (process.env.TG_API_HASH) apiHash = process.env.TG_API_HASH;
 
     if (!apiId || !apiHash) return null;
-    return { apiId, apiHash };
+    return { apiId, apiHash, ...(proxy ? { proxy } : {}) };
   }
 
   private toRecord(row: any): AgentRecord {

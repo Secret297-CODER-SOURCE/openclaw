@@ -232,6 +232,11 @@ type TelegramConfigState = TelegramState & {
   telegramApiIdConfigured: boolean | null;
   telegramSetupSaving: boolean;
   telegramSetupError: string | null;
+  telegramProxyConfigured: boolean;
+  telegramProxyIp: string;
+  telegramProxyPort: string;
+  telegramProxySaving: boolean;
+  telegramProxyError: string | null;
 };
 
 export async function loadTelegramConfig(state: TelegramConfigState): Promise<void> {
@@ -243,8 +248,20 @@ export async function loadTelegramConfig(state: TelegramConfigState): Promise<vo
       configured: boolean;
       apiId: number | null;
       apiHashSet: boolean;
+      proxyConfigured: boolean;
+      proxyIp: string | null;
+      proxyPort: number | null;
+      proxyUsername: string | null;
     }>("telegram.config.get", {});
     state.telegramApiIdConfigured = res?.configured ?? false;
+    state.telegramProxyConfigured = res?.proxyConfigured ?? false;
+    // Pre-fill proxy fields with current values so the form shows them
+    if (res?.proxyIp) {
+      state.telegramProxyIp = res.proxyIp;
+    }
+    if (res?.proxyPort) {
+      state.telegramProxyPort = String(res.proxyPort);
+    }
   } catch {
     // Plugin may not be loaded yet — treat as unknown
     state.telegramApiIdConfigured = null;
@@ -252,7 +269,14 @@ export async function loadTelegramConfig(state: TelegramConfigState): Promise<vo
 }
 
 export async function saveTelegramCredentials(
-  state: TelegramConfigState & { telegramSetupApiId: string; telegramSetupApiHash: string },
+  state: TelegramConfigState & {
+    telegramSetupApiId: string;
+    telegramSetupApiHash: string;
+    telegramSetupProxyIp: string;
+    telegramSetupProxyPort: string;
+    telegramSetupProxyUsername: string;
+    telegramSetupProxyPassword: string;
+  },
   apiId: string,
   apiHash: string,
 ): Promise<void> {
@@ -262,17 +286,78 @@ export async function saveTelegramCredentials(
   state.telegramSetupSaving = true;
   state.telegramSetupError = null;
   try {
+    const proxyIp = state.telegramSetupProxyIp.trim();
+    const proxyPort = parseInt(state.telegramSetupProxyPort.trim(), 10);
     await state.client!.request("telegram.config.set", {
       apiId: parseInt(apiId, 10),
       apiHash: apiHash.trim(),
+      ...(proxyIp && proxyPort
+        ? {
+            proxyIp,
+            proxyPort,
+            ...(state.telegramSetupProxyUsername
+              ? { proxyUsername: state.telegramSetupProxyUsername }
+              : {}),
+            ...(state.telegramSetupProxyPassword
+              ? { proxyPassword: state.telegramSetupProxyPassword }
+              : {}),
+          }
+        : {}),
     });
     state.telegramApiIdConfigured = true;
+    state.telegramProxyConfigured = !!(proxyIp && proxyPort);
+    if (proxyIp) {
+      state.telegramProxyIp = proxyIp;
+    }
+    if (proxyPort) {
+      state.telegramProxyPort = String(proxyPort);
+    }
     await loadTelegramAgents(state);
   } catch (err) {
     state.telegramSetupError = String(err);
     throw err;
   } finally {
     state.telegramSetupSaving = false;
+  }
+}
+
+/** Update proxy settings without changing API credentials. */
+export async function saveTelegramProxy(
+  state: TelegramConfigState,
+  proxyIp: string,
+  proxyPort: string,
+  proxyUsername: string,
+  proxyPassword: string,
+  clear = false,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  state.telegramProxySaving = true;
+  state.telegramProxyError = null;
+  try {
+    if (clear) {
+      await state.client!.request("telegram.config.setProxy", { clear: true });
+      state.telegramProxyConfigured = false;
+      state.telegramProxyIp = "";
+      state.telegramProxyPort = "";
+    } else {
+      const port = parseInt(proxyPort.trim(), 10);
+      await state.client!.request("telegram.config.setProxy", {
+        proxyIp: proxyIp.trim(),
+        proxyPort: port,
+        ...(proxyUsername ? { proxyUsername } : {}),
+        ...(proxyPassword ? { proxyPassword } : {}),
+      });
+      state.telegramProxyConfigured = true;
+      state.telegramProxyIp = proxyIp.trim();
+      state.telegramProxyPort = String(port);
+    }
+  } catch (err) {
+    state.telegramProxyError = String(err);
+    throw err;
+  } finally {
+    state.telegramProxySaving = false;
   }
 }
 

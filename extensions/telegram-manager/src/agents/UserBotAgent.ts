@@ -36,9 +36,12 @@ export class UserBotAgent extends BaseAgent {
       const { apiId, apiHash } = apiCfg;
 
       const session = new StringSession(this.creds.sessionString ?? "");
+      // Note: do not pass baseLogger — the mock { log: () => {} } lacks .info()/.debug()
+      // and crashes gramjs on construction. Let gramjs use its default logger.
       this.client = new TelegramClient(session, apiId, apiHash, {
         connectionRetries: 5,
-        baseLogger: { levels: [], log: () => {} } as any,
+        // Route through SOCKS5 proxy when configured (fixes ENETUNREACH for blocked DCs)
+        ...(apiCfg.proxy ? { proxy: apiCfg.proxy } : {}),
       });
 
       await this.client.connect();
@@ -83,6 +86,8 @@ export class UserBotAgent extends BaseAgent {
     const { apiId, apiHash } = apiCfg;
     this.client = new TelegramClient(new StringSession(""), apiId, apiHash, {
       connectionRetries: 3,
+      // Use proxy during auth if configured
+      ...(apiCfg.proxy ? { proxy: apiCfg.proxy } : {}),
     });
     await this.client.connect();
     await this.client.sendCode({ apiId, apiHash }, this.creds.phoneNumber);

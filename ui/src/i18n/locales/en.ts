@@ -174,6 +174,19 @@ export const en: TranslationMap = {
     selectAgentTitle: "Select an agent",
     selectAgentDesc: "Pick an agent from the list, or create a new one.",
     deleteConfirm: 'Delete agent "{name}"?',
+    // Proxy
+    proxyOptional: "Optional SOCKS5 proxy",
+    proxyTitle: "SOCKS5 Proxy",
+    proxyDesc:
+      "Route Telegram connections through a SOCKS5 proxy (useful when direct access to Telegram DCs is blocked).",
+    proxyHost: "Proxy host",
+    proxyPort: "Proxy port",
+    proxyUsername: "Username",
+    proxyPassword: "Password",
+    proxyActive: "Active proxy",
+    proxySave: "Save proxy",
+    proxyClear: "Remove proxy",
+    optional: "optional",
   },
   instances: {
     title: "Connected Instances",
