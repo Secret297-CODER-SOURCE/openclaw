@@ -23,6 +23,13 @@ export function shouldIgnoreWarning(warning: ProcessWarning): boolean {
   ) {
     return true;
   }
+  // Node.js 25 added native localStorage support. grammy's web.mjs shim accesses
+  // localStorage at module-load time (for its session storage adapter), which
+  // triggers this warning when --localstorage-file was not configured. It's
+  // harmless — grammy falls back to in-memory storage in Node.js environments.
+  if (warning.message?.includes("--localstorage-file")) {
+    return true;
+  }
   return false;
 }
 

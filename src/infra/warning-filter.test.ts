@@ -43,6 +43,13 @@ describe("warning filter", () => {
         message: "SQLite is an experimental feature and might change at any time",
       }),
     ).toBe(true);
+    // grammy's web.mjs shim triggers this on Node.js 25 which has native localStorage
+    expect(
+      shouldIgnoreWarning({
+        name: "Warning",
+        message: "`--localstorage-file` was provided without a valid path",
+      }),
+    ).toBe(true);
   });
 
   it("keeps unknown warnings visible", () => {

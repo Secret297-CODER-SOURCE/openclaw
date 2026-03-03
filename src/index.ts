@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+// Install process warning filter before any other import evaluates, so that
+// warnings emitted during module initialisation (e.g. grammy's web.mjs shim
+// accessing Node.js 25's native localStorage) are suppressed early.
+import "./infra/warning-filter-install.js";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { getReplyFromConfig } from "./auto-reply/reply.js";
