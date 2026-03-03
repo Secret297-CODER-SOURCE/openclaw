@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { t } from "../../i18n/index.ts";
 import type { CronFieldErrors, CronFieldKey } from "../controllers/cron.ts";
 import { formatRelativeTimestamp, formatMs } from "../format.ts";
 import { pathForTab } from "../navigation.ts";
@@ -177,7 +178,7 @@ function renderRunFilterDropdown(params: {
             )}
           </div>
           <div class="row">
-            <button class="btn" type="button" @click=${params.onClear}>Clear</button>
+            <button class="btn" type="button" @click=${params.onClear}>${t("cronView.clear")}</button>
           </div>
         </div>
       </details>
@@ -249,16 +250,16 @@ function fieldLabelForKey(
     return deliveryMode === "webhook" ? "Webhook URL" : "To";
   }
   const labels: Record<CronFieldKey, string> = {
-    name: "Name",
-    scheduleAt: "Run at",
-    everyAmount: "Every",
-    cronExpr: "Expression",
-    staggerAmount: "Stagger window",
-    payloadText: "Payload text",
-    payloadModel: "Model",
-    payloadThinking: "Thinking",
-    timeoutSeconds: "Timeout (seconds)",
-    deliveryTo: "To",
+    name: t("cronView.nameLabel"),
+    scheduleAt: t("cronView.runAtLabel"),
+    everyAmount: t("cronView.everyLabel"),
+    cronExpr: t("cronView.expressionLabel"),
+    staggerAmount: t("cronView.staggerLabel"),
+    payloadText: t("cronView.payloadLabel"),
+    payloadModel: t("cronView.modelLabel"),
+    payloadThinking: t("cronView.thinkingLabel"),
+    timeoutSeconds: t("cronView.timeoutLabel"),
+    deliveryTo: t("cronView.toLabel"),
   };
   return labels[key];
 }
@@ -355,25 +356,25 @@ export function renderCron(props: CronProps) {
     <section class="card cron-summary-strip">
       <div class="cron-summary-strip__left">
         <div class="cron-summary-item">
-          <div class="cron-summary-label">Enabled</div>
+          <div class="cron-summary-label">${t("cronView.enabledLabel")}</div>
           <div class="cron-summary-value">
             <span class=${`chip ${props.status?.enabled ? "chip-ok" : "chip-danger"}`}>
-              ${props.status ? (props.status.enabled ? "Yes" : "No") : "n/a"}
+              ${props.status ? (props.status.enabled ? t("ui.yes") : t("ui.no")) : t("common.na")}
             </span>
           </div>
         </div>
         <div class="cron-summary-item">
-          <div class="cron-summary-label">Jobs</div>
-          <div class="cron-summary-value">${props.status?.jobs ?? "n/a"}</div>
+          <div class="cron-summary-label">${t("cronView.jobsLabel")}</div>
+          <div class="cron-summary-value">${props.status?.jobs ?? t("common.na")}</div>
         </div>
         <div class="cron-summary-item cron-summary-item--wide">
-          <div class="cron-summary-label">Next wake</div>
+          <div class="cron-summary-label">${t("cronView.nextWakeLabel")}</div>
           <div class="cron-summary-value">${formatNextRun(props.status?.nextWakeAtMs ?? null)}</div>
         </div>
       </div>
       <div class="cron-summary-strip__actions">
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? "Refreshing..." : "Refresh"}
+          ${props.loading ? t("debug.refreshing") : t("ui.refresh")}
         </button>
         ${props.error ? html`<span class="muted">${props.error}</span>` : nothing}
       </div>
@@ -384,17 +385,17 @@ export function renderCron(props: CronProps) {
         <section class="card">
           <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 12px;">
             <div>
-              <div class="card-title">Jobs</div>
-              <div class="card-sub">All scheduled jobs stored in the gateway.</div>
+              <div class="card-title">${t("cronView.title")}</div>
+              <div class="card-sub">${t("cronView.subtitle")}</div>
             </div>
-            <div class="muted">${props.jobs.length} shown of ${props.jobsTotal}</div>
+            <div class="muted">${props.jobs.length} ${t("cronView.shownOf")} ${props.jobsTotal}</div>
           </div>
           <div class="filters" style="margin-top: 12px;">
             <label class="field cron-filter-search">
               <span>Search jobs</span>
               <input
                 .value=${props.jobsQuery}
-                placeholder="Name, description, or agent"
+                placeholder=${t("cronView.searchPlaceholder")}
                 @input=${(e: Event) =>
                   props.onJobsFiltersChange({
                     cronJobsQuery: (e.target as HTMLInputElement).value,
@@ -402,7 +403,7 @@ export function renderCron(props: CronProps) {
               />
             </label>
             <label class="field">
-              <span>Enabled</span>
+              <span>${t("cronView.enabledFilter")}</span>
               <select
                 .value=${props.jobsEnabledFilter}
                 @change=${(e: Event) =>
@@ -411,13 +412,13 @@ export function renderCron(props: CronProps) {
                       .value as CronJobsEnabledFilter,
                   })}
               >
-                <option value="all">All</option>
-                <option value="enabled">Enabled</option>
-                <option value="disabled">Disabled</option>
+                <option value="all">${t("cronView.allOption")}</option>
+                <option value="enabled">${t("cronView.enabledOption")}</option>
+                <option value="disabled">${t("cronView.disabledOption")}</option>
               </select>
             </label>
             <label class="field">
-              <span>Sort</span>
+              <span>${t("cronView.sortLabel")}</span>
               <select
                 .value=${props.jobsSortBy}
                 @change=${(e: Event) =>
@@ -425,13 +426,13 @@ export function renderCron(props: CronProps) {
                     cronJobsSortBy: (e.target as HTMLSelectElement).value as CronJobsSortBy,
                   })}
               >
-                <option value="nextRunAtMs">Next run</option>
-                <option value="updatedAtMs">Recently updated</option>
-                <option value="name">Name</option>
+                <option value="nextRunAtMs">${t("cronView.nextRunOption")}</option>
+                <option value="updatedAtMs">${t("cronView.recentlyUpdatedOption")}</option>
+                <option value="name">${t("cronView.nameOption")}</option>
               </select>
             </label>
             <label class="field">
-              <span>Direction</span>
+              <span>${t("cronView.directionLabel")}</span>
               <select
                 .value=${props.jobsSortDir}
                 @change=${(e: Event) =>
@@ -439,15 +440,15 @@ export function renderCron(props: CronProps) {
                     cronJobsSortDir: (e.target as HTMLSelectElement).value as CronSortDir,
                   })}
               >
-                <option value="asc">Ascending</option>
-                <option value="desc">Descending</option>
+                <option value="asc">${t("cronView.ascendingOption")}</option>
+                <option value="desc">${t("cronView.descendingOption")}</option>
               </select>
             </label>
           </div>
           ${
             props.jobs.length === 0
               ? html`
-                  <div class="muted" style="margin-top: 12px">No matching jobs.</div>
+                  <div class="muted" style="margin-top: 12px">${t("cronView.noJobs")}</div>
                 `
               : html`
                   <div class="list" style="margin-top: 12px;">
@@ -464,7 +465,7 @@ export function renderCron(props: CronProps) {
                       ?disabled=${props.loading || props.jobsLoadingMore}
                       @click=${props.onLoadMoreJobs}
                     >
-                      ${props.jobsLoadingMore ? "Loading..." : "Load more jobs"}
+                      ${props.jobsLoadingMore ? t("ui.loading") : t("cronView.loadMore")}
                     </button>
                   </div>
                 `
@@ -475,21 +476,21 @@ export function renderCron(props: CronProps) {
         <section class="card">
           <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 12px;">
             <div>
-              <div class="card-title">Run history</div>
+              <div class="card-title">${t("cronView.historyTitle")}</div>
               <div class="card-sub">
                 ${
                   props.runsScope === "all"
-                    ? "Latest runs across all jobs."
-                    : `Latest runs for ${selectedRunTitle}.`
+                    ? t("cronView.historySubtitleAll")
+                    : `${t("cronView.historySubtitleFor")} ${selectedRunTitle}.`
                 }
               </div>
             </div>
-            <div class="muted">${runs.length} shown of ${props.runsTotal}</div>
+            <div class="muted">${runs.length} ${t("cronView.shownOf")} ${props.runsTotal}</div>
           </div>
           <div class="cron-run-filters">
             <div class="cron-run-filters__row cron-run-filters__row--primary">
               <label class="field">
-                <span>Scope</span>
+                <span>${t("cronView.scopeLabel")}</span>
                 <select
                   .value=${props.runsScope}
                   @change=${(e: Event) =>
@@ -497,7 +498,7 @@ export function renderCron(props: CronProps) {
                       cronRunsScope: (e.target as HTMLSelectElement).value as CronRunScope,
                     })}
                 >
-                  <option value="all">All jobs</option>
+                  <option value="all">${t("cronView.allJobsOption")}</option>
                   <option value="job" ?disabled=${props.runsJobId == null}>Selected job</option>
                 </select>
               </label>
@@ -589,7 +590,7 @@ export function renderCron(props: CronProps) {
                       ?disabled=${props.runsLoadingMore}
                       @click=${props.onLoadMoreRuns}
                     >
-                      ${props.runsLoadingMore ? "Loading..." : "Load more runs"}
+                      ${props.runsLoadingMore ? t("ui.loading") : t("cronView.loadMore")}
                     </button>
                   </div>
                 `

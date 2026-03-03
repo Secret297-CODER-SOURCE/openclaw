@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
@@ -113,17 +114,17 @@ export function renderSessions(props: SessionsProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Sessions</div>
-          <div class="card-sub">Active session keys and per-session overrides.</div>
+          <div class="card-title">${t("sessions.title")}</div>
+          <div class="card-sub">${t("sessions.subtitle")}</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? "Loading…" : "Refresh"}
+          ${props.loading ? t("ui.loading") : t("ui.refresh")}
         </button>
       </div>
 
       <div class="filters" style="margin-top: 14px;">
         <label class="field">
-          <span>Active within (minutes)</span>
+          <span>${t("sessions.activeWithin")}</span>
           <input
             .value=${props.activeMinutes}
             @input=${(e: Event) =>
@@ -136,7 +137,7 @@ export function renderSessions(props: SessionsProps) {
           />
         </label>
         <label class="field">
-          <span>Limit</span>
+          <span>${t("sessions.limit")}</span>
           <input
             .value=${props.limit}
             @input=${(e: Event) =>
@@ -149,7 +150,7 @@ export function renderSessions(props: SessionsProps) {
           />
         </label>
         <label class="field checkbox">
-          <span>Include global</span>
+          <span>${t("sessions.includeGlobal")}</span>
           <input
             type="checkbox"
             .checked=${props.includeGlobal}
@@ -163,7 +164,7 @@ export function renderSessions(props: SessionsProps) {
           />
         </label>
         <label class="field checkbox">
-          <span>Include unknown</span>
+          <span>${t("sessions.includeUnknown")}</span>
           <input
             type="checkbox"
             .checked=${props.includeUnknown}
@@ -185,25 +186,25 @@ export function renderSessions(props: SessionsProps) {
       }
 
       <div class="muted" style="margin-top: 12px;">
-        ${props.result ? `Store: ${props.result.path}` : ""}
+        ${props.result ? `${t("sessions.store")} ${props.result.path}` : ""}
       </div>
 
       <div class="table" style="margin-top: 16px;">
         <div class="table-head">
-          <div>Key</div>
-          <div>Label</div>
-          <div>Kind</div>
-          <div>Updated</div>
-          <div>Tokens</div>
-          <div>Thinking</div>
-          <div>Verbose</div>
-          <div>Reasoning</div>
-          <div>Actions</div>
+          <div>${t("sessions.colKey")}</div>
+          <div>${t("sessions.colLabel")}</div>
+          <div>${t("sessions.colKind")}</div>
+          <div>${t("sessions.colUpdated")}</div>
+          <div>${t("sessions.colTokens")}</div>
+          <div>${t("sessions.colThinking")}</div>
+          <div>${t("sessions.colVerbose")}</div>
+          <div>${t("sessions.colReasoning")}</div>
+          <div>${t("sessions.colActions")}</div>
         </div>
         ${
           rows.length === 0
             ? html`
-                <div class="muted">No sessions found.</div>
+                <div class="muted">${t("sessions.noSessions")}</div>
               `
             : rows.map((row) =>
                 renderRow(row, props.basePath, props.onPatch, props.onDelete, props.loading),
@@ -221,7 +222,7 @@ function renderRow(
   onDelete: SessionsProps["onDelete"],
   disabled: boolean,
 ) {
-  const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
+  const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : t("common.na");
   const rawThinking = row.thinkingLevel ?? "";
   const isBinaryThinking = isBinaryThinkingProvider(row.modelProvider);
   const thinking = resolveThinkLevelDisplay(rawThinking, isBinaryThinking);
@@ -313,7 +314,7 @@ function renderRow(
       </div>
       <div>
         <button class="btn danger" ?disabled=${disabled} @click=${() => onDelete(row.key)}>
-          Delete
+          ${t("ui.delete")}
         </button>
       </div>
     </div>

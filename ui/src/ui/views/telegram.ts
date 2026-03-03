@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import type { TelegramAgentEvent, TelegramAgentRecord } from "../controllers/telegram.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -100,11 +101,11 @@ function renderSidebar(props: TelegramProps) {
     <section class="card agents-sidebar">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Agents</div>
-          <div class="card-sub">${props.agents.length} configured.</div>
+          <div class="card-title">${t("tabs.telegram")}</div>
+          <div class="card-sub">${props.agents.length} ${t("ui.configured")}.</div>
         </div>
         <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? "Loading…" : "Refresh"}
+          ${props.loading ? t("ui.loading") : t("ui.refresh")}
         </button>
       </div>
 
@@ -114,7 +115,7 @@ function renderSidebar(props: TelegramProps) {
         ${
           props.agents.length === 0 && !props.loading
             ? html`
-                <div class="muted">No agents yet.</div>
+                <div class="muted">${t("ui.noAgents")}</div>
               `
             : props.agents.map(
                 (agent) => html`
@@ -151,10 +152,10 @@ function renderCreateForm(props: TelegramProps) {
 
   return html`
     <section class="card" style="margin-top: 4px;">
-      <div class="card-title">Add agent</div>
+      <div class="card-title">${t("ui.addAgent")}</div>
       <div class="stack" style="margin-top: 12px;">
         <div class="field">
-          <span>Name</span>
+          <span>${t("ui.agentName")}</span>
           <input
             type="text"
             placeholder="e.g. my-bot"
@@ -164,7 +165,7 @@ function renderCreateForm(props: TelegramProps) {
         </div>
 
         <div class="field">
-          <span>Type</span>
+          <span>${t("ui.agentType")}</span>
           <select
             .value=${props.createType}
             @change=${(e: Event) =>
@@ -179,7 +180,7 @@ function renderCreateForm(props: TelegramProps) {
           isUserbot
             ? html`
                 <div class="field">
-                  <span>Phone number</span>
+                  <span>${t("ui.agentPhone")}</span>
                   <input
                     type="text"
                     placeholder="+79991234567"
@@ -191,7 +192,7 @@ function renderCreateForm(props: TelegramProps) {
               `
             : html`
                 <div class="field">
-                  <span>Bot token</span>
+                  <span>${t("ui.agentToken")}</span>
                   <input
                     type="password"
                     placeholder="Token from @BotFather"
@@ -208,7 +209,7 @@ function renderCreateForm(props: TelegramProps) {
           ?disabled=${!canSubmit || props.busy}
           @click=${props.onCreateSubmit}
         >
-          ${props.busy && props.busyAgentId === "new" ? "Creating…" : "Create"}
+          ${props.busy && props.busyAgentId === "new" ? t("ui.creating") : t("ui.create")}
         </button>
       </div>
     </section>
@@ -219,10 +220,12 @@ function renderCreateForm(props: TelegramProps) {
 
 function renderPanelTabs(props: TelegramProps, agent: TelegramAgentRecord) {
   const tabs: Array<{ id: TelegramPanel; label: string }> = [
-    { id: "overview", label: "Overview" },
-    ...(agent.type === "userbot" ? [{ id: "auth" as TelegramPanel, label: "Auth" }] : []),
-    { id: "behaviors", label: "Behaviors" },
-    { id: "events", label: "Events" },
+    { id: "overview", label: t("ui.panelOverview") },
+    ...(agent.type === "userbot"
+      ? [{ id: "auth" as TelegramPanel, label: t("ui.panelAuth") }]
+      : []),
+    { id: "behaviors", label: t("ui.panelBehaviors") },
+    { id: "events", label: t("ui.panelEvents") },
   ];
 
   return html`
@@ -249,7 +252,7 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
 
   return html`
     <section class="card">
-      <div class="card-title">Overview</div>
+      <div class="card-title">${t("ui.panelOverview")}</div>
       <div class="card-sub">Status, stats, and lifecycle controls.</div>
 
       <div class="agents-overview-grid" style="margin-top: 16px;">
@@ -258,7 +261,7 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
           <div class="mono">${agent.id}</div>
         </div>
         <div class="agent-kv">
-          <div class="label">Type</div>
+          <div class="label">${t("ui.agentType")}</div>
           <div>${agent.type}</div>
         </div>
         <div class="agent-kv">
@@ -269,7 +272,7 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
           agent.credentials.phoneNumber
             ? html`
                 <div class="agent-kv">
-                  <div class="label">Phone</div>
+                  <div class="label">${t("ui.agentPhone")}</div>
                   <div>${agent.credentials.phoneNumber}</div>
                 </div>
               `
@@ -304,28 +307,28 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
           ?disabled=${busy || agent.status === "running" || agent.status === "starting"}
           @click=${() => props.onStart(agent.id)}
         >
-          ${busy && agent.status !== "running" ? "Starting…" : "Start"}
+          ${busy && agent.status !== "running" ? t("ui.starting") : t("ui.start")}
         </button>
         <button
           class="btn"
           ?disabled=${busy || agent.status === "stopped"}
           @click=${() => props.onStop(agent.id)}
         >
-          Stop
+          ${t("ui.stop")}
         </button>
         <button class="btn" ?disabled=${busy} @click=${() => props.onRestart(agent.id)}>
-          Restart
+          ${t("ui.restart")}
         </button>
         <button
           class="btn danger"
           ?disabled=${busy}
           @click=${() => {
-            if (confirm(`Delete agent "${agent.name}"?`)) {
+            if (confirm(t("ui.deleteConfirm", { name: agent.name }))) {
               props.onDelete(agent.id);
             }
           }}
         >
-          Delete
+          ${t("ui.delete")}
         </button>
       </div>
     </section>
@@ -340,7 +343,7 @@ function renderAuthPanel(props: TelegramProps, agent: TelegramAgentRecord) {
 
   return html`
     <section class="card">
-      <div class="card-title">Auth</div>
+      <div class="card-title">${t("ui.panelAuth")}</div>
       <div class="card-sub">
         Authenticate as <strong>${agent.credentials.phoneNumber ?? "unknown"}</strong>. Sends an
         OTP to the phone number registered with Telegram.
@@ -349,7 +352,7 @@ function renderAuthPanel(props: TelegramProps, agent: TelegramAgentRecord) {
       ${
         agent.status === "error" && agent.lastError?.includes("Not authorized")
           ? html`
-              <div class="callout danger" style="margin-top: 12px">Not authorized — complete auth below.</div>
+              <div class="callout danger" style="margin-top: 12px">${t("ui.notAuthorized")}</div>
             `
           : nothing
       }
@@ -363,7 +366,7 @@ function renderAuthPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                   ?disabled=${busy}
                   @click=${() => props.onAuthStart(agent.id)}
                 >
-                  ${busy ? "Sending code…" : "Send OTP to phone"}
+                  ${busy ? t("ui.sendingCode") : t("ui.sendOtp")}
                 </button>
               </div>
             `
@@ -374,9 +377,9 @@ function renderAuthPanel(props: TelegramProps, agent: TelegramAgentRecord) {
         authStep === "awaiting_code"
           ? html`
               <div class="stack" style="margin-top: 16px;">
-                <div class="callout">Code sent. Submit within 5 minutes.</div>
+                <div class="callout">${t("ui.otpSent")}</div>
                 <div class="field">
-                  <span>OTP code</span>
+                  <span>${t("ui.otpCode")}</span>
                   <input
                     type="text"
                     placeholder="e.g. 12345"
@@ -386,7 +389,7 @@ function renderAuthPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                   />
                 </div>
                 <div class="field">
-                  <span>2FA password (leave blank if none)</span>
+                  <span>${t("ui.otpPassword")}</span>
                   <input
                     type="password"
                     placeholder="Optional"
@@ -400,7 +403,7 @@ function renderAuthPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                   ?disabled=${busy || props.otpCode.trim() === ""}
                   @click=${() => props.onAuthSubmit(agent.id)}
                 >
-                  ${busy ? "Submitting…" : "Submit code"}
+                  ${busy ? t("ui.submitting") : t("ui.submitCode")}
                 </button>
               </div>
             `
@@ -410,7 +413,7 @@ function renderAuthPanel(props: TelegramProps, agent: TelegramAgentRecord) {
       ${
         authStep === "done"
           ? html`
-              <div class="callout" style="margin-top: 12px; color: var(--ok)">Authorized. Session saved.</div>
+              <div class="callout" style="margin-top: 12px; color: var(--ok)">${t("ui.authorized")}</div>
             `
           : nothing
       }
@@ -426,7 +429,7 @@ function renderBehaviorsPanel(props: TelegramProps, agent: TelegramAgentRecord) 
 
   return html`
     <section class="card">
-      <div class="card-title">Behaviors</div>
+      <div class="card-title">${t("ui.panelBehaviors")}</div>
       <div class="card-sub">
         Edit behaviors as JSON. Supported types: <code>auto_reply</code>, <code>monitor</code>,
         <code>broadcast</code>, <code>parser</code>.
@@ -450,7 +453,7 @@ function renderBehaviorsPanel(props: TelegramProps, agent: TelegramAgentRecord) 
           ?disabled=${busy || !!props.behaviorsJsonError}
           @click=${() => props.onBehaviorsSave(agent.id)}
         >
-          ${busy ? "Saving…" : "Save behaviors"}
+          ${busy ? t("ui.saving") : t("ui.saveBehaviors")}
         </button>
       </div>
     </section>
@@ -464,13 +467,13 @@ function renderEventsPanel(props: TelegramProps, agentId: string) {
 
   return html`
     <section class="card">
-      <div class="card-title">Events</div>
-      <div class="card-sub">Recent agent events (last 50).</div>
+      <div class="card-title">${t("ui.panelEvents")}</div>
+      <div class="card-sub">${t("ui.eventsDesc")}</div>
       <div class="list" style="margin-top: 16px;">
         ${
           events.length === 0
             ? html`
-                <div class="muted">No events yet.</div>
+                <div class="muted">${t("ui.noEvents")}</div>
               `
             : events.slice(0, 50).map(
                 (evt) => html`
@@ -504,8 +507,8 @@ function renderDetail(props: TelegramProps) {
     return html`
       <section class="agents-main">
         <div class="card">
-          <div class="card-title">Select an agent</div>
-          <div class="card-sub">Pick an agent from the list, or create a new one.</div>
+          <div class="card-title">${t("ui.selectAgentTitle")}</div>
+          <div class="card-sub">${t("ui.selectAgentDesc")}</div>
         </div>
       </section>
     `;
@@ -550,15 +553,13 @@ function renderCredentialsCard(props: TelegramProps) {
     !props.setupSaving && props.setupApiId.trim() !== "" && props.setupApiHash.trim() !== "";
   return html`
     <section class="card" style="width: 100%; max-width: 480px;">
-      <div class="card-title">Telegram API credentials</div>
+      <div class="card-title">${t("ui.credentialsTitle")}</div>
       <div class="card-sub">
-        Get your credentials at
-        <a href="https://my.telegram.org" target="_blank" rel="noopener">my.telegram.org</a>
-        → API development tools. Required to run any Telegram agent.
+        ${t("ui.credentialsDesc")}
       </div>
       <div class="stack" style="margin-top: 16px;">
         <div class="field">
-          <span>API ID</span>
+          <span>${t("ui.apiId")}</span>
           <input
             type="text"
             placeholder="e.g. 12345678"
@@ -568,7 +569,7 @@ function renderCredentialsCard(props: TelegramProps) {
           />
         </div>
         <div class="field">
-          <span>API Hash</span>
+          <span>${t("ui.apiHash")}</span>
           <input
             type="password"
             placeholder="32-character hex string"
@@ -579,7 +580,7 @@ function renderCredentialsCard(props: TelegramProps) {
         </div>
         ${props.setupError ? html`<div class="callout danger">${props.setupError}</div>` : nothing}
         <button class="btn primary" ?disabled=${!canSave} @click=${props.onSetupSave}>
-          ${props.setupSaving ? "Saving…" : "Save credentials"}
+          ${props.setupSaving ? t("ui.saving") : t("ui.saveCredentials")}
         </button>
       </div>
     </section>

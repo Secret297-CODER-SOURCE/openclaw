@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import type {
   ChannelAccountSnapshot,
@@ -70,10 +71,10 @@ export function renderChannels(props: ChannelsProps) {
     <section class="card" style="margin-top: 18px;">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Channel health</div>
-          <div class="card-sub">Channel status snapshots from the gateway.</div>
+          <div class="card-title">${t("channelsView.healthTitle")}</div>
+          <div class="card-sub">${t("channelsView.healthSubtitle")}</div>
         </div>
-        <div class="muted">${props.lastSuccessAt ? formatRelativeTimestamp(props.lastSuccessAt) : "n/a"}</div>
+        <div class="muted">${props.lastSuccessAt ? formatRelativeTimestamp(props.lastSuccessAt) : t("common.na")}</div>
       </div>
       ${
         props.lastError
@@ -83,7 +84,7 @@ export function renderChannels(props: ChannelsProps) {
           : nothing
       }
       <pre class="code-block" style="margin-top: 12px;">
-${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : "No snapshot yet."}
+${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : t("channelsView.noSnapshot")}
       </pre>
     </section>
   `;
@@ -207,16 +208,16 @@ function renderGenericChannelCard(
           : html`
             <div class="status-list" style="margin-top: 16px;">
               <div>
-                <span class="label">Configured</span>
-                <span>${configured == null ? "n/a" : configured ? "Yes" : "No"}</span>
+                <span class="label">${t("channelsView.configuredLabel")}</span>
+                <span>${configured == null ? t("common.na") : configured ? t("ui.yes") : t("ui.no")}</span>
               </div>
               <div>
-                <span class="label">Running</span>
-                <span>${running == null ? "n/a" : running ? "Yes" : "No"}</span>
+                <span class="label">${t("channelsView.runningLabel")}</span>
+                <span>${running == null ? t("common.na") : running ? t("ui.yes") : t("ui.no")}</span>
               </div>
               <div>
-                <span class="label">Connected</span>
-                <span>${connected == null ? "n/a" : connected ? "Yes" : "No"}</span>
+                <span class="label">${t("channelsView.connectedLabel")}</span>
+                <span>${connected == null ? t("common.na") : connected ? t("ui.yes") : t("ui.no")}</span>
               </div>
             </div>
           `
@@ -283,9 +284,22 @@ function deriveConnectedStatus(account: ChannelAccountSnapshot): "Yes" | "No" | 
   return "n/a";
 }
 
+function localizeStatus(status: string): string {
+  if (status === "Yes") {
+    return t("ui.yes");
+  }
+  if (status === "No") {
+    return t("ui.no");
+  }
+  if (status === "n/a") {
+    return t("common.na");
+  }
+  return status;
+}
+
 function renderGenericAccount(account: ChannelAccountSnapshot) {
-  const runningStatus = deriveRunningStatus(account);
-  const connectedStatus = deriveConnectedStatus(account);
+  const runningStatus = localizeStatus(deriveRunningStatus(account));
+  const connectedStatus = localizeStatus(deriveConnectedStatus(account));
 
   return html`
     <div class="account-card">
@@ -295,20 +309,20 @@ function renderGenericAccount(account: ChannelAccountSnapshot) {
       </div>
       <div class="status-list account-card-status">
         <div>
-          <span class="label">Running</span>
+          <span class="label">${t("channelsView.runningLabel")}</span>
           <span>${runningStatus}</span>
         </div>
         <div>
-          <span class="label">Configured</span>
-          <span>${account.configured ? "Yes" : "No"}</span>
+          <span class="label">${t("channelsView.configuredLabel")}</span>
+          <span>${account.configured ? t("ui.yes") : t("ui.no")}</span>
         </div>
         <div>
-          <span class="label">Connected</span>
+          <span class="label">${t("channelsView.connectedLabel")}</span>
           <span>${connectedStatus}</span>
         </div>
         <div>
           <span class="label">Last inbound</span>
-          <span>${account.lastInboundAt ? formatRelativeTimestamp(account.lastInboundAt) : "n/a"}</span>
+          <span>${account.lastInboundAt ? formatRelativeTimestamp(account.lastInboundAt) : t("common.na")}</span>
         </div>
         ${
           account.lastError

@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { formatPresenceAge, formatPresenceSummary } from "../presenter.ts";
 import type { PresenceEntry } from "../types.ts";
 
@@ -15,11 +16,11 @@ export function renderInstances(props: InstancesProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Connected Instances</div>
-          <div class="card-sub">Presence beacons from the gateway and clients.</div>
+          <div class="card-title">${t("instances.title")}</div>
+          <div class="card-sub">${t("instances.subtitle")}</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-          ${props.loading ? "Loading…" : "Refresh"}
+          ${props.loading ? t("ui.loading") : t("ui.refresh")}
         </button>
       </div>
       ${
@@ -40,7 +41,7 @@ export function renderInstances(props: InstancesProps) {
         ${
           props.entries.length === 0
             ? html`
-                <div class="muted">No instances reported yet.</div>
+                <div class="muted">${t("instances.noInstances")}</div>
               `
             : props.entries.map((entry) => renderEntry(entry))
         }
@@ -50,8 +51,9 @@ export function renderInstances(props: InstancesProps) {
 }
 
 function renderEntry(entry: PresenceEntry) {
-  const lastInput = entry.lastInputSeconds != null ? `${entry.lastInputSeconds}s ago` : "n/a";
-  const mode = entry.mode ?? "unknown";
+  const lastInput =
+    entry.lastInputSeconds != null ? `${entry.lastInputSeconds}s ago` : t("common.na");
+  const mode = entry.mode ?? t("instances.unknownMode");
   const roles = Array.isArray(entry.roles) ? entry.roles.filter(Boolean) : [];
   const scopes = Array.isArray(entry.scopes) ? entry.scopes.filter(Boolean) : [];
   const scopesLabel =
@@ -63,7 +65,7 @@ function renderEntry(entry: PresenceEntry) {
   return html`
     <div class="list-item">
       <div class="list-main">
-        <div class="list-title">${entry.host ?? "unknown host"}</div>
+        <div class="list-title">${entry.host ?? t("instances.unknownHost")}</div>
         <div class="list-sub">${formatPresenceSummary(entry)}</div>
         <div class="chip-row">
           <span class="chip">${mode}</span>
@@ -81,8 +83,8 @@ function renderEntry(entry: PresenceEntry) {
       </div>
       <div class="list-meta">
         <div>${formatPresenceAge(entry)}</div>
-        <div class="muted">Last input ${lastInput}</div>
-        <div class="muted">Reason ${entry.reason ?? ""}</div>
+        <div class="muted">${t("instances.lastInput")} ${lastInput}</div>
+        <div class="muted">${t("instances.reason")} ${entry.reason ?? ""}</div>
       </div>
     </div>
   `;
