@@ -1,0 +1,23 @@
+2026-03-03T23:39:55.255+03:00 (node:91930) Warning: `--localstorage-file` was provided without a valid path
+(Use `node --trace-warnings ...` to show where the warning was created)
+[90m2026-03-03T20:39:55.299Z[39m [36m[heartbeat][39m [36mstarted[39m
+[90m2026-03-03T20:39:55.301Z[39m [32m[health-monitor][39m [36mstarted (interval: 300s, grace: 60s)[39m
+[90m2026-03-03T20:39:55.301Z[39m [36m[gateway][39m [36magent model: github-copilot/gpt-4o[39m
+[90m2026-03-03T20:39:55.302Z[39m [36m[gateway][39m [36mlistening on ws://127.0.0.1:18789, ws://[::1]:18789 (PID 91930)[39m
+[90m2026-03-03T20:39:55.302Z[39m [36m[gateway][39m [36mlog file: /tmp/openclaw/openclaw-2026-03-03.log[39m
+[90m2026-03-03T20:39:55.308Z[39m [35m[browser/service][39m [36mBrowser control service ready (profiles=2)[39m
+[90m2026-03-03T20:39:55.315Z[39m [36m[gateway][39m [36m[TG] Loading 1 agents[39m
+[90m2026-03-03T20:39:55.316Z[39m [36m[gateway][39m [36m[TelegramPlugin] initialized[39m
+[90m2026-03-03T20:39:55.332Z[39m [36m[ws][39m [36mwebchat connected conn=844135a7-0334-43fa-a6a6-fb46ac807d5e remote=127.0.0.1 client=openclaw-control-ui webchat vdev[39m
+[90m2026-03-03T20:39:55.791Z[39m [36m[ws][39m [36mwebchat connected conn=5cde7b6b-d57e-4265-9a42-48367e38d8af remote=127.0.0.1 client=openclaw-control-ui webchat vdev[39m
+[90m2026-03-03T20:39:55.943Z[39m [36m[ws][39m [36m⇄ res ✓ config.get 148ms conn=5cde7b6b…d8af id=f69ee69c…f3bf[39m
+[90m2026-03-03T20:39:55.943Z[39m [36m[ws][39m [36m⇄ res ✓ node.list 149ms conn=5cde7b6b…d8af id=39eb0706…4454[39m
+[90m2026-03-03T20:39:55.944Z[39m [36m[ws][39m [36m⇄ res ✓ device.pair.list 150ms conn=5cde7b6b…d8af id=b1b2eb12…887f[39m
+[90m2026-03-03T20:40:28.223Z[39m [36m[gateway][39m [36msignal SIGINT received[39m
+[90m2026-03-03T20:40:28.226Z[39m [36m[gateway][39m [36mreceived SIGINT; shutting down[39m
+[90m2026-03-03T20:40:28.230Z[39m [36m[gateway][39m [36m[TG:Dima] → stopped[39m
+[90m2026-03-03T20:40:28.231Z[39m [36m[gateway][39m [36msignal SIGINT received[39m
+[90m2026-03-03T20:40:28.232Z[39m [36m[gateway][39m [36mreceived SIGINT during shutdown; ignoring[39m
+[90m2026-03-03T20:40:28.236Z[39m [34m[gmail-watcher][39m [36mgmail watcher stopped[39m
+[90m2026-03-03T20:40:28.438Z[39m [36m[ws][39m [36mwebchat disconnected code=1012 reason=service restart conn=844135a7-0334-43fa-a6a6-fb46ac807d5e[39m
+[90m2026-03-03T20:40:28.438Z[39m [36m[ws][39m [36mwebchat disconnected code=1012 reason=service restart conn=5cde7b6b-d57e-4265-9a42-48367e38d8af[39m
