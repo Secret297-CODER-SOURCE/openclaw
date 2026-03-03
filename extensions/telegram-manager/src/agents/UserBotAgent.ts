@@ -23,6 +23,13 @@ export class UserBotAgent extends BaseAgent {
 
   async start(): Promise<void> {
     if (this.record.status === "running") return;
+    // Disconnect any leftover client (e.g. auth client from authStart/authSubmit)
+    // before creating a new one; reusing the same session on an already-connected
+    // client causes DC to reject the duplicate connection.
+    if (this.client) {
+      await this.client.disconnect().catch(() => {});
+      this.client = null;
+    }
     this.setStatus("starting");
 
     try {
