@@ -157,6 +157,7 @@ export class TelegramPlugin implements GatewayPlugin {
           };
           await this.manager.assignTaskSession(p.agentId, session);
           // Optionally send an opening message right away
+          let openingMessageError: string | undefined;
           if (p.openingMessage) {
             try {
               await this.manager.callTool(p.agentId, "sendMessage", {
@@ -164,10 +165,19 @@ export class TelegramPlugin implements GatewayPlugin {
                 message: p.openingMessage,
               });
             } catch (e) {
-              this.ctx.logger.warn(`[TelegramPlugin] opening message failed`, { e: String(e) });
+              openingMessageError = String(e);
+              // Log the actual reason (not just metadata) so it appears in the gateway log
+              this.ctx.logger.warn(
+                `[TelegramPlugin] opening message to ${p.chatId} failed: ${openingMessageError}`,
+              );
             }
           }
-          respond({ ok: true, sessionId: session.id });
+          // Always respond ok (session is active); include warning if message failed
+          respond({
+            ok: true,
+            sessionId: session.id,
+            ...(openingMessageError ? { openingMessageWarning: openingMessageError } : {}),
+          });
           break;
         }
 

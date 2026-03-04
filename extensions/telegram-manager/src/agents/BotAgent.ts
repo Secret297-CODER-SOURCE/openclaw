@@ -20,6 +20,8 @@ export class BotAgent extends BaseAgent {
   private managerRef: IAgentManagerRef | null;
   /** Owner chat ID from TG_OWNER_CHAT_ID env var — required for management commands */
   private ownerChatId: string | null;
+  /** Counts consecutive polling crashes for exponential back-off restarts. */
+  private restartAttempts = 0;
 
   constructor(
     record: AgentRecord,
@@ -34,7 +36,8 @@ export class BotAgent extends BaseAgent {
   }
 
   async start(): Promise<void> {
-    if (this.record.status === "running") return;
+    // Guard against concurrent start() calls (e.g. auto-restart + manual start racing).
+    if (this.record.status === "running" || this.record.status === "starting") return;
     this.setStatus("starting");
 
     try {
@@ -42,12 +45,22 @@ export class BotAgent extends BaseAgent {
       await this.registerBehaviors(this.record.behaviors);
       this.setupBaseHandlers();
 
-      this.bot.start({
-        onStart: () => {
-          this.setStatus("running");
-          this.logger.info(`[TG:${this.name}] bot polling started`);
-        },
-      });
+      this.bot
+        .start({
+          onStart: () => {
+            this.setStatus("running");
+            this.logger.info(`[TG:${this.name}] bot polling started`);
+          },
+        })
+        .catch((err) => {
+          const msg = this.maskToken(String(err));
+          this.logger.error(`[TG:${this.name}] polling crashed`, { e: msg });
+          // Only auto-restart if agent wasn't manually stopped
+          if (this.record.status !== "stopped") {
+            this.setStatus("error", msg);
+            void this.scheduleRestart();
+          }
+        });
     } catch (err) {
       this.setStatus("error", String(err));
       throw err;
@@ -55,6 +68,8 @@ export class BotAgent extends BaseAgent {
   }
 
   async stop(): Promise<void> {
+    // Reset back-off counter so the next manual start is treated as fresh.
+    this.restartAttempts = 0;
     for (const j of this.cronJobs.values()) j.stop();
     this.cronJobs.clear();
     await this.bot?.stop();
@@ -90,7 +105,16 @@ export class BotAgent extends BaseAgent {
     this.cronJobs.clear();
     await this.registerBehaviors(behaviors);
     this.setupBaseHandlers();
-    if (this.record.status === "running") this.bot!.start();
+    if (this.record.status === "running") {
+      this.bot!.start().catch((err) => {
+        const msg = this.maskToken(String(err));
+        this.logger.error(`[TG:${this.name}] polling crashed after behavior update`, { e: msg });
+        if (this.record.status !== "stopped") {
+          this.setStatus("error", msg);
+          void this.scheduleRestart();
+        }
+      });
+    }
   }
 
   /** Returns true if the message sender is the configured owner */
@@ -183,7 +207,11 @@ export class BotAgent extends BaseAgent {
     });
 
     this.bot.on("message:text", (ctx) => this.handleText(ctx));
-    this.bot.catch((err) => this.logger.error(`[TG:${this.name}] bot error`, { err: err.message }));
+    this.bot.catch((err) =>
+      this.logger.error(`[TG:${this.name}] bot error`, {
+        err: this.maskToken(err.message),
+      }),
+    );
   }
 
   private async handleText(ctx: Context) {
@@ -236,6 +264,42 @@ export class BotAgent extends BaseAgent {
     for (const b of behaviors) {
       if (b.type === "broadcast") this.setupBroadcast();
       if (b.type === "monitor") this.setupMonitorViaUpdates();
+    }
+  }
+
+  // ─── Stability helpers ─────────────────────────────────────────────────────
+
+  /**
+   * Replace bot token in any string before it reaches logs.
+   * Telegram tokens follow the pattern <8-10 digits>:<35 chars>, e.g.
+   * "123456789:AAHk..." → "<token>".
+   */
+  private maskToken(s: string): string {
+    return s.replace(/\d{8,10}:[A-Za-z0-9_-]{35}/g, "<token>");
+  }
+
+  /**
+   * Auto-restart polling after a crash, using exponential back-off.
+   * Delay: 5 s → 10 s → 20 s → 40 s → 60 s (capped).
+   * Aborts if the agent has been manually stopped.
+   */
+  private async scheduleRestart(): Promise<void> {
+    const delayMs = Math.min(2 ** this.restartAttempts * 5_000, 60_000);
+    this.restartAttempts += 1;
+    this.logger.info(
+      `[TG:${this.name}] scheduling restart in ${delayMs / 1000}s (attempt ${this.restartAttempts})`,
+    );
+    await this.delay(delayMs);
+    // Abort if agent was manually stopped while we were waiting.
+    if (this.record.status === "stopped") return;
+    try {
+      await this.start();
+      this.restartAttempts = 0; // reset on successful start
+    } catch (e) {
+      this.logger.error(`[TG:${this.name}] restart failed`, {
+        e: this.maskToken(String(e)),
+      });
+      void this.scheduleRestart();
     }
   }
 

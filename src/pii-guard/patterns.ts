@@ -31,8 +31,12 @@ export interface PiiPattern {
 // ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ: собрать regex из массива слов
 // ─────────────────────────────────────────────────────────────────────────────
 function wordListRegex(words: string[], flags = "gi"): RegExp {
-  const escaped = words.map((w) => w.replace(/[.*+?^${}()|[\\]\]/g, "$&"));
-  return new RegExp(`\b(${escaped.join("|")})\b`, flags);
+  // Escape regex special characters in each word, then join into an alternation.
+  // Use "\\$&" so that e.g. "." becomes "\." in the regex string.
+  const escaped = words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  // \\b in the template literal produces the two-char sequence \b in the string,
+  // which RegExp interprets as a word boundary (not a backspace).
+  return new RegExp(`\\b(${escaped.join("|")})\\b`, flags);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -126,6 +130,15 @@ export const PII_PATTERNS: PiiPattern[] = [
     description: "Упоминание счёта с контекстом",
     regex: /(?:счёт|счет|расчётный счёт|р\/с)[:\s#№]*[\d\s]{16,25}/gi,
   },
+  {
+    tokenName: "TG_ТОКЕН",
+    group: "network",
+    priority: 12,
+    description:
+      "Telegram Bot API token: <8-10 digit bot ID>:<35 alphanumeric chars>, e.g. 123456789:AAHk...",
+    // Must match before document patterns that would incorrectly split the numeric prefix.
+    regex: /\b\d{8,10}:[A-Za-z0-9_-]{35}\b/g,
+  },
 
   // ══════════════════════════════════════════════════════════════════════════
   // ГРУППА 2: ДОКУМЕНТЫ РФ (priority 20-39)
@@ -142,8 +155,11 @@ export const PII_PATTERNS: PiiPattern[] = [
     tokenName: "ПАСПОРТ_РФ",
     group: "docs_ru",
     priority: 21,
-    description: "Паспорт РФ: серия 4 цифры + номер 6 цифр (с контекстом)",
-    regex: /(?:паспорт[:\s]*(?:серия[:\s]*)?\d{4}[\s-]*\d{6}|\b\d{2}\s?\d{2}\s?\d{6}\b)/gi,
+    description: "Паспорт РФ: серия 4 цифры + номер 6 цифр (требует слово «паспорт»)",
+    // The former bare-digit alternative \b\d{2}\s?\d{2}\s?\d{6}\b was removed because
+    // it matched any 10-digit number — including Telegram user IDs — causing false positives.
+    // Matching now requires the keyword «паспорт» to avoid damaging valid identifiers.
+    regex: /паспорт[:\s]*(?:серия[:\s]*)?\d{4}[\s-]*\d{6}/gi,
   },
   {
     tokenName: "ЗАГРАНПАСПОРТ",
@@ -156,8 +172,10 @@ export const PII_PATTERNS: PiiPattern[] = [
     tokenName: "ИНН_ФИЗ",
     group: "docs_ru",
     priority: 23,
-    description: "ИНН физлица — 12 цифр",
-    regex: /\b\d{12}\b/g,
+    description: "ИНН физлица — 12 цифр (требует контекст «инн»)",
+    // Bare \b\d{12}\b matched any 12-digit number (Telegram channel IDs, etc.).
+    // Require the «ИНН» keyword so we only catch real tax-number disclosures.
+    regex: /(?:инн)[:\s]*(\d{12})\b/gi,
   },
   {
     tokenName: "ИНН_ЮР",
@@ -299,8 +317,10 @@ export const PII_PATTERNS: PiiPattern[] = [
     group: "contacts",
     priority: 60,
     description: "Телефоны: RU (+7/8), UA (+38), KZ (+7), международные",
+    // (?<!\d)8 — negative lookbehind prevents matching an '8' that is embedded
+    // in a longer digit run (e.g. a Telegram channel ID like 987654321098).
     regex:
-      /(?:\+7|8)[\s\-(]?\d{3}[\s\-)]?\d{3}[\s-]?\d{2}[\s-]?\d{2}|(?:\+38)[\s\-(]?\d{3}[\s\-)]?\d{3}[\s-]?\d{2}[\s-]?\d{2}|\+(?!7|38)\d{1,3}[\s\-(]?\d{1,4}[\s\-)]?[\d\s-]{6,14}/g,
+      /(?:\+7|(?<!\d)8)[\s\-(]?\d{3}[\s\-)]?\d{3}[\s-]?\d{2}[\s-]?\d{2}|(?:\+38)[\s\-(]?\d{3}[\s\-)]?\d{3}[\s-]?\d{2}[\s-]?\d{2}|\+(?!7|38)\d{1,3}[\s\-(]?\d{1,4}[\s\-)]?[\d\s-]{6,14}/g,
   },
   {
     tokenName: "ПОЧТА",
@@ -339,11 +359,24 @@ export const PII_PATTERNS: PiiPattern[] = [
       /(?:ул\.|улица|пр-т\.?|проспект|пер\.|переулок|бульвар|б-р\.?|шоссе|ш\.?|набережная|наб\.|площадь|пл\.)\s+[«"]?[А-ЯЁа-яёA-Za-z][А-ЯЁа-яё\s-]{1,60}[»"]?(?:\s*,\s*(?:д\.?\s*)?\d+[а-яА-ЯёЁ]?)?/gi,
   },
   {
+    tokenName: "МЕССЕНДЖЕР",
+    group: "contacts",
+    priority: 62,
+    description:
+      "Никнейм/юзернейм в мессенджере — только с явным контекстом мессенджера перед @username",
+    regex:
+      /(?:telegram|tg|телеграм|whatsapp|вотсап|viber|вайбер|написать?|свяжись|ник(?:нейм)?|юзернейм|контакт|логин|аккаунт)[:\s]+@([a-zA-Z][a-zA-Z0-9_]{4,31})\b/gi,
+  },
+  {
     tokenName: "ПОЧТОВЫЙ_ИНДЕКС",
     group: "address",
     priority: 72,
-    description: "Почтовый индекс РФ — 6 цифр",
-    regex: /\b\d{6}\b/g,
+    description: "Почтовый индекс РФ — 6 цифр (с контекстом или в начале адреса)",
+    // The former bare \b\d{6}\b matched any 6-digit number (prices, IDs, years, etc.)
+    // causing a massive false-positive rate. Now requires either:
+    //   - an explicit «индекс» keyword, or
+    //   - a 6-digit number followed by a comma + city (start of address string).
+    regex: /(?:(?:почтовый\s*)?индекс[:\s]*(\d{6}))|\b(\d{6})\s*,\s*(?=[а-яА-ЯёЁ])/gi,
   },
   {
     tokenName: "КВАРТИРА",
@@ -1312,8 +1345,12 @@ export const PII_PATTERNS: PiiPattern[] = [
     group: "geo",
     priority: 117,
     description: "Улицы, микрорайоны, посёлки, сёла, деревни",
+    // "с\.?" was matching the Russian preposition "с" (with), e.g. "с worker_297"
+    // was tokenised as a village name. Require a dot so only the explicit
+    // abbreviation "с." (= село) triggers — not the preposition.
+    // Same fix for "дер." — require the dot to avoid false matches.
     regex:
-      /(?:мкр\.?|микрорайон|квартал|кв-л|район|пос\.?|посёлок|деревня|дер\.?|село|с\.?|станица|ст-ца|аул|хутор|ж\/м)\s+[«"]?[А-ЯЁа-яёA-Za-z0-9][А-ЯЁа-яёA-Za-z0-9\s\-.]{1,60}[»"]?/gi,
+      /(?:мкр\.?|микрорайон|квартал|кв-л|район|пос\.?|посёлок|деревня|дер\.|село|с\.|станица|ст-ца|аул|хутор|ж\/м)\s+[«"]?[А-ЯЁа-яёA-Za-z0-9][А-ЯЁа-яёA-Za-z0-9\s\-.]{1,60}[»"]?/gi,
   },
 ];
 
