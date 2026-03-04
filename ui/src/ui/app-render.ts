@@ -559,9 +559,30 @@ export function renderApp(state: AppViewState) {
                   const agent = state.telegramAgents.find((a) => a.id === id);
                   state.telegramBehaviorsJson = JSON.stringify(agent?.behaviors ?? [], null, 2);
                   state.telegramBehaviorsJsonError = null;
+                  // Reset files state when switching agents
+                  state.agentFilesList = null;
+                  state.agentFilesError = null;
+                  state.agentFilesLoading = false;
+                  state.agentFileActive = null;
+                  state.agentFileContents = {};
+                  state.agentFileDrafts = {};
                 },
                 onSelectPanel: (panel: TelegramPanel) => {
                   state.telegramActivePanel = panel;
+                  if (panel === "cron") {
+                    void state.loadCron();
+                  }
+                  if (panel === "files" && state.telegramSelectedId) {
+                    const agentId = state.telegramSelectedId;
+                    if (state.agentFilesList?.agentId !== agentId) {
+                      state.agentFilesList = null;
+                      state.agentFilesError = null;
+                      state.agentFileActive = null;
+                      state.agentFileContents = {};
+                      state.agentFileDrafts = {};
+                      void loadAgentFiles(state, agentId);
+                    }
+                  }
                 },
                 onCreateNameChange: (v) => {
                   state.telegramCreateName = v;
@@ -702,6 +723,42 @@ export function renderApp(state: AppViewState) {
                     state.telegramProxyEditPassword = "";
                   } catch {
                     // Error is stored in state.telegramProxyError
+                  }
+                },
+                // Cron panel
+                cronJobs: state.cronJobs,
+                cronStatus: state.cronStatus,
+                cronLoading: state.cronLoading,
+                cronError: state.cronError,
+                onCronRefresh: () => void state.loadCron(),
+                // Files panel
+                agentFilesList: state.agentFilesList,
+                agentFilesLoading: state.agentFilesLoading,
+                agentFilesError: state.agentFilesError,
+                agentFileActive: state.agentFileActive,
+                agentFileContents: state.agentFileContents,
+                agentFileDrafts: state.agentFileDrafts,
+                agentFileSaving: state.agentFileSaving,
+                onLoadFiles: (agentId) => void loadAgentFiles(state, agentId),
+                onSelectFile: (name) => {
+                  state.agentFileActive = name;
+                  const agentId = state.telegramSelectedId;
+                  if (agentId && !state.agentFileContents[name]) {
+                    void loadAgentFileContent(state, agentId, name);
+                  }
+                },
+                onFileDraftChange: (name, content) => {
+                  state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
+                },
+                onFileReset: (name) => {
+                  const drafts = { ...state.agentFileDrafts };
+                  delete drafts[name];
+                  state.agentFileDrafts = drafts;
+                },
+                onFileSave: (name) => {
+                  const agentId = state.telegramSelectedId;
+                  if (agentId) {
+                    void saveAgentFile(state, agentId, name, state.agentFileDrafts[name] ?? "");
                   }
                 },
               })

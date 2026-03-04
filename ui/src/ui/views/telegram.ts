@@ -1,10 +1,18 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { TelegramAgentEvent, TelegramAgentRecord } from "../controllers/telegram.ts";
+import {
+  formatCronPayload,
+  formatCronSchedule,
+  formatCronState,
+  formatNextRun,
+} from "../presenter.ts";
+import type { AgentsFilesListResult, CronJob, CronStatus } from "../types.ts";
+import { renderAgentFiles } from "./agents-panels-status-files.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type TelegramPanel = "overview" | "auth" | "behaviors" | "events";
+export type TelegramPanel = "overview" | "auth" | "behaviors" | "events" | "cron" | "files";
 
 export type TelegramProps = {
   loading: boolean;
@@ -81,6 +89,25 @@ export type TelegramProps = {
   onProxyEditPasswordChange: (v: string) => void;
   onProxySave: () => void;
   onProxyClear: () => void;
+  // Cron panel
+  cronJobs: CronJob[];
+  cronStatus: CronStatus | null;
+  cronLoading: boolean;
+  cronError: string | null;
+  onCronRefresh: () => void;
+  // Files panel (core files)
+  agentFilesList: AgentsFilesListResult | null;
+  agentFilesLoading: boolean;
+  agentFilesError: string | null;
+  agentFileActive: string | null;
+  agentFileContents: Record<string, string>;
+  agentFileDrafts: Record<string, string>;
+  agentFileSaving: boolean;
+  onLoadFiles: (agentId: string) => void;
+  onSelectFile: (name: string) => void;
+  onFileDraftChange: (name: string, content: string) => void;
+  onFileReset: (name: string) => void;
+  onFileSave: (name: string) => void;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -251,6 +278,8 @@ function renderPanelTabs(props: TelegramProps, agent: TelegramAgentRecord) {
       : []),
     { id: "behaviors", label: t("ui.panelBehaviors") },
     { id: "events", label: t("ui.panelEvents") },
+    { id: "cron", label: "Cron" },
+    { id: "files", label: "Files" },
   ];
 
   return html`
@@ -523,6 +552,106 @@ function renderEventsPanel(props: TelegramProps, agentId: string) {
   `;
 }
 
+// ─── Detail: cron panel ───────────────────────────────────────────────────────
+
+function renderCronPanel(props: TelegramProps) {
+  return html`
+    <section class="card">
+      <div class="row" style="justify-content: space-between;">
+        <div>
+          <div class="card-title">Cron</div>
+          <div class="card-sub">Scheduled jobs for this gateway.</div>
+        </div>
+        <button class="btn btn--sm" ?disabled=${props.cronLoading} @click=${props.onCronRefresh}>
+          ${props.cronLoading ? "Refreshing…" : "Refresh"}
+        </button>
+      </div>
+
+      <div class="stat-grid" style="margin-top: 16px;">
+        <div class="stat">
+          <div class="stat-label">Enabled</div>
+          <div class="stat-value">
+            ${props.cronStatus ? (props.cronStatus.enabled ? "Yes" : "No") : "n/a"}
+          </div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Total Jobs</div>
+          <div class="stat-value">${props.cronStatus?.jobs ?? "n/a"}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Next wake</div>
+          <div class="stat-value">${formatNextRun(props.cronStatus?.nextWakeAtMs ?? null)}</div>
+        </div>
+      </div>
+
+      ${
+        props.cronError
+          ? html`<div class="callout danger" style="margin-top: 12px;">${props.cronError}</div>`
+          : nothing
+      }
+
+      <div style="margin-top: 20px;">
+        <div class="card-title" style="font-size: 0.85em; margin-bottom: 12px;">All Jobs</div>
+        ${
+          props.cronJobs.length === 0
+            ? html`
+                <div class="muted">No cron jobs configured. Add jobs in the Cron tab.</div>
+              `
+            : html`
+                <div class="list">
+                  ${props.cronJobs.map(
+                    (job) => html`
+                      <div class="list-item">
+                        <div class="list-main">
+                          <div class="list-title">${job.name}</div>
+                          ${
+                            job.description
+                              ? html`<div class="list-sub">${job.description}</div>`
+                              : nothing
+                          }
+                          <div class="chip-row" style="margin-top: 6px;">
+                            <span class="chip">${formatCronSchedule(job)}</span>
+                            <span class="chip ${job.enabled ? "chip-ok" : "chip-warn"}">
+                              ${job.enabled ? "enabled" : "disabled"}
+                            </span>
+                            <span class="chip">${job.sessionTarget}</span>
+                          </div>
+                        </div>
+                        <div class="list-meta">
+                          <div class="mono">${formatCronState(job)}</div>
+                          <div class="muted">${formatCronPayload(job)}</div>
+                        </div>
+                      </div>
+                    `,
+                  )}
+                </div>
+              `
+        }
+      </div>
+    </section>
+  `;
+}
+
+// ─── Detail: files panel ──────────────────────────────────────────────────────
+
+function renderFilesPanel(props: TelegramProps, agentId: string) {
+  return renderAgentFiles({
+    agentId,
+    agentFilesList: props.agentFilesList,
+    agentFilesLoading: props.agentFilesLoading,
+    agentFilesError: props.agentFilesError,
+    agentFileActive: props.agentFileActive,
+    agentFileContents: props.agentFileContents,
+    agentFileDrafts: props.agentFileDrafts,
+    agentFileSaving: props.agentFileSaving,
+    onLoadFiles: props.onLoadFiles,
+    onSelectFile: props.onSelectFile,
+    onFileDraftChange: props.onFileDraftChange,
+    onFileReset: props.onFileReset,
+    onFileSave: props.onFileSave,
+  });
+}
+
 // ─── Main panel ───────────────────────────────────────────────────────────────
 
 function renderDetail(props: TelegramProps) {
@@ -568,6 +697,8 @@ function renderDetail(props: TelegramProps) {
       }
       ${props.activePanel === "behaviors" ? renderBehaviorsPanel(props, agent) : nothing}
       ${props.activePanel === "events" ? renderEventsPanel(props, agent.id) : nothing}
+      ${props.activePanel === "cron" ? renderCronPanel(props) : nothing}
+      ${props.activePanel === "files" ? renderFilesPanel(props, agent.id) : nothing}
     </section>
   `;
 }
