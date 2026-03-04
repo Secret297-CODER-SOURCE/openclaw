@@ -191,6 +191,27 @@ export class BotAgent extends BaseAgent {
     const chatId = String(ctx.chat?.id ?? "");
     this.trackMessage("in", text, chatId);
 
+    // Task sessions take priority over auto_reply
+    const taskSession = this.getTaskSession(chatId);
+    if (taskSession) {
+      await ctx.replyWithChatAction("typing");
+      const systemPrompt = taskSession.systemPrompt ?? this.buildTaskSystemPrompt(taskSession.task);
+      try {
+        const reply = await aiReply(
+          text,
+          `${this.id}:${chatId}:task:${taskSession.id}`,
+          systemPrompt,
+        );
+        if (reply) {
+          await ctx.reply(reply);
+          this.trackMessage("out", reply, chatId);
+        }
+      } catch (e) {
+        this.logger.warn(`[TG:${this.name}] task session reply failed`, { e: String(e) });
+      }
+      return;
+    }
+
     const cfg = this.getBehavior<any>("auto_reply");
     if (!cfg?.enabled || !this.shouldAutoReply(cfg, text, chatId)) return;
 

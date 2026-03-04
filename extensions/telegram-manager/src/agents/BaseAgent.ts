@@ -7,6 +7,8 @@ import {
   TelegramEvent,
   AgentStatus,
   AutoReplyBehavior,
+  TaskSession,
+  TaskSessionBehavior,
   ILogger,
 } from "../types";
 
@@ -57,6 +59,66 @@ export abstract class BaseAgent extends EventEmitter {
 
   getBehavior<T extends BehaviorConfig>(type: T["type"]): T | undefined {
     return this.record.behaviors.find((b) => b.type === type) as T | undefined;
+  }
+
+  // ─── Task session management ───────────────────────────────────────────────
+
+  /** Find an active task session for the given chat, if any. */
+  protected getTaskSession(chatId: string): TaskSession | undefined {
+    const b = this.getBehavior<TaskSessionBehavior>("task_session");
+    return b?.sessions.find((s) => s.chatId === chatId && s.status === "active");
+  }
+
+  /** Return all task sessions (all statuses). */
+  listTaskSessions(): TaskSession[] {
+    const b = this.getBehavior<TaskSessionBehavior>("task_session");
+    return b?.sessions ?? [];
+  }
+
+  /**
+   * Insert or update a task session directly in the behaviors array and
+   * persist to storage — intentionally does NOT call onBehaviorsChanged so
+   * that running bot/userbot connections are not disrupted.
+   */
+  upsertTaskSession(session: TaskSession): void {
+    const b = this.getBehavior<TaskSessionBehavior>("task_session");
+    if (b) {
+      const idx = b.sessions.findIndex((s) => s.id === session.id);
+      if (idx >= 0) {
+        b.sessions[idx] = session;
+      } else {
+        b.sessions.push(session);
+      }
+    } else {
+      const newBehavior: TaskSessionBehavior = {
+        type: "task_session",
+        enabled: true,
+        sessions: [session],
+      };
+      this.record.behaviors = [...this.record.behaviors, newBehavior];
+    }
+    this.storage.updateBehaviors(this.id, this.record.behaviors);
+  }
+
+  /** Mark a task session as completed and persist. */
+  completeTaskSession(sessionId: string): void {
+    const b = this.getBehavior<TaskSessionBehavior>("task_session");
+    if (!b) return;
+    const session = b.sessions.find((s) => s.id === sessionId);
+    if (session) {
+      session.status = "completed";
+      session.completedAt = new Date().toISOString();
+      this.storage.updateBehaviors(this.id, this.record.behaviors);
+    }
+  }
+
+  /** Build a default system prompt for a task session. */
+  protected buildTaskSystemPrompt(task: string): string {
+    return (
+      `You are a Telegram assistant. You have been assigned the following task:\n\n${task}\n\n` +
+      `Conduct a helpful, focused conversation to complete this task. ` +
+      `Once the task is complete, clearly inform the user.`
+    );
   }
 
   protected pushEvent(type: TelegramEvent["type"], payload: Record<string, unknown>) {

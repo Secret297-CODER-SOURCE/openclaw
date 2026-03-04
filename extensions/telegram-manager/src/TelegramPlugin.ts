@@ -7,11 +7,19 @@
 //   - HTTP routes (REST fallback / polling clients)
 //   - Broadcast (push events to all connected WS clients)
 
+import { randomUUID } from "crypto";
 import path from "path";
 import { AgentManager } from "./agents/AgentManager";
 import { TelegramStorage } from "./storage/TelegramStorage";
 import type { ProxyConfig } from "./storage/TelegramStorage";
-import { GatewayPlugin, IGatewayContext, GatewayMessage, HttpRoute, TelegramEvent } from "./types";
+import {
+  GatewayPlugin,
+  IGatewayContext,
+  GatewayMessage,
+  HttpRoute,
+  TelegramEvent,
+  TaskSession,
+} from "./types";
 
 export class TelegramPlugin implements GatewayPlugin {
   readonly namespace = "telegram";
@@ -122,6 +130,55 @@ export class TelegramPlugin implements GatewayPlugin {
           respond({ ok: true, data: result });
           break;
         }
+
+        // ── Task sessions ──────────────────────────────────────────────────
+
+        case "telegram.agent.assignTask": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          if (!p.chatId) {
+            fail("chatId is required");
+            break;
+          }
+          if (!p.task) {
+            fail("task is required");
+            break;
+          }
+          const session: TaskSession = {
+            id: randomUUID(),
+            chatId: String(p.chatId),
+            task: String(p.task),
+            ...(p.systemPrompt ? { systemPrompt: String(p.systemPrompt) } : {}),
+            status: "active",
+            startedAt: new Date().toISOString(),
+            ...(p.initiatedBy ? { initiatedBy: String(p.initiatedBy) } : {}),
+          };
+          await this.manager.assignTaskSession(p.agentId, session);
+          // Optionally send an opening message right away
+          if (p.openingMessage) {
+            try {
+              await this.manager.callTool(p.agentId, "sendMessage", {
+                target: p.chatId,
+                message: p.openingMessage,
+              });
+            } catch (e) {
+              this.ctx.logger.warn(`[TelegramPlugin] opening message failed`, { e: String(e) });
+            }
+          }
+          respond({ ok: true, sessionId: session.id });
+          break;
+        }
+
+        case "telegram.agent.listTaskSessions":
+          respond(this.manager.listTaskSessions(p.agentId));
+          break;
+
+        case "telegram.agent.completeTaskSession":
+          await this.manager.completeTaskSession(p.agentId, p.sessionId);
+          respond({ ok: true });
+          break;
 
         // ── Data ───────────────────────────────────────────────────────────
 

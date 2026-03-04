@@ -1,7 +1,14 @@
 // plugins/telegram/src/agents/AgentManager.ts
 import { randomUUID } from "crypto";
 import { TelegramStorage } from "../storage/TelegramStorage";
-import { AgentRecord, BehaviorConfig, TelegramEvent, ILogger, AgentCredentials } from "../types";
+import {
+  AgentRecord,
+  BehaviorConfig,
+  TelegramEvent,
+  ILogger,
+  AgentCredentials,
+  TaskSession,
+} from "../types";
 import { BaseAgent } from "./BaseAgent";
 import { BotAgent } from "./BotAgent";
 import { UserBotAgent } from "./UserBotAgent";
@@ -116,6 +123,21 @@ export class AgentManager {
 
   async callTool(id: string, tool: string, args: Record<string, unknown>): Promise<unknown> {
     return this.get_or_throw(id).callTool(tool, args);
+  }
+
+  // ─── Task sessions ────────────────────────────────────────────────────────
+
+  /** Assign (or update) a task session on an agent. Does not cause reconnect. */
+  async assignTaskSession(id: string, session: TaskSession): Promise<void> {
+    this.get_or_throw(id).upsertTaskSession(session);
+  }
+
+  listTaskSessions(id: string): TaskSession[] {
+    return this.get_or_throw(id).listTaskSessions();
+  }
+
+  async completeTaskSession(id: string, sessionId: string): Promise<void> {
+    this.get_or_throw(id).completeTaskSession(sessionId);
   }
 
   // ─── Events & data ────────────────────────────────────────────────────────

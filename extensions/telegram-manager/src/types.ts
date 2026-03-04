@@ -109,11 +109,33 @@ export interface ParserBehavior {
   saveToDb?: boolean;
 }
 
+export interface TaskSession {
+  id: string;
+  /** Telegram chat ID this session is bound to */
+  chatId: string;
+  /** The goal or task description for the AI */
+  task: string;
+  /** Optional custom system prompt (overrides default task prompt) */
+  systemPrompt?: string;
+  status: "active" | "completed" | "paused";
+  startedAt: string;
+  completedAt?: string;
+  /** ID of the initiating agent or system */
+  initiatedBy?: string;
+}
+
+export interface TaskSessionBehavior {
+  type: "task_session";
+  enabled: boolean;
+  sessions: TaskSession[];
+}
+
 export type BehaviorConfig =
   | AutoReplyBehavior
   | MonitorBehavior
   | BroadcastBehavior
-  | ParserBehavior;
+  | ParserBehavior
+  | TaskSessionBehavior;
 
 // ─── Agent record ─────────────────────────────────────────────────────────────
 

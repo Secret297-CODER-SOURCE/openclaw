@@ -186,6 +186,10 @@ export class UserBotAgent extends BaseAgent {
   }
 
   private async registerBehaviors(behaviors: BehaviorConfig[]): Promise<void> {
+    // Always register task session handler — it checks dynamically for active
+    // sessions at message-handling time, so it works even for sessions assigned
+    // after start() without requiring a reconnect.
+    this.setupTaskSessionHandler();
     for (const b of behaviors) {
       if (b.type === "auto_reply") this.setupAutoReply();
       if (b.type === "monitor") this.setupMonitor();
@@ -195,6 +199,44 @@ export class UserBotAgent extends BaseAgent {
           this.logger.warn(`[TG:${this.name}] parser error`, { e: String(e) }),
         );
     }
+  }
+
+  /** Always-on handler that intercepts messages for active task sessions. */
+  private setupTaskSessionHandler(): void {
+    if (!this.client) return;
+
+    this.client.addEventHandler(
+      async (event: any) => {
+        const msg = event.message;
+        if (!msg || msg.out) return;
+        const chatId = String(msg.chatId || "");
+        // Dynamically look up the session at message-handling time so that
+        // sessions assigned after start() are picked up without reconnecting.
+        const taskSession = this.getTaskSession(chatId);
+        if (!taskSession) return;
+
+        const text = msg.message || "";
+        this.trackMessage("in", text, chatId);
+        const systemPrompt =
+          taskSession.systemPrompt ?? this.buildTaskSystemPrompt(taskSession.task);
+        try {
+          const reply = await aiReply(
+            text,
+            `${this.id}:${chatId}:task:${taskSession.id}`,
+            systemPrompt,
+          );
+          if (reply) {
+            await msg.reply({ message: reply });
+            this.trackMessage("out", reply, chatId);
+          }
+        } catch (e) {
+          this.logger.warn(`[TG:${this.name}] task session reply failed`, { e: String(e) });
+        }
+      },
+      new NewMessage({ incoming: true }),
+    );
+
+    this.logger.info(`[TG:${this.name}] task session handler active`);
   }
 
   private setupAutoReply(): void {
@@ -207,6 +249,9 @@ export class UserBotAgent extends BaseAgent {
         if (!msg || msg.out) return;
         const text = msg.message || "";
         const chatId = String(msg.chatId || "");
+        // Skip chats that are being handled by an active task session
+        if (this.getTaskSession(chatId)) return;
+
         const key = `${this.id}:${chatId}`;
         const now = Date.now();
         const cd = (cfg.cooldownSeconds ?? 5) * 1000;

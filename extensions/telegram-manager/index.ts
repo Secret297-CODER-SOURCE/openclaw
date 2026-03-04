@@ -30,6 +30,9 @@ const TELEGRAM_METHODS = [
   "telegram.config.get",
   "telegram.config.set",
   "telegram.config.setProxy",
+  "telegram.agent.assignTask",
+  "telegram.agent.listTaskSessions",
+  "telegram.agent.completeTaskSession",
 ] as const;
 
 const plugin = {
@@ -136,19 +139,33 @@ const plugin = {
       description: `Manage Telegram bot and userbot agents running on this gateway.
 
 Actions:
-- list          — list all agents with id, name, type, status, and stats
-- get           — get full details of one agent (requires agentId)
-- start         — start a stopped agent (requires agentId)
-- stop          — stop a running agent (requires agentId)
-- restart       — restart an agent (requires agentId)
-- send_message  — send a text message through a bot agent (requires agentId, target, message)
-- get_events    — get recent inbound/outbound events for an agent (requires agentId)`,
+- list                  — list all agents with id, name, type, status, and stats
+- get                   — get full details of one agent (requires agentId)
+- start                 — start a stopped agent (requires agentId)
+- stop                  — stop a running agent (requires agentId)
+- restart               — restart an agent (requires agentId)
+- send_message          — send a text message through an agent (requires agentId, target, message)
+- get_events            — get recent inbound/outbound events for an agent (requires agentId)
+- assign_task           — assign a persistent task session so the agent holds an ongoing AI conversation with a specific Telegram chat on behalf of the main agent (requires agentId, chatId, task; optional: systemPrompt, openingMessage)
+- list_task_sessions    — list all task sessions for an agent (requires agentId)
+- complete_task_session — mark a task session as completed (requires agentId, sessionId)`,
       parameters: {
         type: "object",
         properties: {
           action: {
             type: "string",
-            enum: ["list", "get", "start", "stop", "restart", "send_message", "get_events"],
+            enum: [
+              "list",
+              "get",
+              "start",
+              "stop",
+              "restart",
+              "send_message",
+              "get_events",
+              "assign_task",
+              "list_task_sessions",
+              "complete_task_session",
+            ],
             description: "Action to perform",
           },
           agentId: {
@@ -167,6 +184,30 @@ Actions:
           limit: {
             type: "number",
             description: "Max events to return for get_events (default 20)",
+          },
+          chatId: {
+            type: "string",
+            description:
+              "Telegram chat ID (numeric or @username) — required for assign_task; the agent will reply to all incoming messages in this chat using AI focused on the given task",
+          },
+          task: {
+            type: "string",
+            description:
+              "Task description for assign_task — the goal the agent should pursue in conversation with the chat",
+          },
+          systemPrompt: {
+            type: "string",
+            description:
+              "Optional custom system prompt for the AI in this task session (overrides default task prompt)",
+          },
+          openingMessage: {
+            type: "string",
+            description:
+              "Optional first message the agent sends immediately when the task session is assigned",
+          },
+          sessionId: {
+            type: "string",
+            description: "Task session ID — required for complete_task_session",
           },
         },
         required: ["action"],
@@ -223,9 +264,43 @@ Actions:
               });
               return jsonResult({ events });
             }
+            case "assign_task": {
+              if (!args.agentId)
+                return jsonResult({ error: "agentId is required for 'assign_task'" });
+              if (!args.chatId)
+                return jsonResult({ error: "chatId is required for 'assign_task'" });
+              if (!args.task) return jsonResult({ error: "task is required for 'assign_task'" });
+              const result = await callPlugin("telegram.agent.assignTask", {
+                agentId: args.agentId,
+                chatId: args.chatId,
+                task: args.task,
+                ...(args.systemPrompt ? { systemPrompt: args.systemPrompt } : {}),
+                ...(args.openingMessage ? { openingMessage: args.openingMessage } : {}),
+              });
+              return jsonResult(result);
+            }
+            case "list_task_sessions": {
+              if (!args.agentId)
+                return jsonResult({ error: "agentId is required for 'list_task_sessions'" });
+              const sessions = await callPlugin("telegram.agent.listTaskSessions", {
+                agentId: args.agentId,
+              });
+              return jsonResult({ sessions });
+            }
+            case "complete_task_session": {
+              if (!args.agentId)
+                return jsonResult({ error: "agentId is required for 'complete_task_session'" });
+              if (!args.sessionId)
+                return jsonResult({ error: "sessionId is required for 'complete_task_session'" });
+              await callPlugin("telegram.agent.completeTaskSession", {
+                agentId: args.agentId,
+                sessionId: args.sessionId,
+              });
+              return jsonResult({ ok: true, message: `Task session ${args.sessionId} completed` });
+            }
             default:
               return jsonResult({
-                error: `Unknown action: '${action}'. Valid actions: list, get, start, stop, restart, send_message, get_events`,
+                error: `Unknown action: '${action}'. Valid actions: list, get, start, stop, restart, send_message, get_events, assign_task, list_task_sessions, complete_task_session`,
               });
           }
         } catch (err) {
