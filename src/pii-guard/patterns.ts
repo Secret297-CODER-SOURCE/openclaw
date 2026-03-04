@@ -63,8 +63,10 @@ export const PII_PATTERNS: PiiPattern[] = [
     tokenName: 'СРОК_КАРТЫ',
     group: 'finance',
     priority: 3,
-    description: 'Срок действия карты MM/YY или MM/YYYY',
-    regex: /\b(0[1-9]|1[0-2])\s*[\/\-]\s*(\d{2}|\d{4})\b/g,
+    description: 'Срок действия карты MM/YY или MM/YYYY — только через слеш без контекста, или с ключевым словом через дефис',
+    // Без контекста — только слеш (MM/YY, MM/YYYY): дефис не берём, чтобы не захватывать ISO-даты (2026-03-04).
+    // С контекстом (срок, expiry и т.п.) — допускается и дефис.
+    regex: /(?:срок|действует\s+до|expir(?:y|es?)|valid\s+(?:thru|until|through)|exp\.?)[:\s]+(?:0[1-9]|1[0-2])\s*[\/\-]\s*(?:\d{2}|\d{4})\b|\b(?:0[1-9]|1[0-2])\/(?:\d{2}|\d{4})\b/gi,
   },
   {
     tokenName: 'СЧЁТ_РФ',
@@ -309,8 +311,8 @@ export const PII_PATTERNS: PiiPattern[] = [
     tokenName: 'МЕССЕНДЖЕР',
     group: 'contacts',
     priority: 62,
-    description: 'Никнеймы Telegram, WhatsApp, Viber с @',
-    regex: /@[a-zA-Z][a-zA-Z0-9_]{4,31}\b/g,
+    description: 'Никнеймы Telegram, WhatsApp, Viber с @ — только с контекстом мессенджера',
+    regex: /(?:telegram|tg|телеграм|whatsapp|вотсап|viber|вайбер|написать?|свяжись|ник(?:нейм)?|контакт)[:\s]+@[a-zA-Z][a-zA-Z0-9_]{4,31}\b/gi,
   },
   {
     tokenName: 'SKYPE',
