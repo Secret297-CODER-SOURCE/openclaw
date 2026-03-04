@@ -124,7 +124,8 @@ function renderRawChannelEditor(props: ChannelConfigFormProps) {
   return html`
     <div style="margin-top: 8px;">
       <textarea
-        style="width: 100%; min-height: 100px; font-family: var(--font-mono, monospace); font-size: 12px; resize: vertical; box-sizing: border-box;"
+        class="cfg-textarea"
+        style="min-height: 80px;"
         ?disabled=${props.disabled}
         .value=${jsonStr}
         @change=${handleChange}
