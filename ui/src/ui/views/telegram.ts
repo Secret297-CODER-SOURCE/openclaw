@@ -1,6 +1,10 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import type { TelegramAgentEvent, TelegramAgentRecord } from "../controllers/telegram.ts";
+import type {
+  TelegramAgentEvent,
+  TelegramAgentRecord,
+  TaskSession,
+} from "../controllers/telegram.ts";
 import {
   formatCronPayload,
   formatCronSchedule,
@@ -12,7 +16,14 @@ import { renderAgentFiles } from "./agents-panels-status-files.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type TelegramPanel = "overview" | "auth" | "behaviors" | "events" | "cron" | "files";
+export type TelegramPanel =
+  | "overview"
+  | "auth"
+  | "behaviors"
+  | "events"
+  | "cron"
+  | "files"
+  | "tasks";
 
 export type TelegramProps = {
   loading: boolean;
@@ -108,6 +119,22 @@ export type TelegramProps = {
   onFileDraftChange: (name: string, content: string) => void;
   onFileReset: (name: string) => void;
   onFileSave: (name: string) => void;
+  // Tasks panel
+  taskSessions: TaskSession[];
+  tasksLoading: boolean;
+  tasksError: string | null;
+  tasksBusy: boolean;
+  taskFormChatId: string;
+  taskFormTask: string;
+  taskFormSystemPrompt: string;
+  taskFormOpeningMessage: string;
+  onTasksRefresh: (agentId: string) => void;
+  onTaskFormChatIdChange: (v: string) => void;
+  onTaskFormTaskChange: (v: string) => void;
+  onTaskFormSystemPromptChange: (v: string) => void;
+  onTaskFormOpeningMessageChange: (v: string) => void;
+  onTaskAssign: (agentId: string) => void;
+  onTaskComplete: (agentId: string, sessionId: string) => void;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -278,6 +305,7 @@ function renderPanelTabs(props: TelegramProps, agent: TelegramAgentRecord) {
       : []),
     { id: "behaviors", label: t("ui.panelBehaviors") },
     { id: "events", label: t("ui.panelEvents") },
+    { id: "tasks", label: "Tasks" },
     { id: "cron", label: "Cron" },
     { id: "files", label: "Files" },
   ];
@@ -552,6 +580,195 @@ function renderEventsPanel(props: TelegramProps, agentId: string) {
   `;
 }
 
+// ─── Detail: tasks panel ──────────────────────────────────────────────────────
+
+function sessionStatusChip(status: TaskSession["status"]) {
+  switch (status) {
+    case "active":
+      return "chip chip-ok";
+    case "completed":
+      return "chip";
+    default:
+      return "chip chip-warn";
+  }
+}
+
+function renderTasksPanel(props: TelegramProps, agentId: string) {
+  const canAssign =
+    !props.tasksBusy && props.taskFormChatId.trim() !== "" && props.taskFormTask.trim() !== "";
+
+  const active = props.taskSessions.filter((s) => s.status === "active");
+  const others = props.taskSessions.filter((s) => s.status !== "active");
+
+  return html`
+    <section class="card">
+      <div class="row" style="justify-content: space-between; align-items: flex-start;">
+        <div>
+          <div class="card-title">Tasks</div>
+          <div class="card-sub">
+            Persistent AI-driven dialogs assigned to this agent by the main OpenClaw agent or manually.
+          </div>
+        </div>
+        <button
+          class="btn btn--sm"
+          ?disabled=${props.tasksLoading}
+          @click=${() => props.onTasksRefresh(agentId)}
+        >
+          ${props.tasksLoading ? "Refreshing…" : "Refresh"}
+        </button>
+      </div>
+
+      ${
+        props.tasksError
+          ? html`<div class="callout danger" style="margin-top: 12px;">${props.tasksError}</div>`
+          : nothing
+      }
+
+      <!-- Assign new task form -->
+      <details style="margin-top: 20px;" ?open=${active.length === 0}>
+        <summary style="cursor: pointer; font-weight: 500; font-size: 0.9em;">
+          Assign new task
+        </summary>
+        <div class="stack" style="margin-top: 12px;">
+          <div class="field">
+            <span>Chat ID <span class="muted" style="font-size:0.85em;">(numeric or @username)</span></span>
+            <input
+              type="text"
+              placeholder="e.g. 123456789 or @username"
+              .value=${props.taskFormChatId}
+              @input=${(e: InputEvent) =>
+                props.onTaskFormChatIdChange((e.target as HTMLInputElement).value)}
+            />
+          </div>
+          <div class="field">
+            <span>Task description</span>
+            <textarea
+              rows="3"
+              placeholder="Describe what the agent should accomplish in this conversation…"
+              .value=${props.taskFormTask}
+              @input=${(e: InputEvent) =>
+                props.onTaskFormTaskChange((e.target as HTMLTextAreaElement).value)}
+            ></textarea>
+          </div>
+          <details>
+            <summary style="cursor: pointer; font-size: 0.85em; opacity: 0.75;">
+              Advanced options
+            </summary>
+            <div class="stack" style="margin-top: 10px;">
+              <div class="field">
+                <span>System prompt <span class="muted" style="font-size:0.85em;">(optional — overrides default)</span></span>
+                <textarea
+                  rows="3"
+                  placeholder="Custom system prompt for the AI in this session…"
+                  .value=${props.taskFormSystemPrompt}
+                  @input=${(e: InputEvent) =>
+                    props.onTaskFormSystemPromptChange((e.target as HTMLTextAreaElement).value)}
+                ></textarea>
+              </div>
+              <div class="field">
+                <span>Opening message <span class="muted" style="font-size:0.85em;">(optional — sent immediately)</span></span>
+                <input
+                  type="text"
+                  placeholder="First message sent to the user right away…"
+                  .value=${props.taskFormOpeningMessage}
+                  @input=${(e: InputEvent) =>
+                    props.onTaskFormOpeningMessageChange((e.target as HTMLInputElement).value)}
+                />
+              </div>
+            </div>
+          </details>
+          <button
+            class="btn primary"
+            ?disabled=${!canAssign}
+            @click=${() => props.onTaskAssign(agentId)}
+          >
+            ${props.tasksBusy ? "Assigning…" : "Assign task"}
+          </button>
+        </div>
+      </details>
+
+      <!-- Active sessions -->
+      <div style="margin-top: 24px;">
+        <div class="card-title" style="font-size: 0.85em; margin-bottom: 10px;">
+          Active sessions (${active.length})
+        </div>
+        ${
+          active.length === 0
+            ? html`
+                <div class="muted">No active task sessions.</div>
+              `
+            : html`
+                <div class="list">
+                  ${active.map(
+                    (s) => html`
+                      <div class="list-item">
+                        <div class="list-main">
+                          <div class="list-title mono" style="font-size:0.85em;">${s.chatId}</div>
+                          <div class="list-sub" style="margin-top:4px;">${s.task}</div>
+                          ${
+                            s.initiatedBy
+                              ? html`<div class="muted" style="font-size:0.8em; margin-top:2px;">
+                                  by ${s.initiatedBy}
+                                </div>`
+                              : nothing
+                          }
+                        </div>
+                        <div class="list-meta" style="gap:6px;">
+                          <span class="${sessionStatusChip(s.status)}">${s.status}</span>
+                          <button
+                            class="btn btn--sm danger"
+                            ?disabled=${props.tasksBusy}
+                            @click=${() => props.onTaskComplete(agentId, s.id)}
+                          >
+                            Complete
+                          </button>
+                        </div>
+                      </div>
+                    `,
+                  )}
+                </div>
+              `
+        }
+      </div>
+
+      <!-- Completed / paused sessions -->
+      ${
+        others.length > 0
+          ? html`
+              <div style="margin-top: 20px;">
+                <div class="card-title" style="font-size: 0.85em; margin-bottom: 10px;">
+                  History (${others.length})
+                </div>
+                <div class="list">
+                  ${others.slice(0, 20).map(
+                    (s) => html`
+                      <div class="list-item">
+                        <div class="list-main">
+                          <div class="list-title mono" style="font-size:0.85em;">${s.chatId}</div>
+                          <div class="list-sub" style="margin-top:4px;">${s.task}</div>
+                        </div>
+                        <div class="list-meta">
+                          <span class="${sessionStatusChip(s.status)}">${s.status}</span>
+                          <div class="muted" style="font-size:0.8em;">
+                            ${
+                              s.completedAt
+                                ? new Date(s.completedAt).toLocaleString()
+                                : new Date(s.startedAt).toLocaleString()
+                            }
+                          </div>
+                        </div>
+                      </div>
+                    `,
+                  )}
+                </div>
+              </div>
+            `
+          : nothing
+      }
+    </section>
+  `;
+}
+
 // ─── Detail: cron panel ───────────────────────────────────────────────────────
 
 function renderCronPanel(props: TelegramProps) {
@@ -697,6 +914,7 @@ function renderDetail(props: TelegramProps) {
       }
       ${props.activePanel === "behaviors" ? renderBehaviorsPanel(props, agent) : nothing}
       ${props.activePanel === "events" ? renderEventsPanel(props, agent.id) : nothing}
+      ${props.activePanel === "tasks" ? renderTasksPanel(props, agent.id) : nothing}
       ${props.activePanel === "cron" ? renderCronPanel(props) : nothing}
       ${props.activePanel === "files" ? renderFilesPanel(props, agent.id) : nothing}
     </section>

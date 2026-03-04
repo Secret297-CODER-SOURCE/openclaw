@@ -279,6 +279,16 @@ export class OpenClawApp extends LitElement {
   @state() telegramProxySaving = false;
   @state() telegramProxyError: string | null = null;
 
+  // Task sessions
+  @state() telegramTaskSessions: import("./controllers/telegram.ts").TaskSession[] = [];
+  @state() telegramTasksLoading = false;
+  @state() telegramTasksError: string | null = null;
+  @state() telegramTasksBusy = false;
+  @state() telegramTaskFormChatId = "";
+  @state() telegramTaskFormTask = "";
+  @state() telegramTaskFormSystemPrompt = "";
+  @state() telegramTaskFormOpeningMessage = "";
+
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
   @state() sessionsError: string | null = null;

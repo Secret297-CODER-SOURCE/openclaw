@@ -74,6 +74,9 @@ import {
   setBehaviorsTelegramAgent,
   saveTelegramCredentials,
   saveTelegramProxy,
+  loadTelegramTaskSessions,
+  assignTelegramTask,
+  completeTelegramTaskSession,
 } from "./controllers/telegram.ts";
 import { icons } from "./icons.ts";
 import { TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
@@ -566,11 +569,21 @@ export function renderApp(state: AppViewState) {
                   state.agentFileActive = null;
                   state.agentFileContents = {};
                   state.agentFileDrafts = {};
+                  // Reset task sessions state when switching agents
+                  state.telegramTaskSessions = [];
+                  state.telegramTasksError = null;
+                  state.telegramTaskFormChatId = "";
+                  state.telegramTaskFormTask = "";
+                  state.telegramTaskFormSystemPrompt = "";
+                  state.telegramTaskFormOpeningMessage = "";
                 },
                 onSelectPanel: (panel: TelegramPanel) => {
                   state.telegramActivePanel = panel;
                   if (panel === "cron") {
                     void state.loadCron();
+                  }
+                  if (panel === "tasks" && state.telegramSelectedId) {
+                    void loadTelegramTaskSessions(state, state.telegramSelectedId);
                   }
                   if (panel === "files" && state.telegramSelectedId) {
                     const agentId = state.telegramSelectedId;
@@ -760,6 +773,49 @@ export function renderApp(state: AppViewState) {
                   if (agentId) {
                     void saveAgentFile(state, agentId, name, state.agentFileDrafts[name] ?? "");
                   }
+                },
+                // Tasks panel
+                taskSessions: state.telegramTaskSessions,
+                tasksLoading: state.telegramTasksLoading,
+                tasksError: state.telegramTasksError,
+                tasksBusy: state.telegramTasksBusy,
+                taskFormChatId: state.telegramTaskFormChatId,
+                taskFormTask: state.telegramTaskFormTask,
+                taskFormSystemPrompt: state.telegramTaskFormSystemPrompt,
+                taskFormOpeningMessage: state.telegramTaskFormOpeningMessage,
+                onTasksRefresh: (agentId) => void loadTelegramTaskSessions(state, agentId),
+                onTaskFormChatIdChange: (v) => {
+                  state.telegramTaskFormChatId = v;
+                },
+                onTaskFormTaskChange: (v) => {
+                  state.telegramTaskFormTask = v;
+                },
+                onTaskFormSystemPromptChange: (v) => {
+                  state.telegramTaskFormSystemPrompt = v;
+                },
+                onTaskFormOpeningMessageChange: (v) => {
+                  state.telegramTaskFormOpeningMessage = v;
+                },
+                onTaskAssign: (agentId) => {
+                  void assignTelegramTask(
+                    state,
+                    agentId,
+                    state.telegramTaskFormChatId,
+                    state.telegramTaskFormTask,
+                    state.telegramTaskFormSystemPrompt || undefined,
+                    state.telegramTaskFormOpeningMessage || undefined,
+                  ).then((sessionId) => {
+                    if (sessionId) {
+                      // Clear form fields on success
+                      state.telegramTaskFormChatId = "";
+                      state.telegramTaskFormTask = "";
+                      state.telegramTaskFormSystemPrompt = "";
+                      state.telegramTaskFormOpeningMessage = "";
+                    }
+                  });
+                },
+                onTaskComplete: (agentId, sessionId) => {
+                  void completeTelegramTaskSession(state, agentId, sessionId);
                 },
               })
             : nothing

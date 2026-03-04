@@ -374,3 +374,98 @@ export async function callTelegramTool(
   }
   return state.client!.request("telegram.tool.call", { agentId, tool, args });
 }
+
+// ─── Task sessions ────────────────────────────────────────────────────────────
+
+export type TaskSession = {
+  id: string;
+  chatId: string;
+  task: string;
+  systemPrompt?: string;
+  status: "active" | "completed" | "paused";
+  startedAt: string;
+  completedAt?: string;
+  initiatedBy?: string;
+};
+
+type TaskSessionState = TelegramState & {
+  telegramTaskSessions: TaskSession[];
+  telegramTasksLoading: boolean;
+  telegramTasksError: string | null;
+  telegramTasksBusy: boolean;
+};
+
+export async function loadTelegramTaskSessions(
+  state: TaskSessionState,
+  agentId: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  state.telegramTasksLoading = true;
+  state.telegramTasksError = null;
+  try {
+    const res = await state.client!.request<TaskSession[]>("telegram.agent.listTaskSessions", {
+      agentId,
+    });
+    state.telegramTaskSessions = res ?? [];
+  } catch (err) {
+    state.telegramTasksError = String(err);
+  } finally {
+    state.telegramTasksLoading = false;
+  }
+}
+
+export async function assignTelegramTask(
+  state: TaskSessionState,
+  agentId: string,
+  chatId: string,
+  task: string,
+  systemPrompt?: string,
+  openingMessage?: string,
+): Promise<string | null> {
+  if (!isReady(state) || state.telegramTasksBusy) {
+    return null;
+  }
+  state.telegramTasksBusy = true;
+  state.telegramTasksError = null;
+  try {
+    const res = await state.client!.request<{ ok: boolean; sessionId: string }>(
+      "telegram.agent.assignTask",
+      {
+        agentId,
+        chatId,
+        task,
+        ...(systemPrompt ? { systemPrompt } : {}),
+        ...(openingMessage ? { openingMessage } : {}),
+      },
+    );
+    await loadTelegramTaskSessions(state, agentId);
+    return res?.sessionId ?? null;
+  } catch (err) {
+    state.telegramTasksError = String(err);
+    return null;
+  } finally {
+    state.telegramTasksBusy = false;
+  }
+}
+
+export async function completeTelegramTaskSession(
+  state: TaskSessionState,
+  agentId: string,
+  sessionId: string,
+): Promise<void> {
+  if (!isReady(state) || state.telegramTasksBusy) {
+    return;
+  }
+  state.telegramTasksBusy = true;
+  state.telegramTasksError = null;
+  try {
+    await state.client!.request("telegram.agent.completeTaskSession", { agentId, sessionId });
+    await loadTelegramTaskSessions(state, agentId);
+  } catch (err) {
+    state.telegramTasksError = String(err);
+  } finally {
+    state.telegramTasksBusy = false;
+  }
+}

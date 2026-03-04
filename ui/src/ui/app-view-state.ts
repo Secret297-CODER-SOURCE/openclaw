@@ -196,6 +196,15 @@ export type AppViewState = {
   telegramProxyEditPassword: string;
   telegramProxySaving: boolean;
   telegramProxyError: string | null;
+  // Telegram task sessions
+  telegramTaskSessions: import("./controllers/telegram.ts").TaskSession[];
+  telegramTasksLoading: boolean;
+  telegramTasksError: string | null;
+  telegramTasksBusy: boolean;
+  telegramTaskFormChatId: string;
+  telegramTaskFormTask: string;
+  telegramTaskFormSystemPrompt: string;
+  telegramTaskFormOpeningMessage: string;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;
