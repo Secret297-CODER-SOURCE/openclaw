@@ -394,17 +394,36 @@ export class UserBotAgent extends BaseAgent {
   // when client._log.canSend("error") is true, causing log noise.
   // Fix: gate console.error at "error" level, and route other errors through
   // our logger while silently dropping expected TIMEOUT.
+  //
+  // IMPORTANT: use Object.defineProperty with enumerable:false for function
+  // overrides. A plain assignment (log.canSend = fn) creates an OWN ENUMERABLE
+  // property that shadows the prototype method. When the pi-agent framework calls
+  // structuredClone(agentContext) and the context references this TelegramClient
+  // through the plugin → manager → agent chain, structuredClone traverses _log,
+  // hits the enumerable function, and throws DataCloneError. Non-enumerable
+  // properties are skipped by structuredClone.
   private suppressGramjsTimeoutNoise(client: TelegramClient): void {
     const c = client as unknown as Record<string, unknown>;
     const log = c._log as { canSend: (level: string) => boolean } | undefined;
     if (log && typeof log.canSend === "function") {
       const orig = log.canSend.bind(log);
-      log.canSend = (level: string) => level !== "error" && orig(level);
+      Object.defineProperty(log, "canSend", {
+        value: (level: string) => level !== "error" && orig(level),
+        writable: true,
+        configurable: true,
+        enumerable: false, // non-enumerable → skipped by structuredClone
+      });
     }
-    c._errorHandler = async (err: unknown) => {
-      if (err instanceof Error && err.message === "TIMEOUT") return;
-      this.logger.warn(`[TG:${this.name}] gramjs error`, { e: String(err) });
-    };
+    // _errorHandler may not be an own property yet; define as non-enumerable
+    Object.defineProperty(c, "_errorHandler", {
+      value: async (err: unknown) => {
+        if (err instanceof Error && err.message === "TIMEOUT") return;
+        this.logger.warn(`[TG:${this.name}] gramjs error`, { e: String(err) });
+      },
+      writable: true,
+      configurable: true,
+      enumerable: false, // non-enumerable → skipped by structuredClone
+    });
   }
 
   private postWebhook(url: string, body: unknown) {
