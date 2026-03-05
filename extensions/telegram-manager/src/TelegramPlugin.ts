@@ -56,7 +56,8 @@ export class TelegramPlugin implements GatewayPlugin {
   async handleMessage(msg: GatewayMessage, reply: (r: GatewayMessage) => void): Promise<boolean> {
     if (!msg.method.startsWith("telegram.")) return false; // not ours
 
-    const respond = (result: unknown) => reply({ id: msg.id, method: msg.method, result });
+    const respond = (result: unknown) =>
+      reply({ id: msg.id, method: msg.method, result: safeSerialize(result) });
 
     const fail = (error: string) => reply({ id: msg.id, method: msg.method, error });
 
@@ -64,7 +65,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
     try {
       switch (msg.method) {
-        // ── Agents ─────────────────────────────────────────────────────────
+        // ── Agents ──────────────────────────��──────────────────────────────
 
         case "telegram.agent.list":
           respond(this.manager.list().map(safeRecord));
@@ -124,6 +125,13 @@ export class TelegramPlugin implements GatewayPlugin {
         // ── Tools (imperative calls) ───────────────────────────────────────
         // These mirror CDP "forwardCDPCommand" but for Telegram.
         // e.g.: { method: "telegram.tool.call", params: { agentId, tool: "sendMessage", args: { target: "@user", message: "hi" } } }
+        //
+        // IMPORTANT: the result from callTool (e.g. gramjs Message objects) must be
+        // sanitized via safeSerialize before being placed in the respond payload.
+        // gramjs objects contain live PromisedNetSockets which cannot be cloned by
+        // structuredClone. If a non-serializable object leaks into a tool result, it
+        // gets stored in the agent's message history and causes DataCloneError on every
+        // subsequent call to transformContext → emitContext in the pi-agent framework.
 
         case "telegram.tool.call": {
           const result = await this.manager.callTool(p.agentId, p.tool, p.args ?? {});
@@ -386,7 +394,7 @@ export class TelegramPlugin implements GatewayPlugin {
         path: "/telegram/agents/:id/tool",
         handler: async (req, res) => {
           const data = await mgr.callTool(req.params.id, req.body.tool, req.body.args ?? {});
-          res.json({ ok: true, data });
+          res.json({ ok: true, data: safeSerialize(data) });
         },
       },
       // GET /telegram/agents/:id/events
@@ -421,4 +429,40 @@ function safeRecord(r: any) {
     masked.credentials.token = masked.credentials.token.slice(0, 10) + "…";
   if (masked.credentials.sessionString) masked.credentials.sessionString = "[saved]";
   return masked;
+}
+
+/**
+ * Deeply serialize a value to a plain JSON-safe object.
+ *
+ * gramjs callTool results (e.g. sendMessage, getMessages) return live gramjs
+ * objects that contain PromisedNetSockets — non-cloneable internal TCP socket
+ * wrappers. If these objects are returned as tool results, the pi-agent framework
+ * stores them in the agent's message history and calls structuredClone on the
+ * context at every subsequent turn, causing:
+ *   DataCloneError: class PromisedNetSockets { ... } could not be cloned.
+ *
+ * Solution: force all tool results through JSON round-trip before they leave
+ * TelegramPlugin, stripping any non-serializable values (replaced with null by
+ * the replacer). This guarantees the agent context only ever contains plain data.
+ */
+function safeSerialize(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  try {
+    return JSON.parse(
+      JSON.stringify(value, (_key, val) => {
+        // Drop functions, Promises, Buffers, class instances with non-plain proto
+        if (typeof val === "function") return undefined;
+        if (typeof val === "bigint") return val.toString();
+        if (val instanceof Promise) return undefined;
+        if (Buffer.isBuffer(val)) return val.toString("base64");
+        return val;
+      }),
+    );
+  } catch {
+    // If serialization fails entirely, return a safe placeholder
+    return { serialized: false, type: typeof value };
+  }
 }

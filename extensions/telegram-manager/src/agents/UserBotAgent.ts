@@ -149,6 +149,46 @@ export class UserBotAgent extends BaseAgent {
         const { target, message, parseMode } = args as any;
         return this.client.sendMessage(target, { message, parseMode });
       }
+
+      // scheduledSendMessage — delayed send via setTimeout, outside the agent-loop.
+      //
+      // When the AI agent receives a request like "send hello in 5 minutes", it must
+      // NOT hold `await delay(5min)` inside its own loop: that keeps the loop alive
+      // and causes the pi-agent framework to repeatedly call emitContext →
+      // structuredClone during the wait, which throws DataCloneError because
+      // PromisedNetSockets inside TelegramClient cannot be serialized.
+      //
+      // Instead, the agent calls scheduledSendMessage which returns immediately
+      // (scheduled: true) and dispatches the real send via setTimeout — outside
+      // the agent-loop, with no cloning involved.
+      case "scheduledSendMessage": {
+        const { target, message, delayMs, parseMode } = args as any;
+        if (!target) throw new Error("scheduledSendMessage requires target");
+        if (!message) throw new Error("scheduledSendMessage requires message");
+        const delay = Math.max(0, Number(delayMs) || 0);
+        const agentRef = this; // capture for closure
+        setTimeout(() => {
+          const client = clientStore.get(agentRef);
+          if (!client) {
+            agentRef.logger.warn(
+              `[TG:${agentRef.name}] scheduledSendMessage: agent stopped before send`,
+            );
+            return;
+          }
+          client
+            .sendMessage(target, { message, parseMode })
+            .then(() => {
+              agentRef.trackMessage("out", String(message), String(target));
+            })
+            .catch((e: unknown) => {
+              agentRef.logger.warn(`[TG:${agentRef.name}] scheduledSendMessage failed`, {
+                e: String(e),
+              });
+            });
+        }, delay);
+        return { ok: true, scheduled: true, delayMs: delay, target };
+      }
+
       case "getMessages": {
         const { target, limit } = args as any;
         const msgs = await this.client.getMessages(target, { limit: limit ?? 50 });

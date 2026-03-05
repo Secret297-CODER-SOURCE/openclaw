@@ -18,7 +18,11 @@ export abstract class BaseAgent extends EventEmitter {
   protected record: AgentRecord;
   protected storage: TelegramStorage;
   protected logger: ILogger;
-  protected cronJobs: Map<string, any> = new Map();
+  // cronJobs is declared here only for TypeScript — the actual value is set as
+  // non-enumerable in the constructor so that structuredClone (called by the
+  // pi-agent framework in emitContext) never traverses into cron.ScheduledTask
+  // objects, which contain internal timers/Promises that cannot be cloned.
+  protected cronJobs!: Map<string, any>;
 
   constructor(record: AgentRecord, storage: TelegramStorage, logger: ILogger) {
     super();
@@ -27,6 +31,17 @@ export abstract class BaseAgent extends EventEmitter {
     this.record = { ...record };
     this.storage = storage;
     this.logger = logger;
+    // IMPORTANT: define cronJobs as non-enumerable so structuredClone skips it.
+    // cron.ScheduledTask holds internal Node.js timers that are not cloneable.
+    // A plain `this.cronJobs = new Map()` would create an enumerable own property
+    // that structuredClone traverses, causing DataCloneError when the pi-agent
+    // framework calls emitContext during delayed/scheduled operations.
+    Object.defineProperty(this, "cronJobs", {
+      value: new Map<string, any>(),
+      writable: true,
+      configurable: true,
+      enumerable: false, // non-enumerable → skipped by structuredClone
+    });
   }
 
   abstract start(): Promise<void>;
