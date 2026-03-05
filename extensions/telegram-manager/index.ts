@@ -146,7 +146,7 @@ Actions:
 - restart               — restart an agent (requires agentId)
 - send_message          — send a text message through an agent (requires agentId, target, message)
 - get_events            — get recent inbound/outbound events for an agent (requires agentId)
-- assign_task           — assign a persistent task session so the agent holds an ongoing AI conversation with a specific Telegram chat on behalf of the main agent (requires agentId, chatId, task; optional: systemPrompt, openingMessage)
+- assign_task           — assign a persistent task session so the agent holds an ongoing AI conversation with a specific Telegram chat on behalf of the main agent (requires agentId, chatId, task; optional: systemPrompt, openingMessage). chatId must be the FULL username (e.g. 'worker_297') or a full numeric Telegram user ID (9+ digits) — never just the numeric suffix of a username
 - list_task_sessions    — list all task sessions for an agent (requires agentId)
 - complete_task_session — mark a task session as completed (requires agentId, sessionId)`,
       parameters: {
@@ -188,7 +188,11 @@ Actions:
           chatId: {
             type: "string",
             description:
-              "Telegram chat ID (numeric or @username) — required for assign_task; the agent will reply to all incoming messages in this chat using AI focused on the given task",
+              "Telegram chat or user identifier for assign_task. " +
+              "Pass the FULL identifier exactly as given — do NOT extract just a numeric suffix. " +
+              "Examples: 'worker_297' (username, pass as-is), '@alice' (with or without @), " +
+              "or a full numeric Telegram user ID (typically 9+ digits like '123456789'). " +
+              "A short number like '297' is NEVER a valid standalone Telegram user ID.",
           },
           task: {
             type: "string",

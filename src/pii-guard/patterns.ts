@@ -359,13 +359,13 @@ export const PII_PATTERNS: PiiPattern[] = [
       /(?:ул\.|улица|пр-т\.?|проспект|пер\.|переулок|бульвар|б-р\.?|шоссе|ш\.?|набережная|наб\.|площадь|пл\.)\s+[«"]?[А-ЯЁа-яёA-Za-z][А-ЯЁа-яё\s-]{1,60}[»"]?(?:\s*,\s*(?:д\.?\s*)?\d+[а-яА-ЯёЁ]?)?/gi,
   },
   {
-    tokenName: "МЕССЕНДЖЕР",
-    group: "contacts",
-    priority: 62,
-    description:
-      "Никнейм/юзернейм в мессенджере — только с явным контекстом мессенджера перед @username",
-    regex:
-      /(?:telegram|tg|телеграм|whatsapp|вотсап|viber|вайбер|написать?|свяжись|ник(?:нейм)?|юзернейм|контакт|логин|аккаунт)[:\s]+@([a-zA-Z][a-zA-Z0-9_]{4,31})\b/gi,
+    tokenName: "TG_ID",
+    group: "safe_tg",
+    priority: 0,
+    description: "Telegram User/Chat ID (7–13 цифр) — НЕ является PII",
+    // Telegram user IDs: 7–10 цифр. Channel IDs: до 13 цифр.
+    // Negative lookbehind/lookahead — не брать числа внутри более длинных последовательностей.
+    regex: /(?<!\d)\d{7,13}(?!\d)/g,
   },
   {
     tokenName: "ПОЧТОВЫЙ_ИНДЕКС",

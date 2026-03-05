@@ -10,8 +10,13 @@ import { BaseAgent } from "./BaseAgent";
 
 const cooldowns = new Map<string, number>();
 
+// WeakMap stores TelegramClient outside the instance so that structuredClone
+// (called by the pi-agent framework in emitContext) never traverses into it.
+// TelegramClient holds PromisedNetSockets which contains a live Promise and
+// cannot be cloned, causing DataCloneError. WeakMap is invisible to structuredClone.
+const clientStore = new WeakMap<UserBotAgent, TelegramClient>();
+
 export class UserBotAgent extends BaseAgent {
-  private client: TelegramClient | null = null;
   private creds: UserbotCredentials;
 
   constructor(record: AgentRecord, storage: TelegramStorage, logger: ILogger) {
@@ -19,7 +24,19 @@ export class UserBotAgent extends BaseAgent {
     this.creds = record.credentials as UserbotCredentials;
   }
 
-  // ─── Lifecycle ────────────────────────────────────────────────────────────
+  private get client(): TelegramClient | null {
+    return clientStore.get(this) ?? null;
+  }
+
+  private set client(v: TelegramClient | null) {
+    if (v === null) {
+      clientStore.delete(this);
+    } else {
+      clientStore.set(this, v);
+    }
+  }
+
+  // --- Lifecycle ------------------------------------------------------------
 
   async start(): Promise<void> {
     if (this.record.status === "running") return;
@@ -82,7 +99,7 @@ export class UserBotAgent extends BaseAgent {
     this.setStatus("stopped");
   }
 
-  // ─── Auth flow ────────────────────────────────────────────────────────────
+  // --- Auth flow ------------------------------------------------------------
 
   async authStart(): Promise<void> {
     const apiCfg = this.storage.loadPluginConfig();
@@ -122,7 +139,7 @@ export class UserBotAgent extends BaseAgent {
     this.storage.updateSession(this.id, session);
   }
 
-  // ─── Tool calls (imperative, from WS) ─────────────────────────────────────
+  // --- Tool calls (imperative, from WS) -------------------------------------
 
   async callTool(tool: string, args: Record<string, unknown>): Promise<unknown> {
     if (!this.client) throw new Error("Agent not running");
@@ -174,7 +191,7 @@ export class UserBotAgent extends BaseAgent {
     }
   }
 
-  // ─── Behaviors ────────────────────────────────────────────────────────────
+  // --- Behaviors ------------------------------------------------------------
 
   protected async onBehaviorsChanged(behaviors: BehaviorConfig[]): Promise<void> {
     if (this.record.status !== "running" || !this.client) return;
@@ -331,7 +348,7 @@ export class UserBotAgent extends BaseAgent {
           this.pushEvent("message_out", { target, broadcast: true });
           await this.delay(cfg.delayBetweenMs ?? 2000);
         } catch (e) {
-          this.logger.warn(`[TG:${this.name}] broadcast failed → ${target}`, { e: String(e) });
+          this.logger.warn(`[TG:${this.name}] broadcast failed -> ${target}`, { e: String(e) });
         }
       }
       if (cfg.onlyOnce) {
@@ -399,7 +416,7 @@ export class UserBotAgent extends BaseAgent {
   // overrides. A plain assignment (log.canSend = fn) creates an OWN ENUMERABLE
   // property that shadows the prototype method. When the pi-agent framework calls
   // structuredClone(agentContext) and the context references this TelegramClient
-  // through the plugin → manager → agent chain, structuredClone traverses _log,
+  // through the plugin -> manager -> agent chain, structuredClone traverses _log,
   // hits the enumerable function, and throws DataCloneError. Non-enumerable
   // properties are skipped by structuredClone.
   private suppressGramjsTimeoutNoise(client: TelegramClient): void {
@@ -411,7 +428,7 @@ export class UserBotAgent extends BaseAgent {
         value: (level: string) => level !== "error" && orig(level),
         writable: true,
         configurable: true,
-        enumerable: false, // non-enumerable → skipped by structuredClone
+        enumerable: false, // non-enumerable -> skipped by structuredClone
       });
     }
     // _errorHandler may not be an own property yet; define as non-enumerable
@@ -422,7 +439,7 @@ export class UserBotAgent extends BaseAgent {
       },
       writable: true,
       configurable: true,
-      enumerable: false, // non-enumerable → skipped by structuredClone
+      enumerable: false, // non-enumerable -> skipped by structuredClone
     });
   }
 
