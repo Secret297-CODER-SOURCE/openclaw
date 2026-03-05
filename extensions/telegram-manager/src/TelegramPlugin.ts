@@ -22,6 +22,18 @@ import {
   TaskSession,
 } from "./types";
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Returns true if `id` is a pure numeric Telegram peer ID (possibly negative for groups/channels). */
+function isNumericTelegramId(id: string): boolean {
+  return /^-?\d+$/.test(id.replace(/^@/, ""));
+}
+
+/** Shape returned by the `resolveEntityId` tool. */
+interface ResolveEntityResult {
+  id: string | null;
+}
+
 export class TelegramPlugin implements GatewayPlugin {
   readonly namespace = "telegram";
 
@@ -167,9 +179,30 @@ export class TelegramPlugin implements GatewayPlugin {
             fail("task is required");
             break;
           }
+
+          // Resolve username-style chatIds to numeric peer IDs so that the task
+          // session handler can match incoming messages (which always carry a
+          // numeric Telegram peer ID) against the stored session.
+          // A pure numeric string (e.g. "123456789") is already resolved.
+          let resolvedChatId = String(p.chatId);
+          if (!isNumericTelegramId(resolvedChatId)) {
+            try {
+              const entityResult = (await this.manager.callTool(p.agentId, "resolveEntityId", {
+                target: resolvedChatId,
+              })) as ResolveEntityResult;
+              if (entityResult?.id && isNumericTelegramId(entityResult.id)) {
+                resolvedChatId = entityResult.id;
+              }
+            } catch {
+              // Resolution failed (e.g. bot doesn't support getChat for this user);
+              // fall through with original chatId. The opening-message fallback below
+              // will still attempt to update it.
+            }
+          }
+
           const session: TaskSession = {
             id: randomUUID(),
-            chatId: String(p.chatId),
+            chatId: resolvedChatId,
             task: String(p.task),
             ...(p.systemPrompt ? { systemPrompt: String(p.systemPrompt) } : {}),
             status: "active",
@@ -177,14 +210,37 @@ export class TelegramPlugin implements GatewayPlugin {
             ...(p.initiatedBy ? { initiatedBy: String(p.initiatedBy) } : {}),
           };
           await this.manager.assignTaskSession(p.agentId, session);
-          // Optionally send an opening message right away
+
+          // Optionally send an opening message right away.
+          // As a fallback for agents that cannot resolve usernames directly (e.g.
+          // BotAgent/grammy), extract the resolved numeric chatId from the sent
+          // message result and update the session so subsequent replies can be matched.
           let openingMessageError: string | undefined;
           if (p.openingMessage) {
             try {
-              await this.manager.callTool(p.agentId, "sendMessage", {
+              const msgResult = await this.manager.callTool(p.agentId, "sendMessage", {
                 target: p.chatId,
                 message: p.openingMessage,
               });
+              // Attempt to extract the resolved numeric peer ID from the result:
+              //   BotAgent (grammy): result.chat.id (number)
+              //   UserBotAgent (gramjs): result.peerId.userId / result.peerId.chatId (BigInt)
+              // Both are cast through unknown to avoid "any" — we read optional fields.
+              const raw = msgResult as {
+                chat?: { id?: number };
+                peerId?: { userId?: bigint; chatId?: bigint };
+              };
+              const numericFromResult = raw?.chat?.id ?? raw?.peerId?.userId ?? raw?.peerId?.chatId;
+              if (numericFromResult != null) {
+                const resolvedFromMsg = String(numericFromResult);
+                if (isNumericTelegramId(resolvedFromMsg) && resolvedFromMsg !== session.chatId) {
+                  // Update the persisted session with the numeric peer ID
+                  await this.manager.assignTaskSession(p.agentId, {
+                    ...session,
+                    chatId: resolvedFromMsg,
+                  });
+                }
+              }
             } catch (e) {
               openingMessageError = String(e);
               // Log the actual reason (not just metadata) so it appears in the gateway log
@@ -251,6 +307,27 @@ export class TelegramPlugin implements GatewayPlugin {
           fs.mkdirSync(workspaceDir, { recursive: true });
           fs.writeFileSync(path.join(workspaceDir, filename), String(p.content ?? ""), "utf-8");
           respond({ ok: true });
+          break;
+        }
+
+        case "telegram.agent.getCoreFileContent": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          const filename = String(p.filename ?? "");
+          if (!(TelegramPlugin.CORE_FILE_NAMES as readonly string[]).includes(filename)) {
+            fail(`Invalid filename. Allowed: ${TelegramPlugin.CORE_FILE_NAMES.join(", ")}`);
+            break;
+          }
+          const filePath = path.join(this.agentWorkspaceDir(String(p.agentId)), filename);
+          try {
+            const content = fs.readFileSync(filePath, "utf-8");
+            respond({ filename, content });
+          } catch {
+            // File doesn't exist — return empty string so the editor can start fresh
+            respond({ filename, content: "" });
+          }
           break;
         }
 

@@ -77,6 +77,9 @@ import {
   loadTelegramTaskSessions,
   assignTelegramTask,
   completeTelegramTaskSession,
+  loadTelegramAgentFiles,
+  loadTelegramAgentFileContent,
+  saveTelegramAgentFile,
 } from "./controllers/telegram.ts";
 import { icons } from "./icons.ts";
 import { TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
@@ -593,7 +596,7 @@ export function renderApp(state: AppViewState) {
                       state.agentFileActive = null;
                       state.agentFileContents = {};
                       state.agentFileDrafts = {};
-                      void loadAgentFiles(state, agentId);
+                      void loadTelegramAgentFiles(state, agentId);
                     }
                   }
                 },
@@ -752,12 +755,12 @@ export function renderApp(state: AppViewState) {
                 agentFileContents: state.agentFileContents,
                 agentFileDrafts: state.agentFileDrafts,
                 agentFileSaving: state.agentFileSaving,
-                onLoadFiles: (agentId) => void loadAgentFiles(state, agentId),
+                onLoadFiles: (agentId) => void loadTelegramAgentFiles(state, agentId),
                 onSelectFile: (name) => {
                   state.agentFileActive = name;
                   const agentId = state.telegramSelectedId;
                   if (agentId && !state.agentFileContents[name]) {
-                    void loadAgentFileContent(state, agentId, name);
+                    void loadTelegramAgentFileContent(state, agentId, name);
                   }
                 },
                 onFileDraftChange: (name, content) => {
@@ -771,7 +774,12 @@ export function renderApp(state: AppViewState) {
                 onFileSave: (name) => {
                   const agentId = state.telegramSelectedId;
                   if (agentId) {
-                    void saveAgentFile(state, agentId, name, state.agentFileDrafts[name] ?? "");
+                    void saveTelegramAgentFile(
+                      state,
+                      agentId,
+                      name,
+                      state.agentFileDrafts[name] ?? "",
+                    );
                   }
                 },
                 // Tasks panel

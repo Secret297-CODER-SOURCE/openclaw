@@ -35,6 +35,7 @@ const TELEGRAM_METHODS = [
   "telegram.agent.completeTaskSession",
   "telegram.agent.getCoreFiles",
   "telegram.agent.setCoreFile",
+  "telegram.agent.getCoreFileContent",
   "telegram.agent.sendMessage_to_agent",
   "telegram.mission.create",
   "telegram.mission.list",

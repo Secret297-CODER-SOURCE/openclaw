@@ -90,6 +90,14 @@ export class BotAgent extends BaseAgent {
         return this.bot.api.getMe();
       case "getMessages":
         throw new Error("Bot API does not support getMessages — use a userbot agent");
+      case "resolveEntityId": {
+        // Resolve a username/chat identifier to its numeric Telegram chat ID.
+        // For bots, getChat works for groups/channels and any user who has
+        // previously started the bot.
+        const { target } = args as { target: string };
+        const chat = await this.bot.api.getChat(target);
+        return { id: String(chat.id) };
+      }
       default:
         throw new Error(`Unknown tool: ${tool}`);
     }

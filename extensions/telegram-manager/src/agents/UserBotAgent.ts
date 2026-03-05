@@ -226,6 +226,16 @@ export class UserBotAgent extends BaseAgent {
       case "getMe": {
         return this.client.getMe();
       }
+      case "resolveEntityId": {
+        // Resolve a username or identifier to its numeric Telegram peer ID.
+        // gramjs caches resolved entities, so this is lightweight after the first call.
+        const { target } = args as { target: string };
+        const entity = await this.client.getEntity(target);
+        // gramjs entities (User, Chat, Channel) all have a BigInt `id` property.
+        // Cast through `unknown` because gramjs Entity union doesn't expose `id` directly.
+        const id = (entity as unknown as { id?: bigint | number }).id;
+        return { id: id != null ? String(id) : null };
+      }
       default:
         throw new Error(`Unknown tool: ${tool}`);
     }

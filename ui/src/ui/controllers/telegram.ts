@@ -614,3 +614,115 @@ export async function sendTelegramAgentMessage(
     state.telegramMissionsBusy = false;
   }
 }
+
+// ─── Telegram-specific file operations ────────────────────────────────────────
+//
+// These adapter functions provide the same interface as the main agent file
+// operations (loadAgentFiles / loadAgentFileContent / saveAgentFile) but route
+// through the Telegram-specific WS endpoints. The results are stored in the
+// same agentFilesList / agentFileContents / agentFileSaving state slots so that
+// the existing renderAgentFiles view component renders them without changes.
+//
+// Background: Telegram agent IDs are UUIDs stored in the plugin's SQLite DB
+// and are NOT known to the main OpenClaw gateway. Calling agents.files.list
+// with a Telegram agent UUID results in "unknown agent id" (INVALID_REQUEST).
+
+import type { AgentFileEntry, AgentsFilesListResult } from "../types.ts";
+
+// Minimal subset of AgentFilesState fields we need to populate
+type TelegramAgentFilesState = TelegramState & {
+  agentFilesLoading: boolean;
+  agentFilesError: string | null;
+  agentFilesList: AgentsFilesListResult | null;
+  agentFileContents: Record<string, string>;
+  agentFileSaving: boolean;
+};
+
+/** Load a Telegram agent's core files into the standard agentFilesList state slot */
+export async function loadTelegramAgentFiles(
+  state: TelegramAgentFilesState,
+  agentId: string,
+): Promise<void> {
+  if (!isReady(state) || state.agentFilesLoading) {
+    return;
+  }
+  state.agentFilesLoading = true;
+  state.agentFilesError = null;
+  try {
+    const res = await state.client!.request<{
+      files: Array<{ name: string; sizeBytes?: number; updatedAt?: string; missing: boolean }>;
+      workspacePath?: string;
+    }>("telegram.agent.getCoreFiles", { agentId });
+    if (res) {
+      const workspacePath = res.workspacePath ?? "";
+      const files: AgentFileEntry[] = (res.files ?? []).map((f) => ({
+        name: f.name,
+        path: workspacePath ? `${workspacePath}/${f.name}` : f.name,
+        missing: !!f.missing,
+        size: f.sizeBytes,
+        updatedAtMs: f.updatedAt ? new Date(f.updatedAt).getTime() : undefined,
+      }));
+      state.agentFilesList = { agentId, workspace: workspacePath, files };
+    }
+  } catch (err) {
+    state.agentFilesError = String(err);
+  } finally {
+    state.agentFilesLoading = false;
+  }
+}
+
+/** Load the content of one Telegram agent core file into agentFileContents */
+export async function loadTelegramAgentFileContent(
+  state: TelegramAgentFilesState,
+  agentId: string,
+  name: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  state.agentFilesLoading = true;
+  state.agentFilesError = null;
+  try {
+    const res = await state.client!.request<{ filename: string; content: string }>(
+      "telegram.agent.getCoreFileContent",
+      { agentId, filename: name },
+    );
+    if (res?.content !== undefined) {
+      state.agentFileContents = { ...state.agentFileContents, [name]: res.content };
+    }
+  } catch (err) {
+    state.agentFilesError = String(err);
+  } finally {
+    state.agentFilesLoading = false;
+  }
+}
+
+/** Save a Telegram agent core file via telegram.agent.setCoreFile */
+export async function saveTelegramAgentFile(
+  state: TelegramAgentFilesState,
+  agentId: string,
+  name: string,
+  content: string,
+): Promise<void> {
+  if (!isReady(state) || state.agentFileSaving) {
+    return;
+  }
+  state.agentFileSaving = true;
+  state.agentFilesError = null;
+  try {
+    await state.client!.request("telegram.agent.setCoreFile", {
+      agentId,
+      filename: name,
+      content,
+    });
+    // Update in-memory cache so the editor reflects the saved content immediately
+    state.agentFileContents = { ...state.agentFileContents, [name]: content };
+    // Reload the file list to refresh timestamps
+    await loadTelegramAgentFiles(state, agentId);
+  } catch (err) {
+    state.agentFilesError = String(err);
+    throw err;
+  } finally {
+    state.agentFileSaving = false;
+  }
+}
