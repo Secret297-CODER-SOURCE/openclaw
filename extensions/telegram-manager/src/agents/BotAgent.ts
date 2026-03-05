@@ -227,17 +227,18 @@ export class BotAgent extends BaseAgent {
     const chatId = String(ctx.chat?.id ?? "");
     this.trackMessage("in", text, chatId);
 
+    // Use a single, stable conversation key per chat so that context is shared
+    // across task sessions and auto_reply — enabling continuous dialogue even
+    // when the mode switches or the agent restarts.
+    const chatKey = `${this.id}:${chatId}`;
+
     // Task sessions take priority over auto_reply
     const taskSession = this.getTaskSession(chatId);
     if (taskSession) {
       await ctx.replyWithChatAction("typing");
       const systemPrompt = taskSession.systemPrompt ?? this.buildTaskSystemPrompt(taskSession.task);
       try {
-        const reply = await aiReply(
-          text,
-          `${this.id}:${chatId}:task:${taskSession.id}`,
-          systemPrompt,
-        );
+        const reply = await aiReply(text, chatKey, systemPrompt, this.storage);
         if (reply) {
           await ctx.reply(reply);
           this.trackMessage("out", reply, chatId);
@@ -254,7 +255,7 @@ export class BotAgent extends BaseAgent {
     let reply = "";
     if (cfg.replyMode === "ai") {
       await ctx.replyWithChatAction("typing");
-      reply = await aiReply(text, `${this.id}:${chatId}`, cfg.aiSystemPrompt);
+      reply = await aiReply(text, chatKey, cfg.aiSystemPrompt, this.storage);
     } else {
       const tpl = cfg.templates?.find((t: any) =>
         text.toLowerCase().includes(t.trigger.toLowerCase()),

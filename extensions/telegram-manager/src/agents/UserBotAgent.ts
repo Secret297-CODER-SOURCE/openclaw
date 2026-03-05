@@ -286,12 +286,11 @@ export class UserBotAgent extends BaseAgent {
         this.trackMessage("in", text, chatId);
         const systemPrompt =
           taskSession.systemPrompt ?? this.buildTaskSystemPrompt(taskSession.task);
+        // Use a stable per-chat key so history is shared with auto_reply —
+        // continuous dialogue is preserved when the task session ends.
+        const chatKey = `${this.id}:${chatId}`;
         try {
-          const reply = await aiReply(
-            text,
-            `${this.id}:${chatId}:task:${taskSession.id}`,
-            systemPrompt,
-          );
+          const reply = await aiReply(text, chatKey, systemPrompt, this.storage);
           if (reply) {
             await msg.reply({ message: reply });
             this.trackMessage("out", reply, chatId);
@@ -330,7 +329,8 @@ export class UserBotAgent extends BaseAgent {
 
         let reply = "";
         if (cfg.replyMode === "ai") {
-          reply = await aiReply(text, key, cfg.aiSystemPrompt);
+          // Pass storage for history persistence and use the stable per-chat key.
+          reply = await aiReply(text, key, cfg.aiSystemPrompt, this.storage);
         } else {
           const tpl = cfg.templates?.find((t: any) =>
             text.toLowerCase().includes(t.trigger.toLowerCase()),

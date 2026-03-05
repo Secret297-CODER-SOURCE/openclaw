@@ -92,6 +92,12 @@ export class TelegramStorage {
         reply_to_id    TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS tg_conversations (
+        chat_key    TEXT PRIMARY KEY,
+        messages    TEXT NOT NULL DEFAULT '[]',
+        updated_at  TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_tg_events_agent ON tg_events(agent_id);
       CREATE INDEX IF NOT EXISTS idx_tg_parsed_agent ON tg_parsed(agent_id);
       CREATE INDEX IF NOT EXISTS idx_agent_missions_master ON agent_missions(master_agent_id);
@@ -287,6 +293,44 @@ export class TelegramStorage {
         )
         .all(missionId, limit) as any[]
     ).map(this.toCommMessage);
+  }
+
+  // ─── Conversation history ─────────────────────────────────────────────────
+
+  /** Load persisted AI conversation history for a given chat key. */
+  loadConversationHistory(chatKey: string): { role: "user" | "assistant"; content: string }[] {
+    const row = this.db
+      .prepare("SELECT messages FROM tg_conversations WHERE chat_key=?")
+      .get(chatKey) as { messages: string } | undefined;
+    if (!row) return [];
+    try {
+      return JSON.parse(row.messages);
+    } catch {
+      // Corrupted row — return empty so the conversation restarts cleanly.
+      return [];
+    }
+  }
+
+  /** Persist AI conversation history for a given chat key. */
+  saveConversationHistory(
+    chatKey: string,
+    messages: { role: "user" | "assistant"; content: string }[],
+  ): void {
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(messages);
+    } catch {
+      // Non-serializable content (should never happen with Anthropic responses,
+      // but guard defensively to avoid crashing the caller).
+      return;
+    }
+    this.db
+      .prepare(`
+        INSERT INTO tg_conversations (chat_key, messages, updated_at)
+        VALUES (?,?,?)
+        ON CONFLICT(chat_key) DO UPDATE SET messages=excluded.messages, updated_at=excluded.updated_at
+      `)
+      .run(chatKey, serialized, new Date().toISOString());
   }
 
   // ─── Plugin credentials config ───────────────────────────────────────────
