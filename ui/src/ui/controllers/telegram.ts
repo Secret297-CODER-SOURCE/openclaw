@@ -469,3 +469,148 @@ export async function completeTelegramTaskSession(
     state.telegramTasksBusy = false;
   }
 }
+
+// ─── Missions (inter-agent communication) ─────────────────────────────────────
+
+export type AgentMissionRecord = {
+  id: string;
+  masterAgentId: string;
+  title: string;
+  goal: string;
+  systemPrompt?: string;
+  participantAgentIds: string[];
+  status: "active" | "completed" | "paused";
+  createdAt: string;
+  completedAt?: string;
+};
+
+export type AgentCommMessageRecord = {
+  id: string;
+  fromAgentId: string;
+  fromAgentName: string;
+  toAgentId: string;
+  content: string;
+  missionId: string;
+  timestamp: string;
+  replyToId?: string;
+};
+
+type TelegramMissionsState = TelegramState & {
+  telegramMissions: AgentMissionRecord[];
+  telegramMissionsLoading: boolean;
+  telegramMissionsError: string | null;
+  telegramMissionsBusy: boolean;
+  telegramMissionMessages: AgentCommMessageRecord[];
+};
+
+export async function loadTelegramMissions(state: TelegramMissionsState): Promise<void> {
+  if (!isReady(state) || state.telegramMissionsLoading) {
+    return;
+  }
+  state.telegramMissionsLoading = true;
+  state.telegramMissionsError = null;
+  try {
+    const res = await state.client!.request<AgentMissionRecord[]>("telegram.mission.list", {});
+    state.telegramMissions = res ?? [];
+  } catch (err) {
+    state.telegramMissionsError = String(err);
+  } finally {
+    state.telegramMissionsLoading = false;
+  }
+}
+
+export async function createTelegramMission(
+  state: TelegramMissionsState,
+  masterAgentId: string,
+  title: string,
+  goal: string,
+  participantIds: string[],
+  systemPrompt?: string,
+): Promise<AgentMissionRecord | null> {
+  if (!isReady(state) || state.telegramMissionsBusy) {
+    return null;
+  }
+  state.telegramMissionsBusy = true;
+  state.telegramMissionsError = null;
+  try {
+    const res = await state.client!.request<AgentMissionRecord>("telegram.mission.create", {
+      masterAgentId,
+      title,
+      goal,
+      participantIds,
+      ...(systemPrompt ? { systemPrompt } : {}),
+    });
+    await loadTelegramMissions(state);
+    return res ?? null;
+  } catch (err) {
+    state.telegramMissionsError = String(err);
+    return null;
+  } finally {
+    state.telegramMissionsBusy = false;
+  }
+}
+
+export async function completeTelegramMission(
+  state: TelegramMissionsState,
+  missionId: string,
+): Promise<void> {
+  if (!isReady(state) || state.telegramMissionsBusy) {
+    return;
+  }
+  state.telegramMissionsBusy = true;
+  state.telegramMissionsError = null;
+  try {
+    await state.client!.request("telegram.mission.complete", { missionId });
+    await loadTelegramMissions(state);
+  } catch (err) {
+    state.telegramMissionsError = String(err);
+  } finally {
+    state.telegramMissionsBusy = false;
+  }
+}
+
+export async function loadTelegramMissionMessages(
+  state: TelegramMissionsState,
+  missionId: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  state.telegramMissionsError = null;
+  try {
+    const res = await state.client!.request<AgentCommMessageRecord[]>("telegram.mission.messages", {
+      missionId,
+    });
+    state.telegramMissionMessages = res ?? [];
+  } catch (err) {
+    state.telegramMissionsError = String(err);
+  }
+}
+
+export async function sendTelegramAgentMessage(
+  state: TelegramMissionsState,
+  fromAgentId: string,
+  toAgentId: string,
+  missionId: string,
+  content: string,
+): Promise<AgentCommMessageRecord | null> {
+  if (!isReady(state) || state.telegramMissionsBusy) {
+    return null;
+  }
+  state.telegramMissionsBusy = true;
+  state.telegramMissionsError = null;
+  try {
+    const res = await state.client!.request<AgentCommMessageRecord>(
+      "telegram.agent.sendMessage_to_agent",
+      { fromAgentId, toAgentId, missionId, content },
+    );
+    // Refresh messages for this mission
+    await loadTelegramMissionMessages(state, missionId);
+    return res ?? null;
+  } catch (err) {
+    state.telegramMissionsError = String(err);
+    return null;
+  } finally {
+    state.telegramMissionsBusy = false;
+  }
+}

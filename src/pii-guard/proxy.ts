@@ -12,8 +12,8 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import crypto from 'crypto';
-import { SORTED_PATTERNS } from './patterns.js';
+import crypto from "crypto";
+import { SORTED_PATTERNS } from "./patterns.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ТИПЫ
@@ -28,8 +28,8 @@ interface PiiEntry {
 }
 
 interface SanitizeResult {
-  text: string;           // Текст с токенами (передаётся в LLM)
-  detected: PiiEntry[];   // Что нашли в этом вызове
+  text: string; // Текст с токенами (передаётся в LLM)
+  detected: PiiEntry[]; // Что нашли в этом вызове
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -41,7 +41,6 @@ const TOKEN_PATTERN = /\[[А-ЯЁA-Z0-9_]+_[0-9A-F]{6}\]/g;
 // КЛАСС PiiProxy
 // ─────────────────────────────────────────────────────────────────────────────
 export class PiiProxy {
-
   /** token → PiiEntry */
   private store = new Map<string, PiiEntry>();
   /** original value → token (для дедупликации) */
@@ -63,12 +62,16 @@ export class PiiProxy {
 
       result = result.replace(pattern.regex, (match) => {
         // 1. Пропускаем уже вставленные токены
-        if (TOKEN_PATTERN.test(match)) return match;
+        if (TOKEN_PATTERN.test(match)) {
+          return match;
+        }
         TOKEN_PATTERN.lastIndex = 0;
 
         // 2. Пропускаем пустые/слишком короткие совпадения
         const trimmed = match.trim();
-        if (trimmed.length < 2) return match;
+        if (trimmed.length < 2) {
+          return match;
+        }
 
         // 3. Дедупликация: если это значение уже имеет токен — возвращаем его
         if (this.reverseIndex.has(trimmed)) {
@@ -76,7 +79,7 @@ export class PiiProxy {
         }
 
         // 4. Создаём новый токен
-        const id = crypto.randomBytes(3).toString('hex').toUpperCase();
+        const id = crypto.randomBytes(3).toString("hex").toUpperCase();
         const token = `[${pattern.tokenName}_${id}]`;
 
         const entry: PiiEntry = {
@@ -119,11 +122,9 @@ export class PiiProxy {
       }
 
       // Fuzzy: токен с пробелами внутри скобок
-      const fuzzyToken = token
-        .replace(/^\[/, '\\[\\s*')
-        .replace(/\]$/, '\\s*\\]');
+      const fuzzyToken = token.replace(/^\[/, "\\[\\s*").replace(/\]$/, "\\s*\\]");
       try {
-        const fuzzyRe = new RegExp(fuzzyToken, 'g');
+        const fuzzyRe = new RegExp(fuzzyToken, "g");
         result = result.replace(fuzzyRe, entry.original);
       } catch {
         // если regex сломался — пропускаем

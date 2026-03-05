@@ -3,12 +3,15 @@ import { randomUUID } from "crypto";
 import { TelegramStorage } from "../storage/TelegramStorage";
 import {
   AgentRecord,
+  AgentMission,
+  AgentCommunicationMessage,
   BehaviorConfig,
   TelegramEvent,
   ILogger,
   AgentCredentials,
   TaskSession,
 } from "../types";
+import { AgentCommunicationBus } from "./AgentCommunicationBus";
 import { BaseAgent } from "./BaseAgent";
 import { BotAgent } from "./BotAgent";
 import { UserBotAgent } from "./UserBotAgent";
@@ -16,6 +19,7 @@ import { UserBotAgent } from "./UserBotAgent";
 export class AgentManager {
   private pool = new Map<string, BaseAgent>();
   private eventListeners: ((e: TelegramEvent) => void)[] = [];
+  private commBus!: AgentCommunicationBus;
 
   constructor(
     private storage: TelegramStorage,
@@ -23,6 +27,22 @@ export class AgentManager {
   ) {}
 
   async init(): Promise<void> {
+    // Initialize communication bus with callbacks into this manager
+    this.commBus = new AgentCommunicationBus(
+      this.storage,
+      (agentId: string, tool: string, args: Record<string, unknown>) =>
+        this.callTool(agentId, tool, args),
+      (agentId: string) => {
+        const record = this.pool.get(agentId)?.getRecord();
+        return record?.name ?? agentId;
+      },
+      this.logger,
+    );
+    // Forward comm bus events to all listeners
+    this.commBus.onEvent((e: TelegramEvent) => {
+      this.eventListeners.forEach((fn) => fn(e));
+    });
+
     const records = this.storage.getAllAgents();
     this.logger.info(`[TG] Loading ${records.length} agents`);
     for (const r of records) {
@@ -150,6 +170,43 @@ export class AgentManager {
   }
   getParsed(agentId: string, limit?: number) {
     return this.storage.getParsed(agentId, limit);
+  }
+
+  // ─── Missions & inter-agent communication ─────────────────────────────────
+
+  createMission(
+    masterAgentId: string,
+    title: string,
+    goal: string,
+    participantIds: string[],
+    systemPrompt?: string,
+  ): AgentMission {
+    return this.commBus.createMission(masterAgentId, title, goal, participantIds, systemPrompt);
+  }
+
+  completeMission(missionId: string): void {
+    this.commBus.completeMission(missionId);
+  }
+
+  async sendAgentMessage(
+    fromAgentId: string,
+    toAgentId: string,
+    missionId: string,
+    content: string,
+  ): Promise<AgentCommunicationMessage> {
+    return this.commBus.sendAgentMessage(fromAgentId, toAgentId, missionId, content);
+  }
+
+  getMissionMessages(missionId: string, limit?: number): AgentCommunicationMessage[] {
+    return this.commBus.getMissionMessages(missionId, limit);
+  }
+
+  getMissions(): AgentMission[] {
+    return this.commBus.getMissions();
+  }
+
+  getMission(id: string): AgentMission | null {
+    return this.commBus.getMission(id);
   }
 
   // ─── Shutdown ─────────────────────────────────────────────────────────────

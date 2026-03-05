@@ -33,6 +33,14 @@ const TELEGRAM_METHODS = [
   "telegram.agent.assignTask",
   "telegram.agent.listTaskSessions",
   "telegram.agent.completeTaskSession",
+  "telegram.agent.getCoreFiles",
+  "telegram.agent.setCoreFile",
+  "telegram.agent.sendMessage_to_agent",
+  "telegram.mission.create",
+  "telegram.mission.list",
+  "telegram.mission.get",
+  "telegram.mission.complete",
+  "telegram.mission.messages",
 ] as const;
 
 const plugin = {
@@ -148,7 +156,15 @@ Actions:
 - get_events            — get recent inbound/outbound events for an agent (requires agentId)
 - assign_task           — assign a persistent task session so the agent holds an ongoing AI conversation with a specific Telegram chat on behalf of the main agent (requires agentId, chatId, task; optional: systemPrompt, openingMessage). chatId must be the FULL username (e.g. 'worker_297') or a full numeric Telegram user ID (9+ digits) — never just the numeric suffix of a username
 - list_task_sessions    — list all task sessions for an agent (requires agentId)
-- complete_task_session — mark a task session as completed (requires agentId, sessionId)`,
+- complete_task_session — mark a task session as completed (requires agentId, sessionId)
+- create_mission        — create a multi-agent mission where a master agent assigns a goal to sub-agents (requires masterAgentId, title, goal; optional: participantIds, systemPrompt)
+- list_missions         — list all agent missions
+- get_mission           — get details of a specific mission (requires missionId)
+- complete_mission      — mark a mission as completed (requires missionId)
+- get_mission_messages  — get inter-agent messages for a mission (requires missionId; optional: limit)
+- send_agent_message    — send a message from one agent to another within a mission (requires fromAgentId, toAgentId, missionId, content)
+- get_core_files        — list core workspace files for an agent (requires agentId)
+- set_core_file         — write a core workspace file for an agent (requires agentId, filename, content)`,
       parameters: {
         type: "object",
         properties: {
@@ -165,6 +181,14 @@ Actions:
               "assign_task",
               "list_task_sessions",
               "complete_task_session",
+              "create_mission",
+              "list_missions",
+              "get_mission",
+              "complete_mission",
+              "get_mission_messages",
+              "send_agent_message",
+              "get_core_files",
+              "set_core_file",
             ],
             description: "Action to perform",
           },
@@ -212,6 +236,45 @@ Actions:
           sessionId: {
             type: "string",
             description: "Task session ID — required for complete_task_session",
+          },
+          masterAgentId: {
+            type: "string",
+            description:
+              "ID of the master agent that owns the mission — required for create_mission",
+          },
+          title: {
+            type: "string",
+            description: "Mission title — required for create_mission",
+          },
+          goal: {
+            type: "string",
+            description: "Mission goal/instructions — required for create_mission",
+          },
+          participantIds: {
+            type: "array",
+            items: { type: "string" },
+            description: "Agent IDs participating in the mission — for create_mission",
+          },
+          missionId: {
+            type: "string",
+            description:
+              "Mission ID — required for get_mission, complete_mission, get_mission_messages, send_agent_message",
+          },
+          fromAgentId: {
+            type: "string",
+            description: "Sending agent ID — required for send_agent_message",
+          },
+          toAgentId: {
+            type: "string",
+            description: "Receiving agent ID — required for send_agent_message",
+          },
+          content: {
+            type: "string",
+            description: "Message content — required for send_agent_message",
+          },
+          filename: {
+            type: "string",
+            description: "Core file name (e.g. AGENTS.md) — required for set_core_file",
           },
         },
         required: ["action"],
@@ -302,9 +365,90 @@ Actions:
               });
               return jsonResult({ ok: true, message: `Task session ${args.sessionId} completed` });
             }
+            case "create_mission": {
+              if (!args.masterAgentId)
+                return jsonResult({ error: "masterAgentId is required for 'create_mission'" });
+              if (!args.title)
+                return jsonResult({ error: "title is required for 'create_mission'" });
+              if (!args.goal) return jsonResult({ error: "goal is required for 'create_mission'" });
+              const mission = await callPlugin("telegram.mission.create", {
+                masterAgentId: args.masterAgentId,
+                title: args.title,
+                goal: args.goal,
+                participantIds: Array.isArray(args.participantIds) ? args.participantIds : [],
+                ...(args.systemPrompt ? { systemPrompt: args.systemPrompt } : {}),
+              });
+              return jsonResult(mission);
+            }
+            case "list_missions": {
+              const missions = await callPlugin("telegram.mission.list", {});
+              return jsonResult({ missions });
+            }
+            case "get_mission": {
+              if (!args.missionId)
+                return jsonResult({ error: "missionId is required for 'get_mission'" });
+              const mission = await callPlugin("telegram.mission.get", {
+                missionId: args.missionId,
+              });
+              return jsonResult(mission);
+            }
+            case "complete_mission": {
+              if (!args.missionId)
+                return jsonResult({ error: "missionId is required for 'complete_mission'" });
+              await callPlugin("telegram.mission.complete", { missionId: args.missionId });
+              return jsonResult({ ok: true, message: `Mission ${args.missionId} completed` });
+            }
+            case "get_mission_messages": {
+              if (!args.missionId)
+                return jsonResult({ error: "missionId is required for 'get_mission_messages'" });
+              const messages = await callPlugin("telegram.mission.messages", {
+                missionId: args.missionId,
+                ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
+              });
+              return jsonResult({ messages });
+            }
+            case "send_agent_message": {
+              if (!args.fromAgentId)
+                return jsonResult({ error: "fromAgentId is required for 'send_agent_message'" });
+              if (!args.toAgentId)
+                return jsonResult({ error: "toAgentId is required for 'send_agent_message'" });
+              if (!args.missionId)
+                return jsonResult({ error: "missionId is required for 'send_agent_message'" });
+              if (!args.content)
+                return jsonResult({ error: "content is required for 'send_agent_message'" });
+              const msg = await callPlugin("telegram.agent.sendMessage_to_agent", {
+                fromAgentId: args.fromAgentId,
+                toAgentId: args.toAgentId,
+                missionId: args.missionId,
+                content: args.content,
+              });
+              return jsonResult(msg);
+            }
+            case "get_core_files": {
+              if (!args.agentId)
+                return jsonResult({ error: "agentId is required for 'get_core_files'" });
+              const result = await callPlugin("telegram.agent.getCoreFiles", {
+                agentId: args.agentId,
+              });
+              return jsonResult(result);
+            }
+            case "set_core_file": {
+              if (!args.agentId)
+                return jsonResult({ error: "agentId is required for 'set_core_file'" });
+              if (!args.filename)
+                return jsonResult({ error: "filename is required for 'set_core_file'" });
+              if (args.content === undefined)
+                return jsonResult({ error: "content is required for 'set_core_file'" });
+              await callPlugin("telegram.agent.setCoreFile", {
+                agentId: args.agentId,
+                filename: args.filename,
+                content: args.content,
+              });
+              return jsonResult({ ok: true });
+            }
             default:
               return jsonResult({
-                error: `Unknown action: '${action}'. Valid actions: list, get, start, stop, restart, send_message, get_events, assign_task, list_task_sessions, complete_task_session`,
+                error: `Unknown action: '${action}'. Valid actions: list, get, start, stop, restart, send_message, get_events, assign_task, list_task_sessions, complete_task_session, create_mission, list_missions, get_mission, complete_mission, get_mission_messages, send_agent_message, get_core_files, set_core_file`,
               });
           }
         } catch (err) {

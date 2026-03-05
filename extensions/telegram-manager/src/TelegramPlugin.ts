@@ -8,6 +8,7 @@
 //   - Broadcast (push events to all connected WS clients)
 
 import { randomUUID } from "crypto";
+import fs from "fs";
 import path from "path";
 import { AgentManager } from "./agents/AgentManager";
 import { TelegramStorage } from "./storage/TelegramStorage";
@@ -27,6 +28,18 @@ export class TelegramPlugin implements GatewayPlugin {
   private ctx!: IGatewayContext;
   private storage!: TelegramStorage;
   private manager!: AgentManager;
+
+  /** Allowed core file names — validated before any file I/O */
+  private static readonly CORE_FILE_NAMES = [
+    "AGENTS.md",
+    "SOUL.md",
+    "TOOLS.md",
+    "IDENTITY.md",
+    "USER.md",
+    "HEARTBEAT.md",
+    "BOOTSTRAP.md",
+    "MEMORY.md",
+  ] as const;
 
   // ─── Plugin lifecycle ─────────────────────────────────────────────────────
 
@@ -198,6 +211,143 @@ export class TelegramPlugin implements GatewayPlugin {
           respond({ ok: true });
           break;
 
+        // ── Core files ─────────────────────────────────────────────────────
+
+        case "telegram.agent.getCoreFiles": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          const workspaceDir = this.agentWorkspaceDir(String(p.agentId));
+          const files = TelegramPlugin.CORE_FILE_NAMES.map((name) => {
+            const filePath = path.join(workspaceDir, name);
+            try {
+              const stat = fs.statSync(filePath);
+              return {
+                name,
+                sizeBytes: stat.size,
+                updatedAt: stat.mtime.toISOString(),
+                missing: false,
+              };
+            } catch {
+              return { name, missing: true };
+            }
+          });
+          respond({ files, workspacePath: workspaceDir });
+          break;
+        }
+
+        case "telegram.agent.setCoreFile": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          const filename = String(p.filename ?? "");
+          if (!(TelegramPlugin.CORE_FILE_NAMES as readonly string[]).includes(filename)) {
+            fail(`Invalid filename. Allowed: ${TelegramPlugin.CORE_FILE_NAMES.join(", ")}`);
+            break;
+          }
+          const workspaceDir = this.agentWorkspaceDir(String(p.agentId));
+          fs.mkdirSync(workspaceDir, { recursive: true });
+          fs.writeFileSync(path.join(workspaceDir, filename), String(p.content ?? ""), "utf-8");
+          respond({ ok: true });
+          break;
+        }
+
+        // ── Missions ───────────────────────────────────────────────────────
+
+        case "telegram.mission.create": {
+          if (!p.masterAgentId) {
+            fail("masterAgentId is required");
+            break;
+          }
+          if (!p.title) {
+            fail("title is required");
+            break;
+          }
+          if (!p.goal) {
+            fail("goal is required");
+            break;
+          }
+          const mission = this.manager.createMission(
+            String(p.masterAgentId),
+            String(p.title),
+            String(p.goal),
+            Array.isArray(p.participantIds) ? p.participantIds.map(String) : [],
+            p.systemPrompt ? String(p.systemPrompt) : undefined,
+          );
+          respond(mission);
+          break;
+        }
+
+        case "telegram.mission.list":
+          respond(this.manager.getMissions());
+          break;
+
+        case "telegram.mission.get": {
+          if (!p.missionId) {
+            fail("missionId is required");
+            break;
+          }
+          const mission = this.manager.getMission(String(p.missionId));
+          if (!mission) {
+            fail(`Mission not found: ${p.missionId}`);
+            break;
+          }
+          respond(mission);
+          break;
+        }
+
+        case "telegram.mission.complete": {
+          if (!p.missionId) {
+            fail("missionId is required");
+            break;
+          }
+          this.manager.completeMission(String(p.missionId));
+          respond({ ok: true });
+          break;
+        }
+
+        case "telegram.mission.messages": {
+          if (!p.missionId) {
+            fail("missionId is required");
+            break;
+          }
+          const messages = this.manager.getMissionMessages(
+            String(p.missionId),
+            typeof p.limit === "number" ? p.limit : undefined,
+          );
+          respond(messages);
+          break;
+        }
+
+        case "telegram.agent.sendMessage_to_agent": {
+          if (!p.fromAgentId) {
+            fail("fromAgentId is required");
+            break;
+          }
+          if (!p.toAgentId) {
+            fail("toAgentId is required");
+            break;
+          }
+          if (!p.missionId) {
+            fail("missionId is required");
+            break;
+          }
+          if (!p.content) {
+            fail("content is required");
+            break;
+          }
+          const msg = await this.manager.sendAgentMessage(
+            String(p.fromAgentId),
+            String(p.toAgentId),
+            String(p.missionId),
+            String(p.content),
+          );
+          respond(msg);
+          break;
+        }
+
         // ── Data ───────────────────────────────────────────────────────────
 
         case "telegram.events.get":
@@ -290,6 +440,13 @@ export class TelegramPlugin implements GatewayPlugin {
     }
 
     return true; // handled
+  }
+
+  // ─── Private helpers ──────────────────────────────────────────────────────
+
+  /** Returns the workspace directory path for a given agent */
+  private agentWorkspaceDir(agentId: string): string {
+    return path.join(this.ctx.dataDir, "telegram", "agents", agentId, "workspace");
   }
 
   // ─── HTTP REST routes (optional, for non-WS clients) ─────────────────────
@@ -416,6 +573,68 @@ export class TelegramPlugin implements GatewayPlugin {
             ok: true,
             data: mgr.getParsed(req.params.id, parseInt(req.query.limit ?? "1000")),
           }),
+      },
+      // GET /telegram/agents/:id/core-files
+      {
+        method: "GET",
+        path: "/telegram/agents/:id/core-files",
+        handler: (req, res) => {
+          const workspaceDir = this.agentWorkspaceDir(req.params.id);
+          const files = TelegramPlugin.CORE_FILE_NAMES.map((name) => {
+            const filePath = path.join(workspaceDir, name);
+            try {
+              const stat = fs.statSync(filePath);
+              return {
+                name,
+                sizeBytes: stat.size,
+                updatedAt: stat.mtime.toISOString(),
+                missing: false,
+              };
+            } catch {
+              return { name, missing: true };
+            }
+          });
+          res.json({ ok: true, data: { files, workspacePath: workspaceDir } });
+        },
+      },
+      // GET /telegram/agents/:id/core-files/:filename
+      {
+        method: "GET",
+        path: "/telegram/agents/:id/core-files/:filename",
+        handler: (req, res) => {
+          const filename = req.params.filename;
+          if (!(TelegramPlugin.CORE_FILE_NAMES as readonly string[]).includes(filename)) {
+            res.status(400).json({ ok: false, error: `Invalid filename: ${filename}` });
+            return;
+          }
+          const filePath = path.join(this.agentWorkspaceDir(req.params.id), filename);
+          try {
+            const content = fs.readFileSync(filePath, "utf-8");
+            res.json({ ok: true, data: { filename, content } });
+          } catch {
+            res.status(404).json({ ok: false, error: "File not found" });
+          }
+        },
+      },
+      // PUT /telegram/agents/:id/core-files/:filename
+      {
+        method: "PUT",
+        path: "/telegram/agents/:id/core-files/:filename",
+        handler: async (req, res) => {
+          const filename = req.params.filename;
+          if (!(TelegramPlugin.CORE_FILE_NAMES as readonly string[]).includes(filename)) {
+            res.status(400).json({ ok: false, error: `Invalid filename: ${filename}` });
+            return;
+          }
+          const workspaceDir = this.agentWorkspaceDir(req.params.id);
+          fs.mkdirSync(workspaceDir, { recursive: true });
+          fs.writeFileSync(
+            path.join(workspaceDir, filename),
+            String(req.body?.content ?? ""),
+            "utf-8",
+          );
+          res.json({ ok: true });
+        },
       },
     ];
   }

@@ -130,12 +130,52 @@ export interface TaskSessionBehavior {
   sessions: TaskSession[];
 }
 
+// ─── Inter-agent communication ────────────────────────────────────────────────
+
+export interface AgentCommunicationMessage {
+  id: string;
+  fromAgentId: string;
+  fromAgentName: string;
+  toAgentId: string;
+  content: string;
+  /** The shared mission/goal this message relates to */
+  missionId: string;
+  timestamp: string;
+  /** Optional reply to another message */
+  replyToId?: string;
+}
+
+export interface AgentMission {
+  id: string;
+  /** The master agent that created and owns this mission */
+  masterAgentId: string;
+  /** Human-readable title */
+  title: string;
+  /** The goal/instructions all participating agents receive */
+  goal: string;
+  /** Optional system prompt override for sub-agents */
+  systemPrompt?: string;
+  /** Agents participating in this mission */
+  participantAgentIds: string[];
+  status: "active" | "completed" | "paused";
+  createdAt: string;
+  completedAt?: string;
+}
+
+export interface CommunicationBehavior {
+  type: "communication";
+  enabled: boolean;
+  /** Missions this agent participates in */
+  activeMissionIds: string[];
+}
+
 export type BehaviorConfig =
   | AutoReplyBehavior
   | MonitorBehavior
   | BroadcastBehavior
   | ParserBehavior
-  | TaskSessionBehavior;
+  | TaskSessionBehavior
+  | CommunicationBehavior;
 
 // ─── Agent record ─────────────────────────────────────────────────────────────
 
@@ -179,7 +219,7 @@ export interface ToolCallResult {
 export interface TelegramEvent {
   agentId: string;
   agentName: string;
-  type: "message_in" | "message_out" | "parsed_item" | "status_change" | "error";
+  type: "message_in" | "message_out" | "parsed_item" | "status_change" | "error" | "agent_message";
   payload: Record<string, unknown>;
   timestamp: string;
 }

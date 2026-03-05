@@ -2,7 +2,13 @@ import fs from "fs";
 import path from "path";
 // plugins/telegram/src/storage/TelegramStorage.ts
 import Database from "better-sqlite3";
-import { AgentRecord, BehaviorConfig, TelegramEvent } from "../types";
+import {
+  AgentRecord,
+  AgentMission,
+  AgentCommunicationMessage,
+  BehaviorConfig,
+  TelegramEvent,
+} from "../types";
 
 export type ProxyConfig = {
   socksType: 5;
@@ -63,8 +69,33 @@ export class TelegramStorage {
         captured   TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS agent_missions (
+        id                   TEXT PRIMARY KEY,
+        master_agent_id      TEXT NOT NULL,
+        title                TEXT NOT NULL,
+        goal                 TEXT NOT NULL,
+        system_prompt        TEXT,
+        participant_agent_ids TEXT NOT NULL DEFAULT '[]',
+        status               TEXT NOT NULL DEFAULT 'active',
+        created_at           TEXT NOT NULL,
+        completed_at         TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS agent_communication_messages (
+        id             TEXT PRIMARY KEY,
+        from_agent_id  TEXT NOT NULL,
+        from_agent_name TEXT NOT NULL,
+        to_agent_id    TEXT NOT NULL,
+        content        TEXT NOT NULL,
+        mission_id     TEXT NOT NULL,
+        timestamp      TEXT NOT NULL,
+        reply_to_id    TEXT
+      );
+
       CREATE INDEX IF NOT EXISTS idx_tg_events_agent ON tg_events(agent_id);
       CREATE INDEX IF NOT EXISTS idx_tg_parsed_agent ON tg_parsed(agent_id);
+      CREATE INDEX IF NOT EXISTS idx_agent_missions_master ON agent_missions(master_agent_id);
+      CREATE INDEX IF NOT EXISTS idx_comm_msgs_mission ON agent_communication_messages(mission_id);
     `);
   }
 
@@ -182,6 +213,82 @@ export class TelegramStorage {
     ).map((r) => ({ ...r, content: JSON.parse(r.content) }));
   }
 
+  // ─── Missions ─────────────────────────────────────────────────────────────
+
+  saveMission(mission: AgentMission): void {
+    this.db
+      .prepare(`
+      INSERT OR REPLACE INTO agent_missions
+        (id, master_agent_id, title, goal, system_prompt, participant_agent_ids, status, created_at, completed_at)
+      VALUES
+        (@id, @masterAgentId, @title, @goal, @systemPrompt, @participantAgentIds, @status, @createdAt, @completedAt)
+    `)
+      .run({
+        id: mission.id,
+        masterAgentId: mission.masterAgentId,
+        title: mission.title,
+        goal: mission.goal,
+        systemPrompt: mission.systemPrompt ?? null,
+        participantAgentIds: JSON.stringify(mission.participantAgentIds),
+        status: mission.status,
+        createdAt: mission.createdAt,
+        completedAt: mission.completedAt ?? null,
+      });
+  }
+
+  getMission(id: string): AgentMission | null {
+    const row = this.db.prepare("SELECT * FROM agent_missions WHERE id = ?").get(id) as any;
+    return row ? this.toMission(row) : null;
+  }
+
+  getAllMissions(): AgentMission[] {
+    return (
+      this.db.prepare("SELECT * FROM agent_missions ORDER BY created_at DESC").all() as any[]
+    ).map(this.toMission);
+  }
+
+  updateMissionStatus(id: string, status: string, completedAt?: string): void {
+    this.db
+      .prepare("UPDATE agent_missions SET status=?, completed_at=? WHERE id=?")
+      .run(status, completedAt ?? null, id);
+  }
+
+  deleteMission(id: string): void {
+    this.db.prepare("DELETE FROM agent_missions WHERE id=?").run(id);
+  }
+
+  // ─── Communication messages ───────────────────────────────────────────────
+
+  saveCommMessage(msg: AgentCommunicationMessage): void {
+    this.db
+      .prepare(`
+      INSERT OR REPLACE INTO agent_communication_messages
+        (id, from_agent_id, from_agent_name, to_agent_id, content, mission_id, timestamp, reply_to_id)
+      VALUES
+        (@id, @fromAgentId, @fromAgentName, @toAgentId, @content, @missionId, @timestamp, @replyToId)
+    `)
+      .run({
+        id: msg.id,
+        fromAgentId: msg.fromAgentId,
+        fromAgentName: msg.fromAgentName,
+        toAgentId: msg.toAgentId,
+        content: msg.content,
+        missionId: msg.missionId,
+        timestamp: msg.timestamp,
+        replyToId: msg.replyToId ?? null,
+      });
+  }
+
+  getCommMessages(missionId: string, limit = 100): AgentCommunicationMessage[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT * FROM agent_communication_messages WHERE mission_id=? ORDER BY timestamp ASC LIMIT ?",
+        )
+        .all(missionId, limit) as any[]
+    ).map(this.toCommMessage);
+  }
+
   // ─── Plugin credentials config ───────────────────────────────────────────
 
   /** Persist apiId + apiHash to a JSON file in the plugin data directory. */
@@ -249,6 +356,33 @@ export class TelegramStorage {
       updatedAt: row.updated_at,
       lastError: row.last_error ?? undefined,
       stats: JSON.parse(row.stats),
+    };
+  }
+
+  private toMission(row: any): AgentMission {
+    return {
+      id: row.id,
+      masterAgentId: row.master_agent_id,
+      title: row.title,
+      goal: row.goal,
+      systemPrompt: row.system_prompt ?? undefined,
+      participantAgentIds: JSON.parse(row.participant_agent_ids),
+      status: row.status,
+      createdAt: row.created_at,
+      completedAt: row.completed_at ?? undefined,
+    };
+  }
+
+  private toCommMessage(row: any): AgentCommunicationMessage {
+    return {
+      id: row.id,
+      fromAgentId: row.from_agent_id,
+      fromAgentName: row.from_agent_name,
+      toAgentId: row.to_agent_id,
+      content: row.content,
+      missionId: row.mission_id,
+      timestamp: row.timestamp,
+      replyToId: row.reply_to_id ?? undefined,
     };
   }
 }
