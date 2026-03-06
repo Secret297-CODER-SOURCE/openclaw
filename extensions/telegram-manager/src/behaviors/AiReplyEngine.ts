@@ -1,42 +1,140 @@
 // plugins/telegram/src/behaviors/AiReplyEngine.ts
 import Anthropic from "@anthropic-ai/sdk";
 
-// Lazy client — created on the first AI call so that agents can start without
-// ANTHROPIC_API_KEY set; a clear error is thrown at call-time instead.
-let cachedClient: Anthropic | null = null;
-
-function ensureClient(): Anthropic {
-  if (!cachedClient) {
-    const key = process.env.ANTHROPIC_API_KEY;
-    if (!key) {
-      throw new Error(
-        "ANTHROPIC_API_KEY environment variable is not set. " +
-          "Set it to enable AI replies in Telegram agents.",
-      );
-    }
-    cachedClient = new Anthropic({ apiKey: key });
-  }
-  return cachedClient;
-}
+export type ModelMessage = { role: "user" | "assistant"; content: string };
 
 /**
- * Model used for AI replies. Override via TG_AI_MODEL environment variable.
- * Defaults to claude-3-5-sonnet-20241022 which is a stable, widely-available model.
+ * Adapter interface for generating AI replies.
+ * Receives the full conversation history and a system prompt; returns the assistant reply.
  */
-function resolveModel(): string {
-  return process.env.TG_AI_MODEL?.trim() || "claude-3-5-sonnet-20241022";
+export type ModelAdapter = (messages: ModelMessage[], systemPrompt: string) => Promise<string>;
+
+// ─── Module-level configured adapter ─────────────────────────────────────────
+
+// Set once by the plugin host (index.ts) during gateway_start.
+// Falls back to env-var auto-detection when not set.
+let _adapter: ModelAdapter | null = null;
+// Cached env-resolved adapter so we don't re-create adapters on every call.
+let _cachedEnvAdapter: ModelAdapter | null = null;
+
+/**
+ * Set the model adapter used by aiReply().
+ * Called once from the plugin host during initialisation so the extension can
+ * use OpenClaw's configured AI provider without needing a separate API key.
+ */
+export function setModelAdapter(adapter: ModelAdapter): void {
+  _adapter = adapter;
+  _cachedEnvAdapter = null;
+  cachedAnthropicClient = null;
 }
 
+// ─── Anthropic adapter (env-var fallback) ─────────────────────────────────────
+
+// Lazy Anthropic client — created on the first AI call.
+let cachedAnthropicClient: Anthropic | null = null;
+
+function getAnthropicClient(): Anthropic {
+  if (!cachedAnthropicClient) {
+    cachedAnthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+  }
+  return cachedAnthropicClient;
+}
+
+function makeAnthropicAdapter(): ModelAdapter {
+  const model = process.env.TG_AI_MODEL?.trim() || "claude-3-5-sonnet-20241022";
+  return async (messages, systemPrompt) => {
+    const res = await getAnthropicClient().messages.create({
+      model,
+      max_tokens: 2048,
+      system: systemPrompt,
+      messages,
+    });
+    return res.content[0].type === "text" ? res.content[0].text : "…";
+  };
+}
+
+// ─── OpenAI-compatible adapter (covers OpenAI, GitHub Copilot, local gateway) ──
+
+/**
+ * Build an adapter that calls any OpenAI-compatible chat completions endpoint.
+ * Uses the global fetch available in Node 18+.
+ */
+export function makeOpenAiCompatAdapter(
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+): ModelAdapter {
+  const base = baseUrl.replace(/\/$/, "");
+  return async (messages, systemPrompt) => {
+    const response = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "system", content: systemPrompt }, ...messages],
+        max_tokens: 2048,
+      }),
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`AI request failed (${response.status}): ${body.slice(0, 200)}`);
+    }
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    return data.choices?.[0]?.message?.content?.trim() ?? "…";
+  };
+}
+
+// ─── Adapter resolution ────────────────────────────────────────────────────────
+
+/**
+ * Resolve the adapter to use for AI replies.
+ * Priority:
+ *   1. Explicitly configured via setModelAdapter() — used when OpenClaw injects
+ *      its own provider (e.g. GitHub Copilot) at plugin initialisation.
+ *   2. ANTHROPIC_API_KEY env var — direct Anthropic SDK.
+ *   3. OPENAI_API_KEY / OPENAI_BASE_URL env vars — any OpenAI-compatible API.
+ *   4. Throws with setup instructions if nothing is configured.
+ */
+function resolveAdapter(): ModelAdapter {
+  if (_adapter) return _adapter;
+  if (_cachedEnvAdapter) return _cachedEnvAdapter;
+
+  const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim();
+  if (anthropicKey) {
+    _cachedEnvAdapter = makeAnthropicAdapter();
+    return _cachedEnvAdapter;
+  }
+
+  const openaiKey = process.env.OPENAI_API_KEY?.trim();
+  const openaiBase = process.env.OPENAI_BASE_URL?.trim();
+  if (openaiKey || openaiBase) {
+    const baseUrl = (openaiBase ?? "https://api.openai.com/v1").replace(/\/$/, "");
+    const model = process.env.TG_AI_MODEL?.trim() || "gpt-4o";
+    _cachedEnvAdapter = makeOpenAiCompatAdapter(baseUrl, openaiKey ?? "", model);
+    return _cachedEnvAdapter;
+  }
+
+  throw new Error(
+    "No AI provider configured for Telegram Manager. " +
+      "Either set ANTHROPIC_API_KEY, OPENAI_API_KEY, or ensure the OpenClaw gateway " +
+      "is running with a configured AI provider (e.g. GitHub Copilot).",
+  );
+}
+
+// ─── Conversation history ──────────────────────────────────────────────────────
+
 // In-memory cache for fast access; backed by optional persistent storage.
-const histories = new Map<string, { role: "user" | "assistant"; content: string }[]>();
+const histories = new Map<string, ModelMessage[]>();
 
 /** Minimal storage interface for conversation persistence. */
 export interface ConversationStorage {
-  loadConversationHistory(chatKey: string): { role: "user" | "assistant"; content: string }[];
-  saveConversationHistory(
-    chatKey: string,
-    messages: { role: "user" | "assistant"; content: string }[],
-  ): void;
+  loadConversationHistory(chatKey: string): ModelMessage[];
+  saveConversationHistory(chatKey: string, messages: ModelMessage[]): void;
 }
 
 /** Maximum number of messages kept per conversation (user + assistant turns). */
@@ -61,14 +159,9 @@ export async function aiReply(
   hist.push({ role: "user", content: text });
   if (hist.length > MAX_HISTORY) hist.splice(0, hist.length - MAX_HISTORY);
 
-  const res = await ensureClient().messages.create({
-    model: resolveModel(),
-    max_tokens: 2048,
-    system: systemPrompt,
-    messages: hist,
-  });
+  const adapter = resolveAdapter();
+  const reply = await adapter(hist, systemPrompt);
 
-  const reply = res.content[0].type === "text" ? res.content[0].text : "…";
   hist.push({ role: "assistant", content: reply });
   histories.set(chatKey, hist);
   // Persist after every turn so history survives agent restarts.
