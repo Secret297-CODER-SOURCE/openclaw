@@ -236,7 +236,9 @@ export class BotAgent extends BaseAgent {
     const taskSession = this.getTaskSession(chatId);
     if (taskSession) {
       await ctx.replyWithChatAction("typing");
-      const systemPrompt = taskSession.systemPrompt ?? this.buildTaskSystemPrompt(taskSession.task);
+      // Use custom system prompt if provided, otherwise build from workspace files.
+      const systemPrompt =
+        taskSession.systemPrompt ?? (await this.buildRichSystemPrompt(taskSession.task));
       try {
         const reply = await aiReply(text, chatKey, systemPrompt, this.storage);
         if (reply) {
@@ -255,7 +257,9 @@ export class BotAgent extends BaseAgent {
     let reply = "";
     if (cfg.replyMode === "ai") {
       await ctx.replyWithChatAction("typing");
-      reply = await aiReply(text, chatKey, cfg.aiSystemPrompt, this.storage);
+      // Use configured system prompt if present, otherwise build from workspace files.
+      const systemPrompt = cfg.aiSystemPrompt ?? (await this.buildRichSystemPrompt());
+      reply = await aiReply(text, chatKey, systemPrompt, this.storage);
     } else {
       const tpl = cfg.templates?.find((t: any) =>
         text.toLowerCase().includes(t.trigger.toLowerCase()),

@@ -1,4 +1,6 @@
 // plugins/telegram/src/agents/BaseAgent.ts
+import fs from "fs";
+import path from "path";
 import EventEmitter from "events";
 import { TelegramStorage } from "../storage/TelegramStorage";
 import {
@@ -127,13 +129,67 @@ export abstract class BaseAgent extends EventEmitter {
     }
   }
 
-  /** Build a default system prompt for a task session. */
-  protected buildTaskSystemPrompt(task: string): string {
-    return (
-      `You are a Telegram assistant. You have been assigned the following task:\n\n${task}\n\n` +
-      `Conduct a helpful, focused conversation to complete this task. ` +
-      `Once the task is complete, clearly inform the user.`
-    );
+  /**
+   * Build a rich system prompt for this agent by loading its workspace files
+   * (SOUL.md, AGENTS.md, IDENTITY.md, USER.md, MEMORY.md). Falls back to a
+   * minimal default when no workspace files exist.
+   *
+   * @param task  Optional task description appended as a "## Task" section.
+   */
+  protected async buildRichSystemPrompt(task?: string): Promise<string> {
+    const workspaceDir = this.storage.getAgentWorkspaceDir(this.id);
+    const sections: string[] = [];
+
+    const identity = await this.readWorkspaceFile(workspaceDir, "IDENTITY.md");
+    if (identity) sections.push(`## Identity\n${identity}`);
+
+    const soul = await this.readWorkspaceFile(workspaceDir, "SOUL.md");
+    if (soul) sections.push(`## Persona\n${soul}`);
+
+    const agents = await this.readWorkspaceFile(workspaceDir, "AGENTS.md");
+    if (agents) sections.push(`## Instructions\n${agents}`);
+
+    const user = await this.readWorkspaceFile(workspaceDir, "USER.md");
+    if (user) sections.push(`## User\n${user}`);
+
+    const memory = await this.readWorkspaceFile(workspaceDir, "MEMORY.md");
+    if (memory) sections.push(`## Memory\n${memory}`);
+
+    if (task) {
+      sections.push(
+        `## Task\n${task}\n\n` +
+          `Conduct a helpful, focused conversation to complete this task. ` +
+          `Once the task is complete, clearly inform the user.`,
+      );
+    }
+
+    if (sections.length === 0) {
+      // No workspace files configured — use sensible fallbacks.
+      return task
+        ? `You are a Telegram assistant. You have been assigned the following task:\n\n${task}\n\n` +
+            `Conduct a helpful, focused conversation to complete this task. ` +
+            `Once the task is complete, clearly inform the user.`
+        : "You are a helpful Telegram assistant. Be concise and friendly.";
+    }
+
+    return `You are a Telegram agent.\n\n${sections.join("\n\n")}`;
+  }
+
+  /** Read a file from the agent workspace directory, returning "" when absent. */
+  private async readWorkspaceFile(workspaceDir: string, name: string): Promise<string> {
+    try {
+      const content = await fs.promises.readFile(path.join(workspaceDir, name), "utf-8");
+      return content.trim();
+    } catch (err: unknown) {
+      // Silently skip missing files; log anything unexpected.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        this.logger.warn(`[TG:${this.name}] could not read workspace file ${name}`, {
+          e: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return "";
+    }
   }
 
   protected pushEvent(type: TelegramEvent["type"], payload: Record<string, unknown>) {

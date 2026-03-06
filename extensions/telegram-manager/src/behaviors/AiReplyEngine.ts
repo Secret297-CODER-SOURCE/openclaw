@@ -39,7 +39,7 @@ export async function aiReply(
 
   const res = await client.messages.create({
     model: "claude-sonnet-4-20250514",
-    max_tokens: 1024,
+    max_tokens: 2048,
     system: systemPrompt,
     messages: hist,
   });

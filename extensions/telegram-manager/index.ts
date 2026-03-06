@@ -165,7 +165,8 @@ Actions:
 - get_mission_messages  — get inter-agent messages for a mission (requires missionId; optional: limit)
 - send_agent_message    — send a message from one agent to another within a mission (requires fromAgentId, toAgentId, missionId, content)
 - get_core_files        — list core workspace files for an agent (requires agentId)
-- set_core_file         — write a core workspace file for an agent (requires agentId, filename, content)`,
+- set_core_file         — write a core workspace file for an agent (requires agentId, filename, content)
+- get_core_file_content — read the content of a core workspace file (requires agentId, filename)`,
       parameters: {
         type: "object",
         properties: {
@@ -190,6 +191,7 @@ Actions:
               "send_agent_message",
               "get_core_files",
               "set_core_file",
+              "get_core_file_content",
             ],
             description: "Action to perform",
           },
@@ -447,9 +449,20 @@ Actions:
               });
               return jsonResult({ ok: true });
             }
+            case "get_core_file_content": {
+              if (!args.agentId)
+                return jsonResult({ error: "agentId is required for 'get_core_file_content'" });
+              if (!args.filename)
+                return jsonResult({ error: "filename is required for 'get_core_file_content'" });
+              const result = await callPlugin("telegram.agent.getCoreFileContent", {
+                agentId: args.agentId,
+                filename: args.filename,
+              });
+              return jsonResult(result);
+            }
             default:
               return jsonResult({
-                error: `Unknown action: '${action}'. Valid actions: list, get, start, stop, restart, send_message, get_events, assign_task, list_task_sessions, complete_task_session, create_mission, list_missions, get_mission, complete_mission, get_mission_messages, send_agent_message, get_core_files, set_core_file`,
+                error: `Unknown action: '${action}'. Valid actions: list, get, start, stop, restart, send_message, get_events, assign_task, list_task_sessions, complete_task_session, create_mission, list_missions, get_mission, complete_mission, get_mission_messages, send_agent_message, get_core_files, set_core_file, get_core_file_content`,
               });
           }
         } catch (err) {

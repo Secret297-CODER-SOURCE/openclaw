@@ -27,8 +27,11 @@ export type TelegramPluginConfig = {
 export class TelegramStorage {
   private db: Database.Database;
   private configFile: string;
+  /** The telegram plugin data directory (e.g. ~/.openclaw/data/telegram). */
+  readonly dataDir: string;
 
   constructor(dataDir: string) {
+    this.dataDir = dataDir;
     fs.mkdirSync(dataDir, { recursive: true });
     this.configFile = path.join(dataDir, "plugin-config.json");
     this.db = new Database(path.join(dataDir, "telegram.db"));
@@ -331,6 +334,13 @@ export class TelegramStorage {
         ON CONFLICT(chat_key) DO UPDATE SET messages=excluded.messages, updated_at=excluded.updated_at
       `)
       .run(chatKey, serialized, new Date().toISOString());
+  }
+
+  // ─── Agent workspace ─────────────────────────────────────────────────────
+
+  /** Returns the workspace directory path for a given agent (may not exist yet). */
+  getAgentWorkspaceDir(agentId: string): string {
+    return path.join(this.dataDir, "agents", agentId, "workspace");
   }
 
   // ─── Plugin credentials config ───────────────────────────────────────────

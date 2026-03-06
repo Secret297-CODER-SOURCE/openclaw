@@ -284,8 +284,9 @@ export class UserBotAgent extends BaseAgent {
 
         const text = msg.message || "";
         this.trackMessage("in", text, chatId);
+        // Use custom system prompt if provided, otherwise build from workspace files.
         const systemPrompt =
-          taskSession.systemPrompt ?? this.buildTaskSystemPrompt(taskSession.task);
+          taskSession.systemPrompt ?? (await this.buildRichSystemPrompt(taskSession.task));
         // Use a stable per-chat key so history is shared with auto_reply —
         // continuous dialogue is preserved when the task session ends.
         const chatKey = `${this.id}:${chatId}`;
@@ -329,8 +330,9 @@ export class UserBotAgent extends BaseAgent {
 
         let reply = "";
         if (cfg.replyMode === "ai") {
-          // Pass storage for history persistence and use the stable per-chat key.
-          reply = await aiReply(text, key, cfg.aiSystemPrompt, this.storage);
+          // Use configured system prompt if present, otherwise build from workspace files.
+          const systemPrompt = cfg.aiSystemPrompt ?? (await this.buildRichSystemPrompt());
+          reply = await aiReply(text, key, systemPrompt, this.storage);
         } else {
           const tpl = cfg.templates?.find((t: any) =>
             text.toLowerCase().includes(t.trigger.toLowerCase()),
