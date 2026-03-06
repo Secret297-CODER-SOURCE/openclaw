@@ -1,7 +1,7 @@
+import EventEmitter from "events";
 // plugins/telegram/src/agents/BaseAgent.ts
 import fs from "fs";
 import path from "path";
-import EventEmitter from "events";
 import { TelegramStorage } from "../storage/TelegramStorage";
 import {
   AgentRecord,
