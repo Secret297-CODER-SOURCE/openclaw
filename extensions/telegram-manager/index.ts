@@ -64,8 +64,30 @@ async function exchangeCopilotToken(githubToken: string): Promise<CachedCopilotT
 }
 
 /**
- * Try to set up the GitHub Copilot adapter by reading the token cache written
- * by OpenClaw core, or by exchanging a fresh token from the environment.
+ * Read the GitHub token stored by OpenClaw's auth profile system.
+ * Stored at: <stateDir>/agents/main/agent/auth-profiles.json
+ * under profiles["github-copilot:github"].token
+ */
+function readStoredGithubToken(stateDir: string): string | null {
+  const authProfilePath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
+  try {
+    const raw = fs.readFileSync(authProfilePath, "utf-8");
+    const store = JSON.parse(raw) as {
+      profiles?: Record<string, { type?: string; token?: string }>;
+    };
+    const profile = store.profiles?.["github-copilot:github"];
+    const token = profile?.token?.trim();
+    return token || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Try to set up the GitHub Copilot adapter by:
+ * 1. Using the cached short-lived Copilot token (valid for ~30 min)
+ * 2. Exchanging a fresh token via the stored GitHub auth profile
+ * 3. Exchanging via env vars as last resort
  * Returns true when the adapter was configured successfully.
  */
 async function trySetCopilotAdapter(logger: ILogger): Promise<boolean> {
@@ -74,7 +96,8 @@ async function trySetCopilotAdapter(logger: ILogger): Promise<boolean> {
   const model = process.env.TG_AI_MODEL?.trim() || "gpt-4o";
   const safetyMarginMs = 5 * 60 * 1000;
 
-  // 1. Try the cached Copilot token written by OpenClaw core.
+  // 1. Try the cached short-lived Copilot API token (written by OpenClaw core
+  //    after the last successful API call). Only use if still has 5+ min left.
   try {
     const raw = fs.readFileSync(tokenCachePath, "utf-8");
     const cached = JSON.parse(raw) as CachedCopilotToken;
@@ -88,29 +111,35 @@ async function trySetCopilotAdapter(logger: ILogger): Promise<boolean> {
     // No valid cached token — fall through to token exchange.
   }
 
-  // 2. Exchange a fresh Copilot token using any available GitHub token.
+  // 2. Resolve GitHub token: prefer stored auth profile (set by OpenClaw login),
+  //    fall back to environment variables.
   const githubToken =
+    readStoredGithubToken(stateDir) ||
     process.env.COPILOT_GITHUB_TOKEN?.trim() ||
     process.env.GH_TOKEN?.trim() ||
     process.env.GITHUB_TOKEN?.trim();
-  if (githubToken) {
-    const fresh = await exchangeCopilotToken(githubToken);
-    if (fresh) {
-      // Best-effort cache the new token so the next restart is instant.
-      try {
-        fs.mkdirSync(path.dirname(tokenCachePath), { recursive: true });
-        fs.writeFileSync(tokenCachePath, JSON.stringify({ ...fresh, updatedAt: Date.now() }));
-      } catch {
-        // Non-fatal — token caching is optional.
-      }
-      const base = deriveCopilotBase(fresh.token);
-      setModelAdapter(makeOpenAiCompatAdapter(`${base}/v1`, fresh.token, model));
-      logger.info(`[TelegramPlugin] AI adapter: GitHub Copilot (fresh token, model=${model})`);
-      return true;
-    }
-    logger.warn("[TelegramPlugin] GitHub token found but Copilot token exchange failed");
+
+  if (!githubToken) {
+    return false;
   }
 
+  // 3. Exchange GitHub token for a short-lived Copilot API token.
+  const fresh = await exchangeCopilotToken(githubToken);
+  if (fresh) {
+    // Best-effort cache the new token so the next restart is instant.
+    try {
+      fs.mkdirSync(path.dirname(tokenCachePath), { recursive: true });
+      fs.writeFileSync(tokenCachePath, JSON.stringify({ ...fresh, updatedAt: Date.now() }));
+    } catch {
+      // Non-fatal — token caching is optional.
+    }
+    const base = deriveCopilotBase(fresh.token);
+    setModelAdapter(makeOpenAiCompatAdapter(`${base}/v1`, fresh.token, model));
+    logger.info(`[TelegramPlugin] AI adapter: GitHub Copilot (fresh token, model=${model})`);
+    return true;
+  }
+
+  logger.warn("[TelegramPlugin] GitHub token found but Copilot token exchange failed");
   return false;
 }
 
