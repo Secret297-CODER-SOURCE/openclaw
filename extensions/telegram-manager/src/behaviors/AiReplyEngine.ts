@@ -1,7 +1,31 @@
 // plugins/telegram/src/behaviors/AiReplyEngine.ts
 import Anthropic from "@anthropic-ai/sdk";
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// Lazy client — created on the first AI call so that agents can start without
+// ANTHROPIC_API_KEY set; a clear error is thrown at call-time instead.
+let cachedClient: Anthropic | null = null;
+
+function ensureClient(): Anthropic {
+  if (!cachedClient) {
+    const key = process.env.ANTHROPIC_API_KEY;
+    if (!key) {
+      throw new Error(
+        "ANTHROPIC_API_KEY environment variable is not set. " +
+          "Set it to enable AI replies in Telegram agents.",
+      );
+    }
+    cachedClient = new Anthropic({ apiKey: key });
+  }
+  return cachedClient;
+}
+
+/**
+ * Model used for AI replies. Override via TG_AI_MODEL environment variable.
+ * Defaults to claude-3-5-sonnet-20241022 which is a stable, widely-available model.
+ */
+function resolveModel(): string {
+  return process.env.TG_AI_MODEL?.trim() || "claude-3-5-sonnet-20241022";
+}
 
 // In-memory cache for fast access; backed by optional persistent storage.
 const histories = new Map<string, { role: "user" | "assistant"; content: string }[]>();
@@ -37,8 +61,8 @@ export async function aiReply(
   hist.push({ role: "user", content: text });
   if (hist.length > MAX_HISTORY) hist.splice(0, hist.length - MAX_HISTORY);
 
-  const res = await client.messages.create({
-    model: "claude-sonnet-4-20250514",
+  const res = await ensureClient().messages.create({
+    model: resolveModel(),
     max_tokens: 2048,
     system: systemPrompt,
     messages: hist,

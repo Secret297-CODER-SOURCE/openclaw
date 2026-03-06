@@ -246,7 +246,8 @@ export class BotAgent extends BaseAgent {
           this.trackMessage("out", reply, chatId);
         }
       } catch (e) {
-        this.logger.warn(`[TG:${this.name}] task session reply failed`, { e: String(e) });
+        const errMsg = e instanceof Error ? e.message : String(e);
+        this.logger.warn(`[TG:${this.name}] task session reply failed: ${errMsg}`);
       }
       return;
     }
@@ -259,7 +260,13 @@ export class BotAgent extends BaseAgent {
       await ctx.replyWithChatAction("typing");
       // Use configured system prompt if present, otherwise build from workspace files.
       const systemPrompt = cfg.aiSystemPrompt ?? (await this.buildRichSystemPrompt());
-      reply = await aiReply(text, chatKey, systemPrompt, this.storage);
+      try {
+        reply = await aiReply(text, chatKey, systemPrompt, this.storage);
+      } catch (e) {
+        const errMsg = e instanceof Error ? e.message : String(e);
+        this.logger.warn(`[TG:${this.name}] auto_reply AI failed: ${errMsg}`);
+        return;
+      }
     } else {
       const tpl = cfg.templates?.find((t: any) =>
         text.toLowerCase().includes(t.trigger.toLowerCase()),
