@@ -9,166 +9,46 @@ import type {
 import { jsonResult } from "openclaw/plugin-sdk";
 import { makeOpenAiCompatAdapter, setModelAdapter } from "./src/behaviors/AiReplyEngine.js";
 import { TelegramPlugin } from "./src/TelegramPlugin";
-import type { GatewayMessage, IGatewayContext, ILogger } from "./src/types";
+import type { GatewayMessage, IGatewayContext } from "./src/types";
 
 function resolveStateDir(): string {
   return process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
 }
 
-// ─── GitHub Copilot adapter auto-detection ────────────────────────────────────
+// ─── Gateway AI adapter ───────────────────────────────────────────────────────
 
-/** Cached Copilot token file shape (written by OpenClaw core). */
-type CachedCopilotToken = {
-  token: string;
-  /** milliseconds since epoch */
-  expiresAt: number;
-};
-
-function deriveCopilotBase(token: string): string {
-  const match = token.match(/(?:^|;)\s*proxy-ep=([^;\s]+)/i);
-  const proxyEp = match?.[1]?.trim();
-  if (proxyEp) {
-    const host = proxyEp.replace(/^https?:\/\//, "").replace(/^proxy\./i, "api.");
-    if (host) return `https://${host}`;
-  }
-  return "https://api.individual.githubcopilot.com";
-}
-
-async function exchangeCopilotToken(githubToken: string): Promise<CachedCopilotToken | null> {
+/**
+ * Read the gateway auth token from openclaw.json (gateway.auth.token).
+ * Env var OPENCLAW_GATEWAY_TOKEN always takes priority.
+ */
+function readGatewayToken(stateDir: string): string {
+  const envToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
+  if (envToken) return envToken;
   try {
-    const res = await fetch("https://api.github.com/copilot_internal/v2/token", {
-      headers: { Authorization: `Bearer ${githubToken}`, "User-Agent": "openclaw-telegram" },
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { token?: string; expires_at?: number | string };
-    const token = data.token?.trim();
-    if (!token) return null;
-    const raw = data.expires_at;
-    let expiresAt: number;
-    if (typeof raw === "number") {
-      expiresAt = raw > 10_000_000_000 ? raw : raw * 1000;
-    } else if (typeof raw === "string") {
-      const n = parseInt(raw, 10);
-      expiresAt = Number.isFinite(n)
-        ? n > 10_000_000_000
-          ? n
-          : n * 1000
-        : Date.now() + 25 * 60 * 1000;
-    } else {
-      expiresAt = Date.now() + 25 * 60 * 1000;
-    }
-    return { token, expiresAt };
+    const raw = fs.readFileSync(path.join(stateDir, "openclaw.json"), "utf-8");
+    const cfg = JSON.parse(raw) as { gateway?: { auth?: { token?: string } } };
+    return cfg?.gateway?.auth?.token?.trim() || "";
   } catch {
-    return null;
+    return "";
   }
 }
 
 /**
- * Read the GitHub token stored by OpenClaw's auth profile system.
- * Stored at: <stateDir>/agents/main/agent/auth-profiles.json
- * under profiles["github-copilot:github"].token
+ * Configure the AI adapter to route through the local OpenClaw gateway
+ * (/v1/chat/completions). This means the telegram-manager uses whatever AI
+ * provider the main agent is configured with (GitHub Copilot, etc.) — no
+ * separate keys required. The gateway maintains per-chat sessions via the
+ * `user` field which is set to the telegram chatKey.
  */
-function readStoredGithubToken(stateDir: string): string | null {
-  const authProfilePath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
-  try {
-    const raw = fs.readFileSync(authProfilePath, "utf-8");
-    const store = JSON.parse(raw) as {
-      profiles?: Record<string, { type?: string; token?: string }>;
-    };
-    const profile = store.profiles?.["github-copilot:github"];
-    const token = profile?.token?.trim();
-    return token || null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Try to set up the GitHub Copilot adapter by:
- * 1. Using the cached short-lived Copilot token (valid for ~30 min)
- * 2. Exchanging a fresh token via the stored GitHub auth profile
- * 3. Exchanging via env vars as last resort
- * Returns true when the adapter was configured successfully.
- */
-async function trySetCopilotAdapter(logger: ILogger): Promise<boolean> {
+function configureGatewayAdapter(logger: IGatewayContext["logger"]): void {
   const stateDir = resolveStateDir();
-  const tokenCachePath = path.join(stateDir, "credentials", "github-copilot.token.json");
+  const port = parseInt(process.env.OPENCLAW_GATEWAY_PORT?.trim() || "18789", 10);
   const model = process.env.TG_AI_MODEL?.trim() || "gpt-4o";
-  const safetyMarginMs = 5 * 60 * 1000;
+  const token = readGatewayToken(stateDir);
+  const baseUrl = `http://127.0.0.1:${port}/v1`;
 
-  // 1. Try the cached short-lived Copilot API token (written by OpenClaw core
-  //    after the last successful API call). Only use if still has 5+ min left.
-  try {
-    const raw = fs.readFileSync(tokenCachePath, "utf-8");
-    const cached = JSON.parse(raw) as CachedCopilotToken;
-    if (cached.token && cached.expiresAt - Date.now() > safetyMarginMs) {
-      const base = deriveCopilotBase(cached.token);
-      setModelAdapter(makeOpenAiCompatAdapter(`${base}/v1`, cached.token, model));
-      logger.info(`[TelegramPlugin] AI adapter: GitHub Copilot (cached token, model=${model})`);
-      return true;
-    }
-  } catch {
-    // No valid cached token — fall through to token exchange.
-  }
-
-  // 2. Resolve GitHub token: prefer stored auth profile (set by OpenClaw login),
-  //    fall back to environment variables.
-  const githubToken =
-    readStoredGithubToken(stateDir) ||
-    process.env.COPILOT_GITHUB_TOKEN?.trim() ||
-    process.env.GH_TOKEN?.trim() ||
-    process.env.GITHUB_TOKEN?.trim();
-
-  if (!githubToken) {
-    return false;
-  }
-
-  // 3. Exchange GitHub token for a short-lived Copilot API token.
-  const fresh = await exchangeCopilotToken(githubToken);
-  if (fresh) {
-    // Best-effort cache the new token so the next restart is instant.
-    try {
-      fs.mkdirSync(path.dirname(tokenCachePath), { recursive: true });
-      fs.writeFileSync(tokenCachePath, JSON.stringify({ ...fresh, updatedAt: Date.now() }));
-    } catch {
-      // Non-fatal — token caching is optional.
-    }
-    const base = deriveCopilotBase(fresh.token);
-    setModelAdapter(makeOpenAiCompatAdapter(`${base}/v1`, fresh.token, model));
-    logger.info(`[TelegramPlugin] AI adapter: GitHub Copilot (fresh token, model=${model})`);
-    return true;
-  }
-
-  logger.warn("[TelegramPlugin] GitHub token found but Copilot token exchange failed");
-  return false;
-}
-
-/**
- * Auto-detect the best available AI adapter and configure it once at startup.
- * Falls back gracefully so the plugin still starts even when no AI is configured
- * (agents will log a warning on the first AI reply attempt).
- */
-async function autoConfigureAiAdapter(logger: ILogger): Promise<void> {
-  // If an explicit env-var provider is set, AiReplyEngine will use it automatically.
-  if (process.env.ANTHROPIC_API_KEY?.trim()) {
-    logger.info("[TelegramPlugin] AI adapter: Anthropic (ANTHROPIC_API_KEY)");
-    return;
-  }
-  if (process.env.OPENAI_API_KEY?.trim() || process.env.OPENAI_BASE_URL?.trim()) {
-    const model = process.env.TG_AI_MODEL?.trim() || "gpt-4o";
-    logger.info(`[TelegramPlugin] AI adapter: OpenAI-compatible (model=${model})`);
-    return;
-  }
-
-  // Try GitHub Copilot (uses OpenClaw's own cached credentials).
-  const configured = await trySetCopilotAdapter(logger);
-  if (!configured) {
-    logger.warn(
-      "[TelegramPlugin] No AI provider detected. " +
-        "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or configure GitHub Copilot in OpenClaw. " +
-        "AI replies will fail until a provider is available.",
-    );
-  }
+  setModelAdapter(makeOpenAiCompatAdapter(baseUrl, token, model));
+  logger.info(`[TelegramPlugin] AI adapter: via OpenClaw gateway (port=${port}, model=${model})`);
 }
 
 const TELEGRAM_METHODS = [
@@ -242,9 +122,9 @@ const plugin = {
 
     // Initialize TelegramPlugin when the gateway is ready
     api.on("gateway_start", async () => {
-      // Auto-detect and configure the AI adapter before agents start accepting
-      // messages — ensures aiReply() has a working backend from the first turn.
-      await autoConfigureAiAdapter(ctx.logger);
+      // Route AI calls through the local OpenClaw gateway so all requests go
+      // through the main agent's configured provider (GitHub Copilot, etc.).
+      configureGatewayAdapter(ctx.logger);
       await telegramPlugin.init(ctx);
     });
 
