@@ -3,7 +3,14 @@ import { Bot, Context } from "grammy";
 import cron from "node-cron";
 import { aiReply } from "../behaviors/AiReplyEngine";
 import { TelegramStorage } from "../storage/TelegramStorage";
-import { AgentRecord, BotCredentials, BehaviorConfig, ILogger } from "../types";
+import {
+  AgentRecord,
+  BotCredentials,
+  BehaviorConfig,
+  ILogger,
+  TaskSession,
+  TaskSessionBehavior,
+} from "../types";
 import { BaseAgent } from "./BaseAgent";
 
 /** Minimal manager interface to avoid circular import with AgentManager */
@@ -222,6 +229,23 @@ export class BotAgent extends BaseAgent {
     );
   }
 
+  /**
+   * Find an active task session by the sender's Telegram username.
+   * Called when the exact numeric chatId lookup misses — which happens when
+   * the session was stored with a username (e.g. "worker_297") before the bot
+   * received an update from that user and learned their numeric Telegram ID.
+   */
+  private findTaskSessionByUsername(ctx: Context): TaskSession | undefined {
+    const username = ctx.message?.from?.username;
+    if (!username) return undefined;
+    const b = this.getBehavior<TaskSessionBehavior>("task_session");
+    if (!b) return undefined;
+    const lower = username.toLowerCase();
+    return b.sessions.find(
+      (s) => s.status === "active" && s.chatId.replace(/^@/, "").toLowerCase() === lower,
+    );
+  }
+
   private async handleText(ctx: Context) {
     const text = ctx.message?.text ?? "";
     const chatId = String(ctx.chat?.id ?? "");
@@ -232,8 +256,20 @@ export class BotAgent extends BaseAgent {
     // when the mode switches or the agent restarts.
     const chatKey = `${this.id}:${chatId}`;
 
-    // Task sessions take priority over auto_reply
-    const taskSession = this.getTaskSession(chatId);
+    // Task sessions take priority over auto_reply.
+    // First try an exact numeric chatId match; fall back to username matching
+    // for sessions created before the bot knew the user's numeric Telegram ID.
+    let taskSession = this.getTaskSession(chatId);
+    if (!taskSession) {
+      const byUsername = this.findTaskSessionByUsername(ctx);
+      if (byUsername) {
+        // Upgrade the stored chatId to the numeric value so all future
+        // lookups hit the fast path without needing username resolution.
+        byUsername.chatId = chatId;
+        this.upsertTaskSession(byUsername);
+        taskSession = byUsername;
+      }
+    }
     if (taskSession) {
       await ctx.replyWithChatAction("typing");
       // Use custom system prompt if provided, otherwise build from workspace files.

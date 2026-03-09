@@ -8,6 +8,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Telegram: persist group context history to disk so extended group conversations survive bot restarts (`channels.telegram.historyLimit` must be > 0, which is the default).
+
 ### Breaking
 
 ### Fixes

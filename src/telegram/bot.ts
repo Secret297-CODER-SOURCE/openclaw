@@ -3,6 +3,7 @@ import { apiThrottler } from "@grammyjs/transformer-throttler";
 import { type Message, type UserFromGetMe } from "@grammyjs/types";
 import type { ApiClientOptions } from "grammy";
 import { Bot, webhookCallback } from "grammy";
+import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort.js";
@@ -40,6 +41,11 @@ import {
   resolveTelegramStreamMode,
 } from "./bot/helpers.js";
 import { resolveTelegramFetch } from "./fetch.js";
+import {
+  loadGroupHistoriesFromDisk,
+  resolveGroupHistoryPersistPath,
+  saveGroupHistoriesToDisk,
+} from "./group-history-persist.js";
 
 export type TelegramBotOptions = {
   token: string;
@@ -265,6 +271,18 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
+  // Persist group context history across restarts so long-running group
+  // conversations survive bot restarts.  Only active when historyLimit > 0.
+  const groupHistoryPersistPath =
+    historyLimit > 0
+      ? resolveGroupHistoryPersistPath(resolveOpenClawAgentDir(), account.accountId)
+      : undefined;
+  if (groupHistoryPersistPath) {
+    const loaded = loadGroupHistoriesFromDisk(groupHistoryPersistPath);
+    for (const [key, entries] of loaded) {
+      groupHistories.set(key, entries);
+    }
+  }
   const textLimit = resolveTextChunkLimit(cfg, "telegram", account.accountId);
   const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
   const allowFrom = opts.allowFrom ?? telegramCfg.allowFrom;
@@ -348,7 +366,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     return { groupConfig, topicConfig };
   };
 
-  const processMessage = createTelegramMessageProcessor({
+  const processMessageBase = createTelegramMessageProcessor({
     bot,
     cfg,
     account,
@@ -369,6 +387,14 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     textLimit,
     opts,
   });
+  // After each message, persist the updated group history so extended group
+  // conversations survive bot restarts.
+  const processMessage = groupHistoryPersistPath
+    ? async (...args: Parameters<typeof processMessageBase>) => {
+        await processMessageBase(...args);
+        saveGroupHistoriesToDisk(groupHistoryPersistPath, groupHistories);
+      }
+    : processMessageBase;
 
   registerTelegramNativeCommands({
     bot,

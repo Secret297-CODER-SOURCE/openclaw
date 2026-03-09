@@ -623,9 +623,11 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `channels.telegram.mediaMaxMb` (default 5) caps inbound Telegram media download/processing size.
     - `channels.telegram.timeoutSeconds` overrides Telegram API client timeout (if unset, grammY default applies).
     - group context history uses `channels.telegram.historyLimit` or `messages.groupChat.historyLimit` (default 50); `0` disables.
+    - group context history is **persisted to disk** and restored on bot restart when `historyLimit > 0`, enabling extended group conversations that survive restarts. Stored at `~/.openclaw/agents/default/agent/telegram-group-history-<accountId>.json`.
     - DM history controls:
       - `channels.telegram.dmHistoryLimit`
       - `channels.telegram.dms["<user_id>"].historyLimit`
+    - for persistent per-user DM memory use `session.dmScope: "per-peer"` — each Telegram user gets an isolated session that accumulates conversation history across sessions.
     - outbound Telegram API retries are configurable via `channels.telegram.retry`.
 
     CLI send target can be numeric chat ID or username:
