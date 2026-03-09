@@ -284,22 +284,26 @@ export function handleControlUiHttpRequest(
   if (!urlRaw) {
     return false;
   }
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    res.statusCode = 405;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("Method Not Allowed");
-    return true;
-  }
 
+  // Resolve path before method check so we only claim ownership of paths
+  // this handler is actually responsible for.  A catch-all method check would
+  // incorrectly return 405 for unrelated API paths (e.g. /v1/chat/completions)
+  // that should fall through to the 404 handler.
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
 
   if (!basePath) {
     if (pathname === "/ui" || pathname.startsWith("/ui/")) {
+      // Legacy /ui path — always 404 regardless of method.
       applyControlUiSecurityHeaders(res);
       respondNotFound(res);
       return true;
+    }
+    // No explicit basePath: control UI acts as a root catch-all for GET/HEAD.
+    // Non-GET/HEAD requests fall through so the default handler returns 404.
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      return false;
     }
   }
 
@@ -313,6 +317,13 @@ export function handleControlUiHttpRequest(
     }
     if (!pathname.startsWith(`${basePath}/`)) {
       return false;
+    }
+    // Path is under the configured basePath — UI only serves GET/HEAD.
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      res.statusCode = 405;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Method Not Allowed");
+      return true;
     }
   }
 
