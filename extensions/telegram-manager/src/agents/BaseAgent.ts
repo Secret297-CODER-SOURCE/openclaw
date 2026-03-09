@@ -136,7 +136,47 @@ export abstract class BaseAgent extends EventEmitter {
    *
    * @param task  Optional task description appended as a "## Task" section.
    */
-  protected async buildRichSystemPrompt(task?: string): Promise<string> {
+  /**
+   * Ensure default workspace files exist for this agent.
+   * Called on agent start so the agent has a personality from the first message
+   * even before the operator manually edits the files through the UI.
+   * Existing files are never overwritten.
+   */
+  async ensureWorkspaceFiles(): Promise<void> {
+    const workspaceDir = this.storage.getAgentWorkspaceDir(this.id);
+    fs.mkdirSync(workspaceDir, { recursive: true });
+
+    const defaults: Record<string, string> = {
+      "IDENTITY.md": `# Identity\n\nName: ${this.name}\nRole: Telegram assistant\n\nYou are ${this.name}, a friendly and attentive Telegram assistant. You have your own personality and speak naturally, like a real person — not like a bot.`,
+      "SOUL.md": `# Persona\n\nYou are warm, curious, and genuinely interested in the people you talk with. You remember context from earlier in the conversation and refer back to it naturally. You are helpful but never robotic — you use natural language, ask follow-up questions, and show real engagement.`,
+      "AGENTS.md": `# Instructions\n\n- Speak naturally and conversationally, as a real person would.\n- Remember what the user has told you earlier in the conversation and refer back to it.\n- Ask clarifying questions when something is unclear.\n- Keep responses concise unless the user needs a detailed explanation.\n- Never say you are an AI or a bot unless directly asked.\n- Adapt your tone to match the user — casual with casual people, more structured with technical ones.`,
+      "USER.md": `# User Notes\n\n(Update this file with what you learn about the people you regularly talk with — their preferences, context, and ongoing topics.)`,
+      "MEMORY.md": `# Memory\n\n(Use this file to store important facts, recurring topics, and key context that you want to remember across sessions.)`,
+    };
+
+    for (const [filename, content] of Object.entries(defaults)) {
+      const filePath = path.join(workspaceDir, filename);
+      try {
+        await fs.promises.access(filePath);
+        // File already exists — do not overwrite operator's edits.
+      } catch {
+        await fs.promises.writeFile(filePath, content, "utf-8");
+        this.logger.info(`[TG:${this.name}] created default workspace file: ${filename}`);
+      }
+    }
+  }
+
+  /**
+   * Build a rich system prompt for this agent by loading its workspace files
+   * (SOUL.md, AGENTS.md, IDENTITY.md, USER.md, MEMORY.md). Falls back to a
+   * minimal default when no workspace files exist.
+   *
+   * @param task      Optional task description appended as a "## Task" section.
+   * @param chatKey   Optional per-user chat key; when provided, injects the
+   *                  last N turns of that user's conversation history so the
+   *                  agent can reference prior exchanges in its replies.
+   */
+  protected async buildRichSystemPrompt(task?: string, chatKey?: string): Promise<string> {
     const workspaceDir = this.storage.getAgentWorkspaceDir(this.id);
     const sections: string[] = [];
 
@@ -154,6 +194,18 @@ export abstract class BaseAgent extends EventEmitter {
 
     const memory = await this.readWorkspaceFile(workspaceDir, "MEMORY.md");
     if (memory) sections.push(`## Memory\n${memory}`);
+
+    // Inject a brief summary of the most recent exchanges with this user so the
+    // agent can reference them naturally (e.g. "as I mentioned earlier…").
+    // We include only the last 6 turns to keep the prompt compact.
+    if (chatKey) {
+      const history = this.storage.loadConversationHistory(chatKey);
+      if (history.length > 0) {
+        const recent = history.slice(-6);
+        const lines = recent.map((m) => `${m.role === "user" ? "User" : "You"}: ${m.content}`);
+        sections.push(`## Recent conversation with this user\n${lines.join("\n")}`);
+      }
+    }
 
     if (task) {
       sections.push(

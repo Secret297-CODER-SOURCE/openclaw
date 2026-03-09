@@ -91,6 +91,7 @@ export class UserBotAgent extends BaseAgent {
         this.storage.updateSession(this.id, saved);
       }
 
+      await this.ensureWorkspaceFiles();
       await this.registerBehaviors(this.record.behaviors);
       this.setStatus("running");
       this.logger.info(`[TG:${this.name}] userbot online (${this.creds.phoneNumber})`);
@@ -292,12 +293,13 @@ export class UserBotAgent extends BaseAgent {
 
         const text = msg.message || "";
         this.trackMessage("in", text, chatId);
-        // Use custom system prompt if provided, otherwise build from workspace files.
-        const systemPrompt =
-          taskSession.systemPrompt ?? (await this.buildRichSystemPrompt(taskSession.task));
         // Use a stable per-chat key so history is shared with auto_reply —
         // continuous dialogue is preserved when the task session ends.
         const chatKey = `${this.id}:${chatId}`;
+        // Use custom system prompt if provided, otherwise build from workspace files.
+        // Pass chatKey so the prompt includes a brief recap of prior exchanges.
+        const systemPrompt =
+          taskSession.systemPrompt ?? (await this.buildRichSystemPrompt(taskSession.task, chatKey));
         try {
           const reply = await aiReply(text, chatKey, systemPrompt, this.storage);
           if (reply) {
@@ -340,7 +342,8 @@ export class UserBotAgent extends BaseAgent {
         let reply = "";
         if (cfg.replyMode === "ai") {
           // Use configured system prompt if present, otherwise build from workspace files.
-          const systemPrompt = cfg.aiSystemPrompt ?? (await this.buildRichSystemPrompt());
+          const systemPrompt =
+            cfg.aiSystemPrompt ?? (await this.buildRichSystemPrompt(undefined, key));
           try {
             reply = await aiReply(text, key, systemPrompt, this.storage);
           } catch (e) {

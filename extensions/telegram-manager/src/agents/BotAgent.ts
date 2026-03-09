@@ -49,6 +49,7 @@ export class BotAgent extends BaseAgent {
 
     try {
       this.bot = new Bot(this.creds.token);
+      await this.ensureWorkspaceFiles();
       await this.registerBehaviors(this.record.behaviors);
       this.setupBaseHandlers();
 
@@ -274,7 +275,7 @@ export class BotAgent extends BaseAgent {
       await ctx.replyWithChatAction("typing");
       // Use custom system prompt if provided, otherwise build from workspace files.
       const systemPrompt =
-        taskSession.systemPrompt ?? (await this.buildRichSystemPrompt(taskSession.task));
+        taskSession.systemPrompt ?? (await this.buildRichSystemPrompt(taskSession.task, chatKey));
       try {
         const reply = await aiReply(text, chatKey, systemPrompt, this.storage);
         if (reply) {
@@ -295,7 +296,8 @@ export class BotAgent extends BaseAgent {
     if (cfg.replyMode === "ai") {
       await ctx.replyWithChatAction("typing");
       // Use configured system prompt if present, otherwise build from workspace files.
-      const systemPrompt = cfg.aiSystemPrompt ?? (await this.buildRichSystemPrompt());
+      const systemPrompt =
+        cfg.aiSystemPrompt ?? (await this.buildRichSystemPrompt(undefined, chatKey));
       try {
         reply = await aiReply(text, chatKey, systemPrompt, this.storage);
       } catch (e) {
