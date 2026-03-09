@@ -530,8 +530,11 @@ export class UserBotAgent extends BaseAgent {
     const wait = MIN_SEND_INTERVAL_MS - (now - last);
     if (wait > 0) await this.delay(wait);
 
+    // Pass numeric chat IDs as BigInt so gramjs uses the cached peer directly
+    // instead of trying to resolve the string as a username.
+    const peer = /^-?\d+$/.test(chatId) ? BigInt(chatId) : chatId;
     const doSend = () =>
-      this.client!.sendMessage(chatId, {
+      this.client!.sendMessage(peer, {
         message,
         ...(replyToMsgId ? { replyTo: replyToMsgId } : {}),
       });
