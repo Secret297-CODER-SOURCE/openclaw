@@ -10,6 +10,14 @@ import { BaseAgent } from "./BaseAgent";
 
 const cooldowns = new Map<string, number>();
 
+// Minimum ms between consecutive outbound messages to the same peer.
+// Sending too rapidly to one peer triggers PEER_FLOOD on userbot accounts.
+const MIN_SEND_INTERVAL_MS = 3_000;
+// How long to back off after a PEER_FLOOD before retrying (ms).
+const PEER_FLOOD_RETRY_MS = 60_000;
+// Map of chatId → timestamp of last outbound send (module-level, per agent instance key).
+const lastSentAt = new Map<string, number>();
+
 // WeakMap stores TelegramClient outside the instance so that structuredClone
 // (called by the pi-agent framework in emitContext) never traverses into it.
 // TelegramClient holds PromisedNetSockets which contains a live Promise and
@@ -293,7 +301,7 @@ export class UserBotAgent extends BaseAgent {
         try {
           const reply = await aiReply(text, chatKey, systemPrompt, this.storage);
           if (reply) {
-            await msg.reply({ message: reply });
+            await this.sendWithFloodGuard(chatId, reply, msg.id);
             this.trackMessage("out", reply, chatId);
           }
         } catch (e) {
@@ -348,7 +356,7 @@ export class UserBotAgent extends BaseAgent {
         }
 
         if (reply) {
-          await msg.reply({ message: reply });
+          await this.sendWithFloodGuard(chatId, reply, msg.id);
           cooldowns.set(key, Date.now());
           this.trackMessage("out", reply, chatId);
         }
@@ -500,6 +508,51 @@ export class UserBotAgent extends BaseAgent {
       configurable: true,
       enumerable: false, // non-enumerable -> skipped by structuredClone
     });
+  }
+
+  /**
+   * Send a reply message to a chat, enforcing a minimum inter-send delay and
+   * retrying once on PEER_FLOOD (Telegram's userbot rate-limit per peer).
+   *
+   * @param chatId  Numeric string chat/peer ID.
+   * @param message Text to send.
+   * @param replyToMsgId  Optional message to thread-reply to.
+   */
+  private async sendWithFloodGuard(
+    chatId: string,
+    message: string,
+    replyToMsgId?: number,
+  ): Promise<void> {
+    // Enforce minimum inter-send delay to the same peer.
+    const sendKey = `${this.id}:${chatId}`;
+    const now = Date.now();
+    const last = lastSentAt.get(sendKey) ?? 0;
+    const wait = MIN_SEND_INTERVAL_MS - (now - last);
+    if (wait > 0) await this.delay(wait);
+
+    const doSend = () =>
+      this.client!.sendMessage(chatId, {
+        message,
+        ...(replyToMsgId ? { replyTo: replyToMsgId } : {}),
+      });
+
+    try {
+      await doSend();
+      lastSentAt.set(sendKey, Date.now());
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // PEER_FLOOD: Telegram's anti-spam per-peer rate limit — back off and retry once.
+      if (msg.includes("PEER_FLOOD")) {
+        this.logger.warn(
+          `[TG:${this.name}] PEER_FLOOD for ${chatId}, retrying in ${PEER_FLOOD_RETRY_MS / 1000}s`,
+        );
+        await this.delay(PEER_FLOOD_RETRY_MS);
+        await doSend();
+        lastSentAt.set(sendKey, Date.now());
+      } else {
+        throw e;
+      }
+    }
   }
 
   private postWebhook(url: string, body: unknown) {
