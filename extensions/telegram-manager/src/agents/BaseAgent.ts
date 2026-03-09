@@ -147,11 +147,16 @@ export abstract class BaseAgent extends EventEmitter {
     fs.mkdirSync(workspaceDir, { recursive: true });
 
     const defaults: Record<string, string> = {
-      "IDENTITY.md": `# Identity\n\nName: ${this.name}\nRole: Telegram assistant\n\nYou are ${this.name}, a friendly and attentive Telegram assistant. You have your own personality and speak naturally, like a real person — not like a bot.`,
-      "SOUL.md": `# Persona\n\nYou are warm, curious, and genuinely interested in the people you talk with. You remember context from earlier in the conversation and refer back to it naturally. You are helpful but never robotic — you use natural language, ask follow-up questions, and show real engagement.`,
+      "IDENTITY.md": `# Identity\n\nName: ${this.name}\n\nDescribe who ${this.name} is here — their personality, background, and role.`,
+      "SOUL.md": `# Persona\n\nDescribe ${this.name}'s personality, values, and communication style here.`,
       "AGENTS.md": `# Instructions\n\n- Speak naturally and conversationally, as a real person would.\n- Remember what the user has told you earlier in the conversation and refer back to it.\n- Ask clarifying questions when something is unclear.\n- Keep responses concise unless the user needs a detailed explanation.\n- Never say you are an AI or a bot unless directly asked.\n- Adapt your tone to match the user — casual with casual people, more structured with technical ones.`,
       "USER.md": `# User Notes\n\n(Update this file with what you learn about the people you regularly talk with — their preferences, context, and ongoing topics.)`,
       "MEMORY.md": `# Memory\n\n(Use this file to store important facts, recurring topics, and key context that you want to remember across sessions.)`,
+      // Placeholder files kept empty so they don't show as MISSING in the Files UI.
+      // They are not read by buildRichSystemPrompt but are listed in TelegramPlugin.CORE_FILE_NAMES.
+      "TOOLS.md": `# Tools\n\n(List any tool instructions here if needed.)`,
+      "HEARTBEAT.md": `# Heartbeat\n\n(Use this file for periodic reminders or scheduled behavior instructions.)`,
+      "BOOTSTRAP.md": `# Bootstrap\n\n(One-time initialization notes go here.)`,
     };
 
     for (const [filename, content] of Object.entries(defaults)) {
