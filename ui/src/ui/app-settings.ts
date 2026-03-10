@@ -29,6 +29,7 @@ import { loadSkills } from "./controllers/skills.ts";
 import {
   loadTelegramAgents,
   loadTelegramAgentFiles,
+  loadTelegramAgentFileContent,
   loadTelegramConfig,
 } from "./controllers/telegram.ts";
 import {
@@ -208,9 +209,16 @@ export async function refreshActiveTab(host: SettingsHost) {
     await loadTelegramConfig(host as unknown as OpenClawApp);
     await loadTelegramAgents(host as unknown as OpenClawApp);
     const app = host as unknown as OpenClawApp;
-    // Auto-load files when navigating back to an already-active Files panel
+    // Auto-load files when navigating back to an already-active Files panel.
+    // Also clear the content cache — it may be stale from the main Agents tab
+    // (agentFileContents is shared and gets overwritten when the user views the
+    // main agent's files, then returns here).
     if (app.telegramActivePanel === "files" && app.telegramSelectedId) {
+      app.agentFileContents = {};
       void loadTelegramAgentFiles(app, app.telegramSelectedId);
+      if (app.agentFileActive) {
+        void loadTelegramAgentFileContent(app, app.telegramSelectedId, app.agentFileActive);
+      }
     }
   }
   if (host.tab === "skills") {
