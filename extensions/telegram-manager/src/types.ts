@@ -72,6 +72,8 @@ export interface AutoReplyBehavior {
   enabled: boolean;
   replyMode: "ai" | "template";
   aiSystemPrompt?: string;
+  /** Persistent objective for the agent across all auto-reply conversations. */
+  goal?: string;
   triggerKeywords?: string[];
   templates?: { trigger: string; response: string }[];
   onlyInChats?: string[];
