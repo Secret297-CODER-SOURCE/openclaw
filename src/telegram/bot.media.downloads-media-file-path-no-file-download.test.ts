@@ -5,7 +5,6 @@ import { onSpy, sendChatActionSpy } from "./bot.media.e2e-harness.js";
 const cacheStickerSpy = vi.fn();
 const getCachedStickerSpy = vi.fn();
 const describeStickerImageSpy = vi.fn();
-const resolvePinnedHostname = ssrf.resolvePinnedHostname;
 const lookupMock = vi.fn();
 let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn> = null;
 const TELEGRAM_TEST_TIMINGS = {
@@ -85,8 +84,16 @@ beforeEach(() => {
   vi.useRealTimers();
   lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
   resolvePinnedHostnameSpy = vi
-    .spyOn(ssrf, "resolvePinnedHostname")
-    .mockImplementation((hostname) => resolvePinnedHostname(hostname, lookupMock));
+    .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
+    .mockImplementation(async (hostname) => {
+      const results = await lookupMock(hostname, { all: true });
+      const addresses = (results as Array<{ address: string }>).map((r) => r.address);
+      return {
+        hostname,
+        addresses,
+        lookup: ssrf.createPinnedLookup({ hostname, addresses }),
+      };
+    });
 });
 
 afterEach(() => {

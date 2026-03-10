@@ -1,8 +1,9 @@
-import { beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import * as ssrf from "../infra/net/ssrf.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 type AnyMock = MockFn<(...args: unknown[]) => unknown>;
@@ -258,6 +259,16 @@ export function makeForumGroupMessageCtx(params?: {
 
 beforeEach(() => {
   resetInboundDedupe();
+  // Bypass SSRF DNS resolution in tests so media-download tests do not need
+  // real network access. Return a fixed public IP for any hostname.
+  vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(async (hostname) => {
+    const address = "93.184.216.34";
+    return {
+      hostname,
+      addresses: [address],
+      lookup: ssrf.createPinnedLookup({ hostname, addresses: [address] }),
+    };
+  });
   loadConfig.mockReset();
   loadConfig.mockReturnValue({
     agents: {
@@ -315,4 +326,8 @@ beforeEach(() => {
   sequentializeSpy.mockReset();
   botCtorSpy.mockReset();
   sequentializeKey = undefined;
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
