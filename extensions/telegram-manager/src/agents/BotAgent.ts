@@ -2,6 +2,7 @@
 import { Bot, Context } from "grammy";
 import cron from "node-cron";
 import { aiReply } from "../behaviors/AiReplyEngine";
+import { MasterControlHandler } from "../behaviors/MasterControlHandler";
 import { TelegramStorage } from "../storage/TelegramStorage";
 import { createWorkspaceTools } from "../tools/TelegramTools";
 import {
@@ -9,23 +10,18 @@ import {
   BotCredentials,
   BehaviorConfig,
   ILogger,
+  IAgentManager,
+  MasterControlBehavior,
   TaskSession,
   TaskSessionBehavior,
 } from "../types";
 import { BaseAgent } from "./BaseAgent";
 
-/** Minimal manager interface to avoid circular import with AgentManager */
-export interface IAgentManagerRef {
-  list(): AgentRecord[];
-  start(id: string): Promise<void>;
-  stop(id: string): Promise<void>;
-}
-
 export class BotAgent extends BaseAgent {
   private bot: Bot | null = null;
   private creds: BotCredentials;
-  /** Optional manager reference for owner-only management commands */
-  private managerRef: IAgentManagerRef | null;
+  /** Manager reference — used for owner commands and master_control behavior. */
+  private managerRef: IAgentManager | null;
   /** Owner chat ID from TG_OWNER_CHAT_ID env var — required for management commands */
   private ownerChatId: string | null;
   /** Counts consecutive polling crashes for exponential back-off restarts. */
@@ -35,7 +31,7 @@ export class BotAgent extends BaseAgent {
     record: AgentRecord,
     storage: TelegramStorage,
     logger: ILogger,
-    managerRef?: IAgentManagerRef,
+    managerRef?: IAgentManager,
   ) {
     super(record, storage, logger);
     this.creds = record.credentials as BotCredentials;
@@ -252,6 +248,22 @@ export class BotAgent extends BaseAgent {
     const text = ctx.message?.text ?? "";
     const chatId = String(ctx.chat?.id ?? "");
     this.trackMessage("in", text, chatId);
+
+    // master_control: highest priority — if this chat is an authorized control
+    // channel, route to the agentic management loop and skip normal handling.
+    const mc = this.getBehavior<MasterControlBehavior>("master_control");
+    if (mc?.enabled && mc.allowedChatIds.includes(chatId) && this.managerRef) {
+      await ctx.replyWithChatAction("typing");
+      const handler = new MasterControlHandler(this.managerRef, this.logger);
+      const reply = await handler
+        .handle(text, mc.systemPrompt)
+        .catch((e: unknown) => `⚠️ Error: ${e instanceof Error ? e.message : String(e)}`);
+      if (reply) {
+        await ctx.reply(reply);
+        this.trackMessage("out", reply, chatId);
+      }
+      return;
+    }
 
     // Use a single, stable conversation key per chat so that context is shared
     // across task sessions and auto_reply — enabling continuous dialogue even

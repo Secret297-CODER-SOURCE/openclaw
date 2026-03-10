@@ -171,13 +171,42 @@ export interface CommunicationBehavior {
   activeMissionIds: string[];
 }
 
+export interface MasterControlBehavior {
+  type: "master_control";
+  enabled: boolean;
+  /**
+   * Telegram chat IDs (numeric string) that are authorized to send control
+   * commands to the master agent. Usually just the operator's personal chat ID.
+   */
+  allowedChatIds: string[];
+  /** Optional system prompt override for the master control AI. */
+  systemPrompt?: string;
+}
+
 export type BehaviorConfig =
   | AutoReplyBehavior
   | MonitorBehavior
   | BroadcastBehavior
   | ParserBehavior
   | TaskSessionBehavior
-  | CommunicationBehavior;
+  | CommunicationBehavior
+  | MasterControlBehavior;
+
+// ─── Agent manager interface (used by master_control to avoid circular imports) ─
+
+export interface IAgentManager {
+  list(): AgentRecord[];
+  get(id: string): AgentRecord | null;
+  start(id: string): Promise<void>;
+  stop(id: string): Promise<void>;
+  restart(id: string): Promise<void>;
+  callTool(id: string, tool: string, args: Record<string, unknown>): Promise<unknown>;
+  getEvents(agentId?: string, limit?: number): unknown[];
+  assignTaskSession(id: string, session: TaskSession): Promise<void>;
+  listTaskSessions(id: string): TaskSession[];
+  completeTaskSession(id: string, sessionId: string): Promise<void>;
+  setBehaviors(id: string, behaviors: BehaviorConfig[]): Promise<void>;
+}
 
 // ─── Agent record ─────────────────────────────────────────────────────────────
 
