@@ -4,9 +4,17 @@ import { TelegramClient } from "telegram";
 import { NewMessage } from "telegram/events";
 import { StringSession } from "telegram/sessions";
 import { aiReply } from "../behaviors/AiReplyEngine";
+import { MasterControlHandler } from "../behaviors/MasterControlHandler";
 import { TelegramStorage } from "../storage/TelegramStorage";
 import { createWorkspaceTools } from "../tools/TelegramTools";
-import { AgentRecord, UserbotCredentials, BehaviorConfig, ILogger } from "../types";
+import {
+  AgentRecord,
+  UserbotCredentials,
+  BehaviorConfig,
+  IAgentManager,
+  ILogger,
+  MasterControlBehavior,
+} from "../types";
 import { BaseAgent } from "./BaseAgent";
 
 const cooldowns = new Map<string, number>();
@@ -27,10 +35,18 @@ const clientStore = new WeakMap<UserBotAgent, TelegramClient>();
 
 export class UserBotAgent extends BaseAgent {
   private creds: UserbotCredentials;
+  /** Manager reference — injected by AgentManager.spawn(); used by master_control. */
+  private managerRef: IAgentManager | null;
 
-  constructor(record: AgentRecord, storage: TelegramStorage, logger: ILogger) {
+  constructor(
+    record: AgentRecord,
+    storage: TelegramStorage,
+    logger: ILogger,
+    managerRef?: IAgentManager,
+  ) {
     super(record, storage, logger);
     this.creds = record.credentials as UserbotCredentials;
+    this.managerRef = managerRef ?? null;
   }
 
   private get client(): TelegramClient | null {
@@ -268,6 +284,7 @@ export class UserBotAgent extends BaseAgent {
     // after start() without requiring a reconnect.
     this.setupTaskSessionHandler();
     for (const b of behaviors) {
+      if (b.type === "master_control") this.setupMasterControl();
       if (b.type === "auto_reply") this.setupAutoReply();
       if (b.type === "monitor") this.setupMonitor();
       if (b.type === "broadcast") this.setupBroadcast();
@@ -276,6 +293,43 @@ export class UserBotAgent extends BaseAgent {
           this.logger.warn(`[TG:${this.name}] parser error`, { e: String(e) }),
         );
     }
+  }
+
+  /**
+   * Always-on handler for the master_control behavior.
+   * Messages from authorized chat IDs are routed to the agentic management
+   * loop — the AI can then start/stop agents, send messages, assign tasks, etc.
+   * Registered first so it intercepts before task_session and auto_reply.
+   */
+  private setupMasterControl(): void {
+    const mc = this.getBehavior<MasterControlBehavior>("master_control");
+    if (!mc?.enabled || !this.client || !this.managerRef) return;
+
+    const mgr = this.managerRef;
+    this.client.addEventHandler(
+      async (event: any) => {
+        const msg = event.message;
+        if (!msg || msg.out) return;
+        const chatId = String(msg.chatId || "");
+        if (!mc.allowedChatIds.includes(chatId)) return;
+
+        const text = msg.message || "";
+        this.trackMessage("in", text, chatId);
+        try {
+          const handler = new MasterControlHandler(mgr, this.logger);
+          const reply = await handler.handle(text, mc.systemPrompt);
+          if (reply) {
+            await this.sendWithFloodGuard(chatId, reply, msg.id);
+            this.trackMessage("out", reply, chatId);
+          }
+        } catch (e) {
+          this.logger.error(`[TG:${this.name}] master_control error`, { e: String(e) });
+        }
+      },
+      new NewMessage({ incoming: true }),
+    );
+
+    this.logger.info(`[TG:${this.name}] master_control handler active`);
   }
 
   /** Always-on handler that intercepts messages for active task sessions. */
@@ -287,6 +341,11 @@ export class UserBotAgent extends BaseAgent {
         const msg = event.message;
         if (!msg || msg.out) return;
         const chatId = String(msg.chatId || "");
+
+        // Skip master_control authorized chats — handled by setupMasterControl.
+        const mc = this.getBehavior<MasterControlBehavior>("master_control");
+        if (mc?.enabled && mc.allowedChatIds.includes(chatId)) return;
+
         // Dynamically look up the session at message-handling time so that
         // sessions assigned after start() are picked up without reconnecting.
         const taskSession = this.getTaskSession(chatId);
@@ -334,7 +393,9 @@ export class UserBotAgent extends BaseAgent {
         if (!msg || msg.out) return;
         const text = msg.message || "";
         const chatId = String(msg.chatId || "");
-        // Skip chats that are being handled by an active task session
+        // Skip master_control authorized chats and active task sessions.
+        const mc = this.getBehavior<MasterControlBehavior>("master_control");
+        if (mc?.enabled && mc.allowedChatIds.includes(chatId)) return;
         if (this.getTaskSession(chatId)) return;
 
         const key = `${this.id}:${chatId}`;

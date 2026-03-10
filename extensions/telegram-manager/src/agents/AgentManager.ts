@@ -8,6 +8,7 @@ import {
   BehaviorConfig,
   TelegramEvent,
   ILogger,
+  IAgentManager,
   AgentCredentials,
   TaskSession,
 } from "../types";
@@ -218,16 +219,27 @@ export class AgentManager {
   // ─── Private ──────────────────────────────────────────────────────────────
 
   private spawn(record: AgentRecord): BaseAgent {
-    // Pass manager reference to BotAgents so they can run /listagents, /startagent, /stopagent
-    const managerRef = {
+    // Full manager ref — passed to both userbots and bots so they can use
+    // master_control behavior (agentic loop with full agent management tools).
+    const managerRef: IAgentManager = {
       list: () => this.list(),
+      get: (id: string) => this.get(id),
       start: (id: string) => this.start(id),
       stop: (id: string) => this.stop(id),
+      restart: (id: string) => this.restart(id),
+      callTool: (id: string, tool: string, args: Record<string, unknown>) =>
+        this.callTool(id, tool, args),
+      getEvents: (agentId?: string, limit?: number) => this.getEvents(agentId, limit) as unknown[],
+      assignTaskSession: (id: string, session: TaskSession) => this.assignTaskSession(id, session),
+      listTaskSessions: (id: string) => this.listTaskSessions(id),
+      completeTaskSession: (id: string, sessionId: string) =>
+        this.completeTaskSession(id, sessionId),
+      setBehaviors: (id: string, behaviors: BehaviorConfig[]) => this.setBehaviors(id, behaviors),
     };
 
     const agent =
       record.type === "userbot"
-        ? new UserBotAgent(record, this.storage, this.logger)
+        ? new UserBotAgent(record, this.storage, this.logger, managerRef)
         : new BotAgent(record, this.storage, this.logger, managerRef);
 
     agent.on("event", (e: TelegramEvent) => {
