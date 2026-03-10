@@ -359,15 +359,6 @@ export const PII_PATTERNS: PiiPattern[] = [
       /(?:ул\.|улица|пр-т\.?|проспект|пер\.|переулок|бульвар|б-р\.?|шоссе|ш\.?|набережная|наб\.|площадь|пл\.)\s+[«"]?[А-ЯЁа-яёA-Za-z][А-ЯЁа-яё\s-]{1,60}[»"]?(?:\s*,\s*(?:д\.?\s*)?\d+[а-яА-ЯёЁ]?)?/gi,
   },
   {
-    tokenName: "TG_ID",
-    group: "safe_tg",
-    priority: 0,
-    description: "Telegram User/Chat ID (7–13 цифр) — НЕ является PII",
-    // Telegram user IDs: 7–10 цифр. Channel IDs: до 13 цифр.
-    // Negative lookbehind/lookahead — не брать числа внутри более длинных последовательностей.
-    regex: /(?<!\d)\d{7,13}(?!\d)/g,
-  },
-  {
     tokenName: "ПОЧТОВЫЙ_ИНДЕКС",
     group: "address",
     priority: 72,

@@ -26,7 +26,11 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { loadSkills } from "./controllers/skills.ts";
-import { loadTelegramAgents, loadTelegramConfig } from "./controllers/telegram.ts";
+import {
+  loadTelegramAgents,
+  loadTelegramAgentFiles,
+  loadTelegramConfig,
+} from "./controllers/telegram.ts";
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
@@ -203,6 +207,11 @@ export async function refreshActiveTab(host: SettingsHost) {
   if (host.tab === "telegram") {
     await loadTelegramConfig(host as unknown as OpenClawApp);
     await loadTelegramAgents(host as unknown as OpenClawApp);
+    const app = host as unknown as OpenClawApp;
+    // Auto-load files when navigating back to an already-active Files panel
+    if (app.telegramActivePanel === "files" && app.telegramSelectedId) {
+      void loadTelegramAgentFiles(app, app.telegramSelectedId);
+    }
   }
   if (host.tab === "skills") {
     await loadSkills(host as unknown as OpenClawApp);
