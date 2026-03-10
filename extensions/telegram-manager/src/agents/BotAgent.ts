@@ -3,6 +3,7 @@ import { Bot, Context } from "grammy";
 import cron from "node-cron";
 import { aiReply } from "../behaviors/AiReplyEngine";
 import { TelegramStorage } from "../storage/TelegramStorage";
+import { createWorkspaceTools } from "../tools/TelegramTools";
 import {
   AgentRecord,
   BotCredentials,
@@ -271,13 +272,16 @@ export class BotAgent extends BaseAgent {
         taskSession = byUsername;
       }
     }
+    // Tools scoped to this agent's workspace — cannot access other agents' files.
+    const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
+
     if (taskSession) {
       await ctx.replyWithChatAction("typing");
       // Use custom system prompt if provided, otherwise build from workspace files.
       const systemPrompt =
         taskSession.systemPrompt ?? (await this.buildRichSystemPrompt(taskSession.task, chatKey));
       try {
-        const reply = await aiReply(text, chatKey, systemPrompt, this.storage);
+        const reply = await aiReply(text, chatKey, systemPrompt, this.storage, workspaceTools);
         if (reply) {
           await ctx.reply(reply);
           this.trackMessage("out", reply, chatId);
@@ -299,7 +303,7 @@ export class BotAgent extends BaseAgent {
       const systemPrompt =
         cfg.aiSystemPrompt ?? (await this.buildRichSystemPrompt(undefined, chatKey));
       try {
-        reply = await aiReply(text, chatKey, systemPrompt, this.storage);
+        reply = await aiReply(text, chatKey, systemPrompt, this.storage, workspaceTools);
       } catch (e) {
         const errMsg = e instanceof Error ? e.message : String(e);
         this.logger.warn(`[TG:${this.name}] auto_reply AI failed: ${errMsg}`);
