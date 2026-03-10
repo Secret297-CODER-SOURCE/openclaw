@@ -402,10 +402,18 @@ export function renderAgentFiles(params: {
       }
       ${
         !list
-          ? html`
-              <div class="callout info" style="margin-top: 12px">
-                Load the agent workspace files to edit core instructions.
-              </div>
+          ? params.agentFilesLoading
+            ? html`
+                <div class="muted" style="margin-top: 12px">Loading files…</div>
+              `
+            : html`
+              <button
+                class="callout info"
+                style="margin-top: 12px; text-align: left; width: 100%; cursor: pointer;"
+                @click=${() => params.onLoadFiles(params.agentId)}
+              >
+                Click to load agent workspace files.
+              </button>
             `
           : html`
               <div class="agent-files-grid" style="margin-top: 16px;">

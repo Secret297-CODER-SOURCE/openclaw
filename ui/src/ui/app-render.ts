@@ -596,6 +596,7 @@ export function renderApp(state: AppViewState) {
                       state.agentFileActive = null;
                       state.agentFileContents = {};
                       state.agentFileDrafts = {};
+                      state.agentFilesLoading = true; // prevent flash of "click to load" callout
                       void loadTelegramAgentFiles(state, agentId);
                     }
                   }
