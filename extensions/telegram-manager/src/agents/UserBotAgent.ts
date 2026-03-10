@@ -297,10 +297,14 @@ export class UserBotAgent extends BaseAgent {
         // Use a stable per-chat key so history is shared with auto_reply —
         // continuous dialogue is preserved when the task session ends.
         const chatKey = `${this.id}:${chatId}`;
+        // Fetch the partner's writing style from real Telegram history for new chats.
+        const storedHistory = this.storage.loadConversationHistory(chatKey);
+        const styleContext = storedHistory.length < 4 ? await this.fetchStyleContext(chatId) : "";
         // Use custom system prompt if provided, otherwise build from workspace files.
         // Pass chatKey so the prompt includes a brief recap of prior exchanges.
         const systemPrompt =
-          taskSession.systemPrompt ?? (await this.buildRichSystemPrompt(taskSession.task, chatKey));
+          taskSession.systemPrompt ??
+          (await this.buildRichSystemPrompt(taskSession.task, chatKey, styleContext));
         // Tools scoped to this agent's workspace — cannot access other agents' files.
         const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
         try {
@@ -344,9 +348,13 @@ export class UserBotAgent extends BaseAgent {
 
         let reply = "";
         if (cfg.replyMode === "ai") {
+          // Fetch partner's writing style from Telegram history for new conversations.
+          const storedHistory = this.storage.loadConversationHistory(key);
+          const styleContext = storedHistory.length < 4 ? await this.fetchStyleContext(chatId) : "";
           // Use configured system prompt if present, otherwise build from workspace files.
+          // Pass goal (if set) so the agent has a clear objective in every conversation.
           const systemPrompt =
-            cfg.aiSystemPrompt ?? (await this.buildRichSystemPrompt(undefined, key));
+            cfg.aiSystemPrompt ?? (await this.buildRichSystemPrompt(cfg.goal, key, styleContext));
           // Tools scoped to this agent's workspace — cannot access other agents' files.
           const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
           try {
@@ -563,6 +571,41 @@ export class UserBotAgent extends BaseAgent {
       } else {
         throw e;
       }
+    }
+  }
+
+  /**
+   * Fetch recent messages from a Telegram chat and build a style-context section
+   * describing how the conversation partner writes. Used to help the AI mimic
+   * the other person's tone, vocabulary, and sentence structure.
+   *
+   * Only called when the stored conversation history is short (new chat) so we
+   * don't redundantly re-fetch once the AI already has enough context.
+   */
+  private async fetchStyleContext(chatId: string): Promise<string> {
+    if (!this.client) return "";
+    try {
+      const msgs = await this.client.getMessages(chatId, { limit: 25 });
+      const me = (await this.client.getMe()) as unknown as { id?: bigint | number };
+      const myId = me?.id?.toString();
+      // Collect the other person's messages only (exclude our own outbound messages).
+      const theirTexts = (
+        msgs as unknown as Array<{ message?: string; senderId?: { toString(): string } }>
+      )
+        .filter((m) => m.message && m.senderId?.toString() !== myId)
+        .map((m) => m.message!.trim())
+        .filter((t) => t.length > 0)
+        .slice(0, 15);
+      if (theirTexts.length === 0) return "";
+      return (
+        `## Conversation partner's writing style\n` +
+        `Study how this person writes based on their recent messages:\n` +
+        theirTexts.map((t) => `- "${t}"`).join("\n") +
+        `\n\nMimic their style: match their vocabulary, sentence length, formality level, ` +
+        `emoji usage, and punctuation habits. Write as naturally as they do.`
+      );
+    } catch {
+      return "";
     }
   }
 

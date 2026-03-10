@@ -176,12 +176,18 @@ export abstract class BaseAgent extends EventEmitter {
    * (SOUL.md, AGENTS.md, IDENTITY.md, USER.md, MEMORY.md). Falls back to a
    * minimal default when no workspace files exist.
    *
-   * @param task      Optional task description appended as a "## Task" section.
-   * @param chatKey   Optional per-user chat key; when provided, injects the
-   *                  last N turns of that user's conversation history so the
-   *                  agent can reference prior exchanges in its replies.
+   * @param task         Optional task description appended as a "## Task" section.
+   * @param chatKey      Optional per-user chat key; when provided, injects the
+   *                     last N turns of that user's conversation history so the
+   *                     agent can reference prior exchanges in its replies.
+   * @param extraContext Optional extra section to append (e.g. writing-style
+   *                     examples fetched from real Telegram message history).
    */
-  protected async buildRichSystemPrompt(task?: string, chatKey?: string): Promise<string> {
+  protected async buildRichSystemPrompt(
+    task?: string,
+    chatKey?: string,
+    extraContext?: string,
+  ): Promise<string> {
     const workspaceDir = this.storage.getAgentWorkspaceDir(this.id);
     const sections: string[] = [];
 
@@ -210,6 +216,11 @@ export abstract class BaseAgent extends EventEmitter {
         const lines = recent.map((m) => `${m.role === "user" ? "User" : "You"}: ${m.content}`);
         sections.push(`## Recent conversation with this user\n${lines.join("\n")}`);
       }
+    }
+
+    // Inject extra context supplied by the caller (e.g. partner's writing style).
+    if (extraContext) {
+      sections.push(extraContext);
     }
 
     if (task) {
