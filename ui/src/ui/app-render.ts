@@ -759,7 +759,14 @@ export function renderApp(state: AppViewState) {
                 onSelectFile: (name) => {
                   state.agentFileActive = name;
                   const agentId = state.telegramSelectedId;
-                  if (agentId && !state.agentFileContents[name]) {
+                  if (agentId) {
+                    // Always reload — do NOT reuse the shared cache here.
+                    // agentFileContents is shared with the main Agents tab, so a
+                    // stale entry from a different agent (e.g. main's AGENTS.md)
+                    // would be shown instead of this Telegram agent's own file.
+                    const fresh = { ...state.agentFileContents };
+                    delete fresh[name];
+                    state.agentFileContents = fresh;
                     void loadTelegramAgentFileContent(state, agentId, name);
                   }
                 },

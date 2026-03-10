@@ -1,5 +1,11 @@
 // plugins/telegram/src/behaviors/AiReplyEngine.ts
 import Anthropic from "@anthropic-ai/sdk";
+import {
+  WorkspaceTools,
+  workspaceToolDefs,
+  ReadableFile,
+  WritableFile,
+} from "../tools/TelegramTools";
 
 export type ModelMessage = { role: "user" | "assistant"; content: string };
 
@@ -135,6 +141,76 @@ function resolveAdapter(): ModelAdapter {
   );
 }
 
+// ─── Workspace tool-calling loop (Anthropic only) ─────────────────────────────
+
+/**
+ * Run an agentic Anthropic call that allows the agent to read/write its own
+ * workspace files. Loops up to 5 iterations while the model issues tool calls,
+ * then returns the final text response.
+ *
+ * Only available when ANTHROPIC_API_KEY is set; callers must check this first.
+ */
+async function runAnthropicWithTools(
+  messages: Anthropic.MessageParam[],
+  systemPrompt: string,
+  tools: WorkspaceTools,
+): Promise<string> {
+  const client = getAnthropicClient();
+  const model = process.env.TG_AI_MODEL?.trim() || "claude-3-5-sonnet-20241022";
+  // Work on a copy so we don't mutate the caller's history during the loop.
+  const msgs: Anthropic.MessageParam[] = [...messages];
+
+  for (let i = 0; i < 5; i++) {
+    const res = await client.messages.create({
+      model,
+      max_tokens: 2048,
+      system: systemPrompt,
+      messages: msgs,
+      tools: workspaceToolDefs as unknown as Anthropic.Tool[],
+    });
+
+    if (res.stop_reason !== "tool_use") {
+      // No tool calls — return the text content.
+      const text = res.content
+        .filter((b): b is Anthropic.TextBlock => b.type === "text")
+        .map((b) => b.text)
+        .join("")
+        .trim();
+      return text || "…";
+    }
+
+    // Append the assistant turn (includes both text and tool_use blocks).
+    msgs.push({ role: "assistant", content: res.content });
+
+    // Execute each tool call and collect results.
+    const toolResults: Anthropic.ToolResultBlockParam[] = [];
+    for (const block of res.content) {
+      if (block.type !== "tool_use") continue;
+      let output: string;
+      try {
+        if (block.name === "read_workspace_file") {
+          const { filename } = block.input as { filename: ReadableFile };
+          output = (await tools.readFile(filename)) || "(empty)";
+        } else if (block.name === "write_workspace_file") {
+          const { filename, content } = block.input as { filename: WritableFile; content: string };
+          await tools.writeFile(filename, content);
+          output = `Updated ${filename}`;
+        } else {
+          output = `Unknown tool: ${block.name}`;
+        }
+      } catch (e) {
+        output = `Error: ${e instanceof Error ? e.message : String(e)}`;
+      }
+      toolResults.push({ type: "tool_result", tool_use_id: block.id, content: output });
+    }
+
+    // Feed results back for the next iteration.
+    msgs.push({ role: "user", content: toolResults });
+  }
+
+  return "…"; // fallback after max iterations
+}
+
 // ─── Conversation history ──────────────────────────────────────────────────────
 
 // In-memory cache for fast access; backed by optional persistent storage.
@@ -154,6 +230,7 @@ export async function aiReply(
   chatKey: string, // agentId + chatId — unique per conversation
   systemPrompt = "You are a helpful Telegram assistant. Be concise and friendly.",
   storage?: ConversationStorage,
+  workspaceTools?: WorkspaceTools,
 ): Promise<string> {
   // Warm the in-memory cache from persistent storage on the first message
   // for this chat key (e.g. after an agent restart).
@@ -168,10 +245,23 @@ export async function aiReply(
   hist.push({ role: "user", content: text });
   if (hist.length > MAX_HISTORY) hist.splice(0, hist.length - MAX_HISTORY);
 
-  const adapter = resolveAdapter();
-  // Pass chatKey as sessionKey so adapters that support it (e.g. the gateway
-  // adapter) can maintain per-conversation sessions on the server side.
-  const reply = await adapter(hist, systemPrompt, chatKey);
+  let reply: string;
+
+  // Use the Anthropic tool-calling path when workspace tools are provided and
+  // a direct Anthropic key is configured. Falls back to the generic adapter
+  // (gateway / OpenAI-compatible) which does not support tool calling.
+  if (workspaceTools && process.env.ANTHROPIC_API_KEY?.trim()) {
+    const msgs: Anthropic.MessageParam[] = hist.map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
+    reply = await runAnthropicWithTools(msgs, systemPrompt, workspaceTools);
+  } else {
+    const adapter = resolveAdapter();
+    // Pass chatKey as sessionKey so adapters that support it (e.g. the gateway
+    // adapter) can maintain per-conversation sessions on the server side.
+    reply = await adapter(hist, systemPrompt, chatKey);
+  }
 
   hist.push({ role: "assistant", content: reply });
   histories.set(chatKey, hist);

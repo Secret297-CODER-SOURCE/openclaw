@@ -5,6 +5,7 @@ import { NewMessage } from "telegram/events";
 import { StringSession } from "telegram/sessions";
 import { aiReply } from "../behaviors/AiReplyEngine";
 import { TelegramStorage } from "../storage/TelegramStorage";
+import { createWorkspaceTools } from "../tools/TelegramTools";
 import { AgentRecord, UserbotCredentials, BehaviorConfig, ILogger } from "../types";
 import { BaseAgent } from "./BaseAgent";
 
@@ -300,8 +301,10 @@ export class UserBotAgent extends BaseAgent {
         // Pass chatKey so the prompt includes a brief recap of prior exchanges.
         const systemPrompt =
           taskSession.systemPrompt ?? (await this.buildRichSystemPrompt(taskSession.task, chatKey));
+        // Tools scoped to this agent's workspace — cannot access other agents' files.
+        const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
         try {
-          const reply = await aiReply(text, chatKey, systemPrompt, this.storage);
+          const reply = await aiReply(text, chatKey, systemPrompt, this.storage, workspaceTools);
           if (reply) {
             await this.sendWithFloodGuard(chatId, reply, msg.id);
             this.trackMessage("out", reply, chatId);
@@ -344,8 +347,10 @@ export class UserBotAgent extends BaseAgent {
           // Use configured system prompt if present, otherwise build from workspace files.
           const systemPrompt =
             cfg.aiSystemPrompt ?? (await this.buildRichSystemPrompt(undefined, key));
+          // Tools scoped to this agent's workspace — cannot access other agents' files.
+          const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
           try {
-            reply = await aiReply(text, key, systemPrompt, this.storage);
+            reply = await aiReply(text, key, systemPrompt, this.storage, workspaceTools);
           } catch (e) {
             const errMsg = e instanceof Error ? e.message : String(e);
             this.logger.warn(`[TG:${this.name}] auto_reply AI failed: ${errMsg}`);
