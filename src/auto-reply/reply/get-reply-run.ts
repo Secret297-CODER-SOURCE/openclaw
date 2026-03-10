@@ -37,6 +37,12 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runReplyAgent } from "./agent-runner.js";
 import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
+import {
+  applyConfirmationContext,
+  buildConfirmationRequiredSystemNote,
+  buildPendingConfirmationNote,
+  setConfirmationPendingIfRequested,
+} from "./dialogue-confirmation.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
@@ -188,7 +194,21 @@ export async function runPreparedReply(
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
-  const extraSystemPrompt = [inboundMetaPrompt, groupChatContext, groupIntro, groupSystemPrompt]
+  // Inject dialogue confirmation notes into the system prompt when applicable.
+  const pendingConfirmation = sessionEntry?.pendingConfirmation;
+  const confirmationRequired = sessionEntry?.confirmationRequired;
+  const dialogueSystemNote = pendingConfirmation
+    ? buildPendingConfirmationNote(pendingConfirmation.task)
+    : confirmationRequired
+      ? buildConfirmationRequiredSystemNote()
+      : "";
+  const extraSystemPrompt = [
+    inboundMetaPrompt,
+    groupChatContext,
+    groupIntro,
+    groupSystemPrompt,
+    dialogueSystemNote,
+  ]
     .filter(Boolean)
     .join("\n\n");
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
@@ -247,6 +267,16 @@ export async function runPreparedReply(
     sessionKey,
     storePath,
     abortKey: command.abortKey,
+  });
+  // When awaiting confirmation, detect natural-language yes/no in the user message and
+  // prepend the appropriate context so the agent knows whether to proceed.
+  prefixedBodyBase = await applyConfirmationContext({
+    body: prefixedBodyBase,
+    rawUserMessage: rawBodyTrimmed,
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
@@ -443,7 +473,7 @@ export async function runPreparedReply(
     },
   };
 
-  return runReplyAgent({
+  const result = await runReplyAgent({
     commandBody: prefixedCommandBody,
     followupRun,
     queueKey,
@@ -469,4 +499,22 @@ export async function runPreparedReply(
     shouldInjectGroupIntro,
     typingMode,
   });
+
+  // After the agent responds, detect if its reply contains a confirmation request.
+  // If so, persist a pendingConfirmation flag so the next user message is handled
+  // as a confirmation/rejection response rather than a fresh request.
+  if (result) {
+    const payloads = Array.isArray(result) ? result : [result];
+    const combinedText = payloads.map((p) => (typeof p.text === "string" ? p.text : "")).join("\n");
+    await setConfirmationPendingIfRequested({
+      responseText: combinedText,
+      commandBody: prefixedCommandBody,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+  }
+
+  return result;
 }

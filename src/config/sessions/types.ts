@@ -112,6 +112,21 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  /**
+   * Set when the agent is awaiting explicit user confirmation before proceeding with an action.
+   * Cleared once the user confirms or rejects.
+   */
+  pendingConfirmation?: {
+    /** Short description of the action awaiting confirmation. */
+    task: string;
+    /** Unix timestamp (ms) when the confirmation request was sent. */
+    sentAt: number;
+  };
+  /**
+   * When true the agent is instructed to always seek user agreement before
+   * completing significant actions (dialogue confirmation-required mode).
+   */
+  confirmationRequired?: boolean;
 };
 
 export function mergeSessionEntry(
