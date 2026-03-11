@@ -148,7 +148,14 @@ export const TelegramAccountSchemaBase = z
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
-    streaming: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
+    // Preprocess normalizes any value (boolean, legacy string, or typo) to a canonical
+    // TelegramPreviewStreamMode before the enum check, so invalid-but-recoverable inputs
+    // (e.g. Cyrillic lookalikes) don't hard-fail validation. The superRefine on
+    // TelegramAccountSchema/TelegramConfigSchema handles streamMode migration afterward.
+    streaming: z.preprocess(
+      (val) => (val === undefined ? val : resolveTelegramPreviewStreamMode({ streaming: val })),
+      z.enum(["off", "partial", "block"]).optional(),
+    ),
     blockStreaming: z.boolean().optional(),
     draftChunk: BlockStreamingChunkSchema.optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
