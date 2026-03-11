@@ -1,6 +1,7 @@
 import cron from "node-cron";
 // plugins/telegram/src/agents/UserBotAgent.ts
 import { TelegramClient } from "telegram";
+import type { EntityLike } from "telegram/define";
 import { NewMessage } from "telegram/events";
 import { StringSession } from "telegram/sessions";
 import { aiReply } from "../behaviors/AiReplyEngine";
@@ -609,7 +610,8 @@ export class UserBotAgent extends BaseAgent {
 
     // Pass numeric chat IDs as BigInt so gramjs uses the cached peer directly
     // instead of trying to resolve the string as a username.
-    const peer = /^-?\d+$/.test(chatId) ? BigInt(chatId) : chatId;
+    // Cast to EntityLike: gramjs accepts native bigint at runtime despite the TS types.
+    const peer = (/^-?\d+$/.test(chatId) ? BigInt(chatId) : chatId) as EntityLike;
     const doSend = () =>
       this.client!.sendMessage(peer, {
         message,
