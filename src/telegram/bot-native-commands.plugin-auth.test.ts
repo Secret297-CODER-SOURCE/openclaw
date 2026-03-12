@@ -71,7 +71,7 @@ describe("registerTelegramNativeCommands (plugin auth)", () => {
     });
 
     expect(setMyCommands).not.toHaveBeenCalled();
-    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("registering first 100"));
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("registering first 99"));
     expect(Object.keys(handlers)).toHaveLength(101);
   });
 
