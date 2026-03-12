@@ -5,6 +5,7 @@ import {
   TELEGRAM_COMMAND_DESCRIPTION_MIN_LENGTH,
   TELEGRAM_COMMAND_NAME_PATTERN,
 } from "../config/telegram-custom-commands.js";
+import { danger } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 
@@ -114,5 +115,10 @@ export function syncTelegramMenuCommands(params: {
     });
   };
 
-  void sync().catch(() => {});
+  void sync().catch((err) => {
+    // API errors are already logged by withTelegramApiErrorLogging and silently
+    // swallowed by the inner .catch() above. This outer catch only fires for
+    // unexpected non-API errors (e.g. programming errors inside sync()).
+    runtime.error?.(danger(`telegram command sync failed: ${String(err)}`));
+  });
 }
