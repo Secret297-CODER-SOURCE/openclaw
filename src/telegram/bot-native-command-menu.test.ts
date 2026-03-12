@@ -14,14 +14,14 @@ describe("bot-native-command-menu", () => {
 
     const result = buildCappedTelegramMenuCommands({ allCommands });
 
-    expect(result.commandsToRegister).toHaveLength(100);
+    expect(result.commandsToRegister).toHaveLength(99);
     expect(result.totalCommands).toBe(105);
-    expect(result.maxCommands).toBe(100);
-    expect(result.overflowCount).toBe(5);
+    expect(result.maxCommands).toBe(99);
+    expect(result.overflowCount).toBe(6);
     expect(result.commandsToRegister[0]).toEqual({ command: "cmd_0", description: "Command 0" });
-    expect(result.commandsToRegister[99]).toEqual({
-      command: "cmd_99",
-      description: "Command 99",
+    expect(result.commandsToRegister[98]).toEqual({
+      command: "cmd_98",
+      description: "Command 98",
     });
   });
 

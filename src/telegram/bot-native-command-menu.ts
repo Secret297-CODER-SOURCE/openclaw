@@ -8,7 +8,9 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 
-export const TELEGRAM_MAX_COMMANDS = 100;
+// Telegram's documented limit is 100, but the API rejects with BOT_COMMANDS_TOO_MUCH
+// at exactly 100 in practice. Cap at 99 to stay safely under the enforced threshold.
+export const TELEGRAM_MAX_COMMANDS = 99;
 
 export type TelegramMenuCommand = {
   command: string;
