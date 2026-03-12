@@ -1,4 +1,6 @@
 export const TELEGRAM_COMMAND_NAME_PATTERN = /^[a-z0-9_]{1,32}$/;
+export const TELEGRAM_COMMAND_DESCRIPTION_MAX_LENGTH = 256;
+export const TELEGRAM_COMMAND_DESCRIPTION_MIN_LENGTH = 3;
 
 export type TelegramCustomCommandInput = {
   command?: string | null;
@@ -21,7 +23,12 @@ export function normalizeTelegramCommandName(value: string): string {
 }
 
 export function normalizeTelegramCommandDescription(value: string): string {
-  return value.trim();
+  const trimmed = value.trim();
+  if (trimmed.length > TELEGRAM_COMMAND_DESCRIPTION_MAX_LENGTH) {
+    // Truncate to fit Telegram's 256-character limit, appending an ellipsis.
+    return trimmed.slice(0, TELEGRAM_COMMAND_DESCRIPTION_MAX_LENGTH - 1) + "…";
+  }
+  return trimmed;
 }
 
 export function resolveTelegramCustomCommands(params: {
@@ -82,6 +89,14 @@ export function resolveTelegramCustomCommands(params: {
         index,
         field: "description",
         message: `Telegram custom command "/${normalized}" is missing a description.`,
+      });
+      continue;
+    }
+    if (description.length < TELEGRAM_COMMAND_DESCRIPTION_MIN_LENGTH) {
+      issues.push({
+        index,
+        field: "description",
+        message: `Telegram custom command "/${normalized}" description is too short (minimum ${TELEGRAM_COMMAND_DESCRIPTION_MIN_LENGTH} characters).`,
       });
       continue;
     }

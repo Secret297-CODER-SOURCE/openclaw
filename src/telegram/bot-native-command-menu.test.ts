@@ -50,6 +50,34 @@ describe("bot-native-command-menu", () => {
     expect(result.issues).toContain('Plugin command "/empty" is missing a description.');
   });
 
+  it("rejects plugin commands with descriptions that are too short", () => {
+    const result = buildPluginTelegramMenuCommands({
+      specs: [
+        { name: "short", description: "ab" },
+        { name: "ok", description: "abc" },
+      ],
+      existingCommands: new Set<string>(),
+    });
+
+    expect(result.commands).toEqual([{ command: "ok", description: "abc" }]);
+    expect(result.issues).toContain(
+      'Plugin command "/short" description is too short (minimum 3 characters).',
+    );
+  });
+
+  it("truncates plugin command descriptions longer than 256 characters", () => {
+    const longDescription = "A".repeat(300);
+    const result = buildPluginTelegramMenuCommands({
+      specs: [{ name: "longdesc", description: longDescription }],
+      existingCommands: new Set<string>(),
+    });
+
+    expect(result.commands).toHaveLength(1);
+    expect(result.commands[0]?.description).toHaveLength(256);
+    expect(result.commands[0]?.description.endsWith("…")).toBe(true);
+    expect(result.issues).toHaveLength(0);
+  });
+
   it("normalizes hyphenated plugin command names", () => {
     const result = buildPluginTelegramMenuCommands({
       specs: [{ name: "agent-run", description: "Run agent" }],
@@ -85,5 +113,30 @@ describe("bot-native-command-menu", () => {
     });
 
     expect(callOrder).toEqual(["delete", "set"]);
+  });
+
+  it("logs setMyCommands failure once without rethrowing", async () => {
+    const runtimeError = vi.fn();
+    const setMyCommands = vi.fn().mockRejectedValue(new Error("BOT_COMMANDS_TOO_MUCH"));
+
+    syncTelegramMenuCommands({
+      bot: {
+        api: { setMyCommands },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: {
+        error: runtimeError,
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["runtime"],
+      commandsToRegister: [{ command: "cmd", description: "Command" }],
+    });
+
+    // syncTelegramMenuCommands fires void sync() which is async; waitFor lets the
+    // microtask queue drain so withTelegramApiErrorLogging can log the rejection.
+    await vi.waitFor(() => {
+      expect(runtimeError).toHaveBeenCalled();
+    });
+
+    // Error must be logged exactly once (no double-logging).
+    expect(runtimeError).toHaveBeenCalledTimes(1);
+    expect(runtimeError.mock.calls[0]?.[0]).toContain("setMyCommands");
   });
 });

@@ -1,6 +1,8 @@
 import type { Bot } from "grammy";
 import {
+  normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,
+  TELEGRAM_COMMAND_DESCRIPTION_MIN_LENGTH,
   TELEGRAM_COMMAND_NAME_PATTERN,
 } from "../config/telegram-custom-commands.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -35,9 +37,15 @@ export function buildPluginTelegramMenuCommands(params: {
       );
       continue;
     }
-    const description = spec.description.trim();
+    const description = normalizeTelegramCommandDescription(spec.description);
     if (!description) {
       issues.push(`Plugin command "/${normalized}" is missing a description.`);
+      continue;
+    }
+    if (description.length < TELEGRAM_COMMAND_DESCRIPTION_MIN_LENGTH) {
+      issues.push(
+        `Plugin command "/${normalized}" description is too short (minimum ${TELEGRAM_COMMAND_DESCRIPTION_MIN_LENGTH} characters).`,
+      );
       continue;
     }
     if (existingCommands.has(normalized)) {
@@ -97,10 +105,12 @@ export function syncTelegramMenuCommands(params: {
       operation: "setMyCommands",
       runtime,
       fn: () => bot.api.setMyCommands(commandsToRegister),
+    }).catch(() => {
+      // withTelegramApiErrorLogging already logged the error above.
+      // Catch here to prevent the outer void sync().catch from logging a
+      // second "command sync failed" message for the same failure.
     });
   };
 
-  void sync().catch((err) => {
-    runtime.error?.(`Telegram command sync failed: ${String(err)}`);
-  });
+  void sync().catch(() => {});
 }
