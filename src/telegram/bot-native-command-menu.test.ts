@@ -139,4 +139,56 @@ describe("bot-native-command-menu", () => {
     expect(runtimeError).toHaveBeenCalledTimes(1);
     expect(runtimeError.mock.calls[0]?.[0]).toContain("setMyCommands");
   });
+
+  it("skips setMyCommands when deleteMyCommands fails with a 5xx server error", async () => {
+    const serverError = Object.assign(new Error("Gateway Timeout"), { error_code: 504 });
+    const deleteMyCommands = vi.fn().mockRejectedValue(serverError);
+    const setMyCommands = vi.fn();
+    const runtimeError = vi.fn();
+
+    syncTelegramMenuCommands({
+      bot: {
+        api: { deleteMyCommands, setMyCommands },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: {
+        error: runtimeError,
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["runtime"],
+      commandsToRegister: [{ command: "cmd", description: "Command" }],
+    });
+
+    await vi.waitFor(() => {
+      expect(deleteMyCommands).toHaveBeenCalled();
+    });
+
+    // setMyCommands must NOT be attempted — the API is unreachable.
+    expect(setMyCommands).not.toHaveBeenCalled();
+    // deleteMyCommands failure is still logged once.
+    expect(runtimeError).toHaveBeenCalledTimes(1);
+    expect(runtimeError.mock.calls[0]?.[0]).toContain("deleteMyCommands");
+  });
+
+  it("still calls setMyCommands when deleteMyCommands fails with a 4xx client error", async () => {
+    const clientError = Object.assign(new Error("Bad Request"), { error_code: 400 });
+    const deleteMyCommands = vi.fn().mockRejectedValue(clientError);
+    const setMyCommands = vi.fn().mockResolvedValue(undefined);
+    const runtimeError = vi.fn();
+
+    syncTelegramMenuCommands({
+      bot: {
+        api: { deleteMyCommands, setMyCommands },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: {
+        error: runtimeError,
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["runtime"],
+      commandsToRegister: [{ command: "cmd", description: "Command" }],
+    });
+
+    await vi.waitFor(() => {
+      expect(setMyCommands).toHaveBeenCalled();
+    });
+
+    // deleteMyCommands failure logged, setMyCommands succeeded (no additional error).
+    expect(runtimeError).toHaveBeenCalledTimes(1);
+    expect(runtimeError.mock.calls[0]?.[0]).toContain("deleteMyCommands");
+  });
 });

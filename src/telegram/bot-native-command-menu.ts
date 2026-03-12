@@ -9,6 +9,19 @@ import { danger } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 
+/**
+ * Returns true when the error is a Telegram server-side failure (HTTP 5xx).
+ * GrammyError surfaces the HTTP status code in the `error_code` field, so a
+ * 504 Gateway Timeout appears as `{ error_code: 504, ... }`.
+ */
+function isTelegramServerError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const code = (err as { error_code?: unknown }).error_code;
+  return typeof code === "number" && code >= 500 && code < 600;
+}
+
 // Telegram's documented limit is 100, but the API rejects with BOT_COMMANDS_TOO_MUCH
 // at exactly 100 in practice. Cap at 99 to stay safely under the enforced threshold.
 export const TELEGRAM_MAX_COMMANDS = 99;
@@ -92,15 +105,23 @@ export function syncTelegramMenuCommands(params: {
   const { bot, runtime, commandsToRegister } = params;
   const sync = async () => {
     // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.
+    let deleteServerError = false;
     if (typeof bot.api.deleteMyCommands === "function") {
       await withTelegramApiErrorLogging({
         operation: "deleteMyCommands",
         runtime,
         fn: () => bot.api.deleteMyCommands(),
-      }).catch(() => {});
+      }).catch((err) => {
+        // If Telegram returned a 5xx server error (e.g. 504 Gateway Timeout),
+        // the API is temporarily unreachable. Skip setMyCommands to avoid
+        // waiting a second full timeout for a call that will also fail.
+        if (isTelegramServerError(err)) {
+          deleteServerError = true;
+        }
+      });
     }
 
-    if (commandsToRegister.length === 0) {
+    if (deleteServerError || commandsToRegister.length === 0) {
       return;
     }
 
