@@ -115,7 +115,7 @@ describe("registerTelegramNativeCommands", () => {
     });
   });
 
-  it("truncates Telegram command registration to 100 commands", () => {
+  it("truncates Telegram command registration to 99 commands", () => {
     const cfg: OpenClawConfig = {
       commands: { native: false },
     };
@@ -145,10 +145,10 @@ describe("registerTelegramNativeCommands", () => {
       command: string;
       description: string;
     }>;
-    expect(registeredCommands).toHaveLength(100);
-    expect(registeredCommands).toEqual(customCommands.slice(0, 100));
+    expect(registeredCommands).toHaveLength(99);
+    expect(registeredCommands).toEqual(customCommands.slice(0, 99));
     expect(runtimeLog).toHaveBeenCalledWith(
-      "Telegram limits bots to 100 commands. 120 configured; registering first 100. Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.",
+      "Telegram limits bots to 99 commands. 120 configured; registering first 99. Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.",
     );
   });
 

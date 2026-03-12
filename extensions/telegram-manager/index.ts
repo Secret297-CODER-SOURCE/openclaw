@@ -191,6 +191,9 @@ const plugin = {
 Actions:
 - list                  — list all agents with id, name, type, status, and stats
 - get                   — get full details of one agent (requires agentId)
+- create_agent          — create a new agent (requires name, agentType; bot requires botToken; userbot requires phoneNumber; optional: behaviors)
+- delete_agent          — delete an agent permanently (requires agentId)
+- set_behaviors         — replace all behaviors on an agent (requires agentId, behaviors). Use this to enable master_control, auto_reply, monitor, etc.
 - start                 — start a stopped agent (requires agentId)
 - stop                  — stop a running agent (requires agentId)
 - restart               — restart an agent (requires agentId)
@@ -207,7 +210,13 @@ Actions:
 - send_agent_message    — send a message from one agent to another within a mission (requires fromAgentId, toAgentId, missionId, content)
 - get_core_files        — list core workspace files for an agent (requires agentId)
 - set_core_file         — write a core workspace file for an agent (requires agentId, filename, content)
-- get_core_file_content — read the content of a core workspace file (requires agentId, filename)`,
+- get_core_file_content — read the content of a core workspace file (requires agentId, filename)
+
+Behavior types for set_behaviors / create_agent:
+- master_control: { type: "master_control", enabled: true, allowedChatIds: ["<chatId>"], systemPrompt?: "..." } — agentic control loop; the agent listens to authorized chats and manages the agent pool via AI
+- auto_reply:     { type: "auto_reply", enabled: true, replyMode: "ai"|"template", goal?: "...", aiSystemPrompt?: "..." }
+- monitor:        { type: "monitor", enabled: true, targets: ["<chatId>"], saveToDb?: true }
+- broadcast:      { type: "broadcast", enabled: true, targets: ["<chatId>"], message: "...", schedule?: "* * * * *" }`,
       parameters: {
         type: "object",
         properties: {
@@ -216,6 +225,9 @@ Actions:
             enum: [
               "list",
               "get",
+              "create_agent",
+              "delete_agent",
+              "set_behaviors",
               "start",
               "stop",
               "restart",
@@ -238,7 +250,32 @@ Actions:
           },
           agentId: {
             type: "string",
-            description: "Telegram agent ID — required for all actions except 'list'",
+            description:
+              "Telegram agent ID — required for all actions except 'list' and 'create_agent'",
+          },
+          agentType: {
+            type: "string",
+            description:
+              "Agent type for create_agent: 'bot' (uses botToken) or 'userbot' (uses phoneNumber)",
+          },
+          botToken: {
+            type: "string",
+            description: "Telegram bot token for create_agent when agentType is 'bot'",
+          },
+          phoneNumber: {
+            type: "string",
+            description:
+              "Phone number (international format, e.g. +12345678900) for create_agent when agentType is 'userbot'",
+          },
+          name: {
+            type: "string",
+            description: "Human-readable agent name for create_agent",
+          },
+          behaviors: {
+            type: "array",
+            items: { type: "object" },
+            description:
+              "Behavior config array for create_agent or set_behaviors. Each item must have a 'type' field (master_control, auto_reply, monitor, broadcast, parser, task_session, communication) and 'enabled' field.",
           },
           target: {
             type: "string",
@@ -336,6 +373,53 @@ Actions:
               if (!args.agentId) return jsonResult({ error: "agentId is required for 'get'" });
               const agent = await callPlugin("telegram.agent.get", { agentId: args.agentId });
               return jsonResult(agent);
+            }
+            case "create_agent": {
+              if (!args.name) return jsonResult({ error: "name is required for 'create_agent'" });
+              if (!args.agentType)
+                return jsonResult({
+                  error: "agentType ('bot' or 'userbot') is required for 'create_agent'",
+                });
+              let credentials: Record<string, unknown>;
+              if (args.agentType === "bot") {
+                if (!args.botToken)
+                  return jsonResult({ error: "botToken is required for bot agents" });
+                credentials = { type: "bot", token: String(args.botToken) };
+              } else if (args.agentType === "userbot") {
+                if (!args.phoneNumber)
+                  return jsonResult({ error: "phoneNumber is required for userbot agents" });
+                credentials = { type: "userbot", phoneNumber: String(args.phoneNumber) };
+              } else {
+                return jsonResult({
+                  error: `Unknown agentType '${args.agentType}'. Use 'bot' or 'userbot'`,
+                });
+              }
+              const record = await callPlugin("telegram.agent.create", {
+                name: String(args.name),
+                credentials,
+                behaviors: Array.isArray(args.behaviors) ? args.behaviors : [],
+              });
+              return jsonResult({ ok: true, agent: record });
+            }
+            case "delete_agent": {
+              if (!args.agentId)
+                return jsonResult({ error: "agentId is required for 'delete_agent'" });
+              await callPlugin("telegram.agent.delete", { agentId: args.agentId });
+              return jsonResult({ ok: true, message: `Agent ${args.agentId} deleted` });
+            }
+            case "set_behaviors": {
+              if (!args.agentId)
+                return jsonResult({ error: "agentId is required for 'set_behaviors'" });
+              if (!Array.isArray(args.behaviors))
+                return jsonResult({ error: "behaviors must be an array for 'set_behaviors'" });
+              await callPlugin("telegram.agent.setBehaviors", {
+                agentId: args.agentId,
+                behaviors: args.behaviors,
+              });
+              return jsonResult({
+                ok: true,
+                message: `Behaviors updated for agent ${args.agentId}`,
+              });
             }
             case "start": {
               if (!args.agentId) return jsonResult({ error: "agentId is required for 'start'" });
@@ -503,7 +587,7 @@ Actions:
             }
             default:
               return jsonResult({
-                error: `Unknown action: '${action}'. Valid actions: list, get, start, stop, restart, send_message, get_events, assign_task, list_task_sessions, complete_task_session, create_mission, list_missions, get_mission, complete_mission, get_mission_messages, send_agent_message, get_core_files, set_core_file, get_core_file_content`,
+                error: `Unknown action: '${action}'. Valid actions: list, get, create_agent, delete_agent, set_behaviors, start, stop, restart, send_message, get_events, assign_task, list_task_sessions, complete_task_session, create_mission, list_missions, get_mission, complete_mission, get_mission_messages, send_agent_message, get_core_files, set_core_file, get_core_file_content`,
               });
           }
         } catch (err) {
