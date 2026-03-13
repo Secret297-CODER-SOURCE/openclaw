@@ -501,6 +501,8 @@ type TelegramMissionsState = TelegramState & {
   telegramMissionsError: string | null;
   telegramMissionsBusy: boolean;
   telegramMissionMessages: AgentCommMessageRecord[];
+  // Accumulated messages across all missions — used by the Chat panel
+  telegramChatMessages: AgentCommMessageRecord[];
 };
 
 export async function loadTelegramMissions(state: TelegramMissionsState): Promise<void> {
@@ -582,6 +584,36 @@ export async function loadTelegramMissionMessages(
       missionId,
     });
     state.telegramMissionMessages = res ?? [];
+  } catch (err) {
+    state.telegramMissionsError = String(err);
+  }
+}
+
+/**
+ * Load messages for ALL missions and accumulate them into `telegramChatMessages`.
+ * Used by the Chat panel which shows the full conversation history across missions.
+ * Unlike `loadTelegramMissionMessages` (which replaces state for a single mission),
+ * this function gathers all mission messages in parallel and stores the combined result.
+ */
+export async function loadTelegramAllMissionMessages(
+  state: TelegramMissionsState,
+): Promise<void> {
+  state.telegramMissionsError = null;
+  if (!isReady(state) || state.telegramMissions.length === 0) {
+    state.telegramChatMessages = [];
+    return;
+  }
+  try {
+    const results = await Promise.all(
+      state.telegramMissions.map((m) =>
+        state
+          .client!.request<AgentCommMessageRecord[]>("telegram.mission.messages", {
+            missionId: m.id,
+          })
+          .catch(() => [] as AgentCommMessageRecord[]),
+      ),
+    );
+    state.telegramChatMessages = results.flat();
   } catch (err) {
     state.telegramMissionsError = String(err);
   }

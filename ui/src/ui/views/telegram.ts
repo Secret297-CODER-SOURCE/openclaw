@@ -171,6 +171,9 @@ export type TelegramProps = {
   // Chat panel
   chatViewMode: "chat" | "nodes";
   onChatViewModeChange: (mode: "chat" | "nodes") => void;
+  // All accumulated inter-agent messages across missions (for Chat panel)
+  chatMessages: AgentCommMessageRecord[];
+  onChatRefresh: () => void;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1034,7 +1037,7 @@ function renderChatPanel(props: TelegramProps, agent: TelegramAgentRecord) {
   const agentMissions = props.missions.filter(
     (m) => m.masterAgentId === agent.id || m.participantAgentIds.includes(agent.id),
   );
-  const chatMessages = getAgentChatMessages(agentMissions, props.missionMessages, agent.id);
+  const chatMessages = getAgentChatMessages(agentMissions, props.chatMessages, agent.id);
 
   return html`
     <section class="card">
@@ -1118,7 +1121,7 @@ function renderChatPanel(props: TelegramProps, agent: TelegramAgentRecord) {
         <button
           class="btn btn--sm"
           ?disabled=${props.missionsLoading}
-          @click=${() => props.onMissionsRefresh()}
+          @click=${() => props.onChatRefresh()}
         >
           ${props.missionsLoading ? "Loading…" : "Refresh"}
         </button>

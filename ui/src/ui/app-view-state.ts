@@ -220,6 +220,8 @@ export type AppViewState = {
   telegramMissionSendToId: string;
   telegramMissionSendContent: string;
   telegramChatViewMode: "chat" | "nodes";
+  // Accumulated messages across all missions for the Chat panel
+  telegramChatMessages: import("./controllers/telegram.ts").AgentCommMessageRecord[];
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;

@@ -84,6 +84,7 @@ import {
   createTelegramMission,
   completeTelegramMission,
   loadTelegramMissionMessages,
+  loadTelegramAllMissionMessages,
   sendTelegramAgentMessage,
 } from "./controllers/telegram.ts";
 import { icons } from "./icons.ts";
@@ -589,6 +590,7 @@ export function renderApp(state: AppViewState) {
                   state.telegramMissionsError = null;
                   state.telegramSelectedMissionId = null;
                   state.telegramMissionMessages = [];
+                  state.telegramChatMessages = [];
                   state.telegramMissionCreateTitle = "";
                   state.telegramMissionCreateGoal = "";
                   state.telegramMissionCreateSystemPrompt = "";
@@ -625,12 +627,10 @@ export function renderApp(state: AppViewState) {
                     void loadTelegramMissions(state);
                   }
                   if (panel === "chat" || panel === "schemas") {
-                    // Load missions first; for chat, load all messages after missions arrive
+                    // Load missions; for chat also load all messages accumulated into chatMessages
                     void loadTelegramMissions(state).then(() => {
                       if (panel === "chat") {
-                        for (const m of state.telegramMissions) {
-                          void loadTelegramMissionMessages(state, m.id);
-                        }
+                        void loadTelegramAllMissionMessages(state);
                       }
                     });
                   }
@@ -955,6 +955,13 @@ export function renderApp(state: AppViewState) {
                 chatViewMode: state.telegramChatViewMode,
                 onChatViewModeChange: (mode) => {
                   state.telegramChatViewMode = mode;
+                },
+                chatMessages: state.telegramChatMessages,
+                onChatRefresh: () => {
+                  void loadTelegramMissions(state).then(() => {
+                    void loadTelegramAllMissionMessages(state);
+                  });
+                  void loadTelegramAgents(state);
                 },
               })
             : nothing

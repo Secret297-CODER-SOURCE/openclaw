@@ -305,6 +305,8 @@ export class OpenClawApp extends LitElement {
   @state() telegramMissionSendContent = "";
   // Chat panel view mode toggle ("chat" = bubbles, "nodes" = graph view)
   @state() telegramChatViewMode: "chat" | "nodes" = "chat";
+  // Accumulated messages across all missions for the Chat panel
+  @state() telegramChatMessages: import("./controllers/telegram.ts").AgentCommMessageRecord[] = [];
 
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
