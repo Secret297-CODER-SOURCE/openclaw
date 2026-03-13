@@ -205,6 +205,23 @@ export type AppViewState = {
   telegramTaskFormTask: string;
   telegramTaskFormSystemPrompt: string;
   telegramTaskFormOpeningMessage: string;
+  // Telegram communication structure (missions)
+  telegramMissions: import("./controllers/telegram.ts").AgentMissionRecord[];
+  telegramMissionsLoading: boolean;
+  telegramMissionsError: string | null;
+  telegramMissionsBusy: boolean;
+  telegramMissionMessages: import("./controllers/telegram.ts").AgentCommMessageRecord[];
+  telegramSelectedMissionId: string | null;
+  telegramMissionCreateTitle: string;
+  telegramMissionCreateGoal: string;
+  telegramMissionCreateSystemPrompt: string;
+  telegramMissionCreateParticipantIds: string[];
+  telegramMissionSendFromId: string;
+  telegramMissionSendToId: string;
+  telegramMissionSendContent: string;
+  telegramChatViewMode: "chat" | "nodes";
+  // Accumulated messages across all missions for the Chat panel
+  telegramChatMessages: import("./controllers/telegram.ts").AgentCommMessageRecord[];
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;
