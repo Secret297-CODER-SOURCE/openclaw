@@ -903,6 +903,74 @@ function renderFilesPanel(props: TelegramProps, agentId: string) {
 
 // ─── Detail: communication structure panel ────────────────────────────────────
 
+/** Extract the CommunicationBehavior from an agent's behaviors array. */
+function getCommunicationBehavior(
+  agent: TelegramAgentRecord,
+): { enabled: boolean; activeMissionIds: string[] } | null {
+  type CommBehaviorShape = { type: string; enabled?: boolean; activeMissionIds?: string[] };
+  const b = (agent.behaviors as CommBehaviorShape[]).find((beh) => beh.type === "communication");
+  if (!b) return null;
+  return { enabled: b.enabled ?? true, activeMissionIds: b.activeMissionIds ?? [] };
+}
+
+function renderCommunicationBehaviorStatus(
+  commBehavior: { enabled: boolean; activeMissionIds: string[] } | null,
+  agentMissions: AgentMissionRecord[],
+) {
+  const activeMissionCount = agentMissions.filter((m) => m.status === "active").length;
+
+  if (!commBehavior) {
+    return html`
+      <div class="callout" style="margin-top: 12px;">
+        <strong>No communication behavior yet.</strong>
+        Create a mission below and this agent will automatically get a
+        <code>communication</code> behavior linking it to that mission.
+        The behavior tracks which missions this agent actively participates in.
+      </div>
+    `;
+  }
+
+  // Build a lookup of missionId → title from the already-loaded missions
+  const missionTitleById = new Map(agentMissions.map((m) => [m.id, m.title]));
+
+  return html`
+    <div style="margin-top: 12px; padding: 10px 12px; border: 1px solid var(--color-border,#333); border-radius:6px; background: var(--color-card-bg,#1a1a1a);">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <span style="font-size:12px;font-weight:600;">Communication Behavior</span>
+        <span class="chip ${commBehavior.enabled ? "chip-ok" : "chip-warn"}" style="font-size:10px;">
+          ${commBehavior.enabled ? "enabled" : "disabled"}
+        </span>
+      </div>
+      <div style="font-size:12px;color:var(--color-muted,#888);">
+        Linked missions: <strong>${commBehavior.activeMissionIds.length}</strong>
+        ${activeMissionCount > 0 ? html` · <span style="color:var(--ok,#3a7)">${activeMissionCount} active</span>` : nothing}
+      </div>
+      ${
+        commBehavior.activeMissionIds.length > 0
+          ? html`
+              <div style="font-size:12px;color:var(--color-muted,#888);margin-top:6px;display:flex;flex-direction:column;gap:3px;">
+                ${commBehavior.activeMissionIds.map((id) => {
+                  const title = missionTitleById.get(id);
+                  return html`
+                    <div style="display:flex;align-items:center;gap:6px;">
+                      <span>·</span>
+                      <span>${title ?? id}</span>
+                      ${title ? html`<span style="font-size:10px;opacity:0.5;font-family:monospace;">${id.slice(0, 8)}…</span>` : nothing}
+                    </div>
+                  `;
+                })}
+              </div>
+            `
+          : html`
+              <div style="font-size:12px;color:var(--color-muted,#888);margin-top:4px;">
+                No active mission IDs — create a mission to link this agent.
+              </div>
+            `
+      }
+    </div>
+  `;
+}
+
 function renderCommunicationPanel(props: TelegramProps, agent: TelegramAgentRecord) {
   // Filter missions relevant to this agent (master or participant)
   const agentMissions = props.missions.filter(
@@ -918,6 +986,8 @@ function renderCommunicationPanel(props: TelegramProps, agent: TelegramAgentReco
     !props.missionsBusy &&
     props.missionCreateTitle.trim() !== "" &&
     props.missionCreateGoal.trim() !== "";
+
+  const commBehavior = getCommunicationBehavior(agent);
 
   return html`
     <section class="card">
@@ -940,6 +1010,9 @@ function renderCommunicationPanel(props: TelegramProps, agent: TelegramAgentReco
           ? html`<div class="callout danger" style="margin-top: 12px;">${props.missionsError}</div>`
           : nothing
       }
+
+      <!-- Communication behavior status card -->
+      ${renderCommunicationBehaviorStatus(commBehavior, agentMissions)}
 
       <!-- Create mission form -->
       <details style="margin-top: 16px; margin-bottom: 16px;">

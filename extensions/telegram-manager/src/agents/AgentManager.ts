@@ -182,10 +182,31 @@ export class AgentManager {
     participantIds: string[],
     systemPrompt?: string,
   ): AgentMission {
-    return this.commBus.createMission(masterAgentId, title, goal, participantIds, systemPrompt);
+    const mission = this.commBus.createMission(
+      masterAgentId,
+      title,
+      goal,
+      participantIds,
+      systemPrompt,
+    );
+    // Auto-wire CommunicationBehavior on master + participant agents so they
+    // know which missions they are part of without manual JSON editing.
+    const allAgentIds = [masterAgentId, ...participantIds];
+    for (const agentId of allAgentIds) {
+      this.pool.get(agentId)?.addMissionToCommunicationBehavior(mission.id);
+    }
+    return mission;
   }
 
   completeMission(missionId: string): void {
+    // Remove mission from participating agents' CommunicationBehavior before completing.
+    const mission = this.commBus.getMission(missionId);
+    if (mission) {
+      const allAgentIds = [mission.masterAgentId, ...mission.participantAgentIds];
+      for (const agentId of allAgentIds) {
+        this.pool.get(agentId)?.removeMissionFromCommunicationBehavior(missionId);
+      }
+    }
     this.commBus.completeMission(missionId);
   }
 

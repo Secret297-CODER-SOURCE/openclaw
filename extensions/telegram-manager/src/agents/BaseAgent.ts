@@ -11,6 +11,7 @@ import {
   AutoReplyBehavior,
   TaskSession,
   TaskSessionBehavior,
+  CommunicationBehavior,
   ILogger,
 } from "../types";
 
@@ -127,6 +128,38 @@ export abstract class BaseAgent extends EventEmitter {
       session.completedAt = new Date().toISOString();
       this.storage.updateBehaviors(this.id, this.record.behaviors);
     }
+  }
+
+  /**
+   * Add a mission ID to this agent's CommunicationBehavior.activeMissionIds,
+   * creating the behavior entry if it does not yet exist.
+   * Does NOT call onBehaviorsChanged so running connections are not disrupted.
+   */
+  addMissionToCommunicationBehavior(missionId: string): void {
+    const b = this.getBehavior<CommunicationBehavior>("communication");
+    if (b) {
+      if (b.activeMissionIds.includes(missionId)) return;
+      b.activeMissionIds.push(missionId);
+    } else {
+      this.record.behaviors = [
+        ...this.record.behaviors,
+        { type: "communication", enabled: true, activeMissionIds: [missionId] } satisfies CommunicationBehavior,
+      ];
+    }
+    this.storage.updateBehaviors(this.id, this.record.behaviors);
+  }
+
+  /**
+   * Remove a mission ID from this agent's CommunicationBehavior.activeMissionIds.
+   * Does NOT call onBehaviorsChanged so running connections are not disrupted.
+   */
+  removeMissionFromCommunicationBehavior(missionId: string): void {
+    const b = this.getBehavior<CommunicationBehavior>("communication");
+    if (!b) return;
+    const idx = b.activeMissionIds.indexOf(missionId);
+    if (idx < 0) return;
+    b.activeMissionIds.splice(idx, 1);
+    this.storage.updateBehaviors(this.id, this.record.behaviors);
   }
 
   /**

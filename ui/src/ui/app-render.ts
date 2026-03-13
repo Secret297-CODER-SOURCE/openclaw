@@ -584,6 +584,18 @@ export function renderApp(state: AppViewState) {
                   state.telegramTaskFormTask = "";
                   state.telegramTaskFormSystemPrompt = "";
                   state.telegramTaskFormOpeningMessage = "";
+                  // Reset communication/missions state when switching agents
+                  state.telegramMissions = [];
+                  state.telegramMissionsError = null;
+                  state.telegramSelectedMissionId = null;
+                  state.telegramMissionMessages = [];
+                  state.telegramMissionCreateTitle = "";
+                  state.telegramMissionCreateGoal = "";
+                  state.telegramMissionCreateSystemPrompt = "";
+                  state.telegramMissionCreateParticipantIds = [];
+                  state.telegramMissionSendFromId = "";
+                  state.telegramMissionSendToId = "";
+                  state.telegramMissionSendContent = "";
                 },
                 onSelectPanel: (panel: TelegramPanel) => {
                   state.telegramActivePanel = panel;
@@ -858,7 +870,11 @@ export function renderApp(state: AppViewState) {
                 missionSendFromId: state.telegramMissionSendFromId,
                 missionSendToId: state.telegramMissionSendToId,
                 missionSendContent: state.telegramMissionSendContent,
-                onMissionsRefresh: () => void loadTelegramMissions(state),
+                onMissionsRefresh: () => {
+                  void loadTelegramMissions(state);
+                  // Also reload agents so CommunicationBehavior status is up to date
+                  void loadTelegramAgents(state);
+                },
                 onMissionCreateTitleChange: (v) => {
                   state.telegramMissionCreateTitle = v;
                 },
@@ -885,10 +901,15 @@ export function renderApp(state: AppViewState) {
                     state.telegramMissionCreateGoal = "";
                     state.telegramMissionCreateSystemPrompt = "";
                     state.telegramMissionCreateParticipantIds = [];
+                    // Reload agents so CommunicationBehavior is shown updated
+                    void loadTelegramAgents(state);
                   }
                 },
                 onMissionComplete: (missionId) => {
-                  void completeTelegramMission(state, missionId);
+                  void completeTelegramMission(state, missionId).then(() => {
+                    // Reload agents so CommunicationBehavior reflects removal
+                    void loadTelegramAgents(state);
+                  });
                 },
                 onMissionViewMessages: async (missionId) => {
                   state.telegramSelectedMissionId = missionId;
