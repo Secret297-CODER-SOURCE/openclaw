@@ -16,6 +16,12 @@ const BOT_COMMANDS_TOO_MUCH_RE = /BOT_COMMANDS_TOO_MUCH/;
 // Max self-healing retries: reduce command count one-by-one until the API accepts it.
 const SET_COMMANDS_MAX_RETRIES = 5;
 
+// Per-bot-instance cache of the last successful setMyCommands count.
+// Populated after the first successful sync; subsequent calls within the same
+// process use the cached limit to avoid the BOT_COMMANDS_TOO_MUCH retry on
+// reconnects or command-menu refreshes during the same gateway session.
+const commandLimitCache = new WeakMap<Bot, number>();
+
 export type TelegramMenuCommand = {
   command: string;
   description: string;
@@ -101,21 +107,30 @@ export function syncTelegramMenuCommands(params: {
       return;
     }
 
+    // If a previous sync already found a lower limit for this bot instance,
+    // start from the cached count to avoid the BOT_COMMANDS_TOO_MUCH retry.
+    const cached = commandLimitCache.get(bot);
+    let cmds =
+      cached !== undefined && cached < commandsToRegister.length
+        ? commandsToRegister.slice(0, cached)
+        : commandsToRegister;
+
     // Self-healing retry: Telegram may reject at a limit slightly below the
     // documented 100 (BOT_COMMANDS_TOO_MUCH). Drop the last command and retry
-    // up to SET_COMMANDS_MAX_RETRIES times so the installed binary also heals.
-    let cmds = commandsToRegister;
+    // up to SET_COMMANDS_MAX_RETRIES times. Logged at info level — this is
+    // expected self-healing behaviour, not a fatal error.
     for (let attempt = 0; attempt <= SET_COMMANDS_MAX_RETRIES; attempt++) {
       runtime.log?.(`Registering ${cmds.length} Telegram bot commands`);
       try {
         await bot.api.setMyCommands(cmds);
+        commandLimitCache.set(bot, cmds.length); // cache for reconnects
         return; // success — exit the sync fn
       } catch (err) {
         const isTooMuch =
           (err instanceof GrammyError && BOT_COMMANDS_TOO_MUCH_RE.test(err.description)) ||
           BOT_COMMANDS_TOO_MUCH_RE.test(String(err));
         if (isTooMuch && cmds.length > 0 && attempt < SET_COMMANDS_MAX_RETRIES) {
-          runtime.error?.(
+          runtime.log?.(
             `telegram setMyCommands: BOT_COMMANDS_TOO_MUCH at ${cmds.length} commands — retrying with ${cmds.length - 1}`,
           );
           cmds = cmds.slice(0, -1);
