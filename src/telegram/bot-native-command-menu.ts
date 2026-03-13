@@ -1,4 +1,5 @@
 import type { Bot } from "grammy";
+import { GrammyError } from "grammy";
 import {
   normalizeTelegramCommandName,
   TELEGRAM_COMMAND_NAME_PATTERN,
@@ -9,6 +10,11 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 // Telegram's documented limit is 100, but the API rejects with BOT_COMMANDS_TOO_MUCH
 // at exactly 100 in practice. Cap at 99 to stay safely under the enforced threshold.
 export const TELEGRAM_MAX_COMMANDS = 99;
+
+// Pattern matching the Telegram error code for too many commands.
+const BOT_COMMANDS_TOO_MUCH_RE = /BOT_COMMANDS_TOO_MUCH/;
+// Max self-healing retries: reduce command count one-by-one until the API accepts it.
+const SET_COMMANDS_MAX_RETRIES = 5;
 
 export type TelegramMenuCommand = {
   command: string;
@@ -95,12 +101,34 @@ export function syncTelegramMenuCommands(params: {
       return;
     }
 
-    runtime.log?.(`Registering ${commandsToRegister.length} Telegram bot commands`);
-    await withTelegramApiErrorLogging({
-      operation: "setMyCommands",
-      runtime,
-      fn: () => bot.api.setMyCommands(commandsToRegister),
-    });
+    // Self-healing retry: Telegram may reject at a limit slightly below the
+    // documented 100 (BOT_COMMANDS_TOO_MUCH). Drop the last command and retry
+    // up to SET_COMMANDS_MAX_RETRIES times so the installed binary also heals.
+    let cmds = commandsToRegister;
+    for (let attempt = 0; attempt <= SET_COMMANDS_MAX_RETRIES; attempt++) {
+      runtime.log?.(`Registering ${cmds.length} Telegram bot commands`);
+      try {
+        await bot.api.setMyCommands(cmds);
+        return; // success — exit the sync fn
+      } catch (err) {
+        const isTooMuch =
+          (err instanceof GrammyError && BOT_COMMANDS_TOO_MUCH_RE.test(err.description)) ||
+          BOT_COMMANDS_TOO_MUCH_RE.test(String(err));
+        if (isTooMuch && cmds.length > 0 && attempt < SET_COMMANDS_MAX_RETRIES) {
+          runtime.error?.(
+            `telegram setMyCommands: BOT_COMMANDS_TOO_MUCH at ${cmds.length} commands — retrying with ${cmds.length - 1}`,
+          );
+          cmds = cmds.slice(0, -1);
+        } else {
+          // Not a retryable error, or retries exhausted — log via standard helper.
+          await withTelegramApiErrorLogging({
+            operation: "setMyCommands",
+            runtime,
+            fn: () => Promise.reject(err),
+          });
+        }
+      }
+    }
   };
 
   void sync().catch((err) => {

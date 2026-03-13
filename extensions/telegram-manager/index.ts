@@ -208,6 +208,8 @@ Actions:
 - complete_mission      — mark a mission as completed (requires missionId)
 - get_mission_messages  — get inter-agent messages for a mission (requires missionId; optional: limit)
 - send_agent_message    — send a message from one agent to another within a mission (requires fromAgentId, toAgentId, missionId, content)
+- auth_start            — send OTP code to a userbot's phone number to begin Telegram sign-in (requires agentId)
+- auth_submit           — complete sign-in by submitting the received OTP code, and 2FA password if enabled (requires agentId, code; optional: password)
 - get_core_files        — list core workspace files for an agent (requires agentId)
 - set_core_file         — write a core workspace file for an agent (requires agentId, filename, content)
 - get_core_file_content — read the content of a core workspace file (requires agentId, filename)
@@ -242,6 +244,8 @@ Behavior types for set_behaviors / create_agent:
               "complete_mission",
               "get_mission_messages",
               "send_agent_message",
+              "auth_start",
+              "auth_submit",
               "get_core_files",
               "set_core_file",
               "get_core_file_content",
@@ -352,6 +356,15 @@ Behavior types for set_behaviors / create_agent:
           content: {
             type: "string",
             description: "Message content — required for send_agent_message",
+          },
+          code: {
+            type: "string",
+            description: "OTP code received via SMS or Telegram app — required for auth_submit",
+          },
+          password: {
+            type: "string",
+            description:
+              "Two-factor authentication (2FA) password — required for auth_submit when the account has 2FA enabled",
           },
           filename: {
             type: "string",
@@ -552,6 +565,28 @@ Behavior types for set_behaviors / create_agent:
               });
               return jsonResult(msg);
             }
+            case "auth_start": {
+              if (!args.agentId)
+                return jsonResult({ error: "agentId is required for 'auth_start'" });
+              await callPlugin("telegram.agent.authStart", { agentId: args.agentId });
+              return jsonResult({
+                ok: true,
+                message:
+                  "OTP code sent to the phone number. Call auth_submit with the received code (and password if 2FA is enabled).",
+              });
+            }
+            case "auth_submit": {
+              if (!args.agentId)
+                return jsonResult({ error: "agentId is required for 'auth_submit'" });
+              if (!args.code)
+                return jsonResult({ error: "code (OTP) is required for 'auth_submit'" });
+              await callPlugin("telegram.agent.authSubmit", {
+                agentId: args.agentId,
+                code: String(args.code),
+                ...(args.password ? { password: String(args.password) } : {}),
+              });
+              return jsonResult({ ok: true, authenticated: true });
+            }
             case "get_core_files": {
               if (!args.agentId)
                 return jsonResult({ error: "agentId is required for 'get_core_files'" });
@@ -587,7 +622,7 @@ Behavior types for set_behaviors / create_agent:
             }
             default:
               return jsonResult({
-                error: `Unknown action: '${action}'. Valid actions: list, get, create_agent, delete_agent, set_behaviors, start, stop, restart, send_message, get_events, assign_task, list_task_sessions, complete_task_session, create_mission, list_missions, get_mission, complete_mission, get_mission_messages, send_agent_message, get_core_files, set_core_file, get_core_file_content`,
+                error: `Unknown action: '${action}'. Valid actions: list, get, create_agent, delete_agent, set_behaviors, start, stop, restart, send_message, get_events, assign_task, list_task_sessions, complete_task_session, create_mission, list_missions, get_mission, complete_mission, get_mission_messages, send_agent_message, auth_start, auth_submit, get_core_files, set_core_file, get_core_file_content`,
               });
           }
         } catch (err) {
