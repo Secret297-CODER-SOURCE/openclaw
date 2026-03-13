@@ -3,8 +3,11 @@ import {
   normalizeTelegramCommandName,
   TELEGRAM_COMMAND_NAME_PATTERN,
 } from "../config/telegram-custom-commands.js";
+import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
+import { formatDurationPrecise } from "../infra/format-time/format-duration.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
+import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 
 // Telegram's documented limit is 100, but the API rejects with BOT_COMMANDS_TOO_MUCH
 // at exactly 100 in practice. Cap at 99 to stay safely under the enforced threshold.
@@ -75,32 +78,105 @@ export function buildCappedTelegramMenuCommands(params: {
   return { commandsToRegister, totalCommands, maxCommands, overflowCount };
 }
 
+// Retry policy for command sync on recoverable network errors.
+const COMMAND_SYNC_RETRY_POLICY = {
+  initialMs: 3000,
+  maxMs: 60_000,
+  factor: 2,
+  jitter: 0.25,
+};
+
+const MAX_COMMAND_SYNC_RETRIES = 5;
+
+/** Detect Telegram's BOT_COMMANDS_TOO_MUCH error (400 Bad Request). */
+function isTelegramBotCommandsTooMuch(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const e = err as { description?: unknown; message?: unknown };
+  return (
+    (typeof e.description === "string" && e.description.includes("BOT_COMMANDS_TOO_MUCH")) ||
+    (typeof e.message === "string" && e.message.includes("BOT_COMMANDS_TOO_MUCH"))
+  );
+}
+
 export function syncTelegramMenuCommands(params: {
   bot: Bot;
   runtime: RuntimeEnv;
   commandsToRegister: TelegramMenuCommand[];
+  abortSignal?: AbortSignal;
 }): void {
-  const { bot, runtime, commandsToRegister } = params;
+  const { bot, runtime, commandsToRegister, abortSignal } = params;
   const sync = async () => {
-    // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.
-    if (typeof bot.api.deleteMyCommands === "function") {
-      await withTelegramApiErrorLogging({
-        operation: "deleteMyCommands",
-        runtime,
-        fn: () => bot.api.deleteMyCommands(),
-      }).catch(() => {});
-    }
+    let attempt = 0;
+    while (true) {
+      const isFinalAttempt = attempt >= MAX_COMMAND_SYNC_RETRIES;
+      // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.
+      if (typeof bot.api.deleteMyCommands === "function") {
+        await withTelegramApiErrorLogging({
+          operation: "deleteMyCommands",
+          runtime,
+          // Only log non-network errors or errors on the final attempt; transient
+          // network failures are silently swallowed since we retry the full sync below.
+          shouldLog: (err) =>
+            isFinalAttempt || !isRecoverableTelegramNetworkError(err, { context: "unknown" }),
+          fn: () => bot.api.deleteMyCommands(),
+        }).catch(() => {});
+      }
 
-    if (commandsToRegister.length === 0) {
-      return;
-    }
+      if (commandsToRegister.length === 0) {
+        return;
+      }
 
-    runtime.log?.(`Registering ${commandsToRegister.length} Telegram bot commands`);
-    await withTelegramApiErrorLogging({
-      operation: "setMyCommands",
-      runtime,
-      fn: () => bot.api.setMyCommands(commandsToRegister),
-    });
+      if (attempt === 0) {
+        runtime.log?.(`Registering ${commandsToRegister.length} Telegram bot commands`);
+      }
+
+      try {
+        await withTelegramApiErrorLogging({
+          operation: "setMyCommands",
+          runtime,
+          // Suppress logging here for non-recoverable errors (BOT_COMMANDS_TOO_MUCH, etc.)
+          // to avoid double-logging: the catch block below emits the user-visible message.
+          // Only log via withTelegramApiErrorLogging on the final attempt for recoverable
+          // network errors (to provide context that retries were exhausted).
+          shouldLog: (err) =>
+            isFinalAttempt && isRecoverableTelegramNetworkError(err, { context: "unknown" }),
+          fn: () => bot.api.setMyCommands(commandsToRegister),
+        });
+        return;
+      } catch (err) {
+        // BOT_COMMANDS_TOO_MUCH: emit one clear, actionable message and stop — retrying
+        // won't help and the cap should have prevented this (may indicate a stale scope).
+        if (isTelegramBotCommandsTooMuch(err)) {
+          runtime.error?.(
+            `Telegram command sync failed: too many commands (BOT_COMMANDS_TOO_MUCH). ` +
+              `${commandsToRegister.length} command(s) were sent; if this persists, ` +
+              `try disabling native commands with channels.telegram.commands.native: false ` +
+              `or reducing plugin/custom commands.`,
+          );
+          return;
+        }
+        if (
+          isFinalAttempt ||
+          abortSignal?.aborted ||
+          !isRecoverableTelegramNetworkError(err, { context: "unknown" })
+        ) {
+          throw err;
+        }
+        attempt++;
+        const delayMs = computeBackoff(COMMAND_SYNC_RETRY_POLICY, attempt);
+        runtime.log?.(
+          `Telegram command sync: network error, retrying in ${formatDurationPrecise(delayMs)}`,
+        );
+        try {
+          await sleepWithAbort(delayMs, abortSignal);
+        } catch {
+          // Aborted during sleep - bail out cleanly without logging an error.
+          return;
+        }
+      }
+    }
   };
 
   void sync().catch((err) => {
