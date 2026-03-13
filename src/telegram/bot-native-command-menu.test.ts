@@ -1,11 +1,29 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
   syncTelegramMenuCommands,
 } from "./bot-native-command-menu.js";
 
+/** Creates a grammy-style HttpError with a message indicating a network failure. */
+function makeNetworkError(message: string): Error {
+  const err = new Error(message) as Error & { name: string };
+  err.name = "HttpError";
+  return err;
+}
+
+const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
+  computeBackoff: vi.fn(() => 0),
+  sleepWithAbort: vi.fn(async () => undefined),
+}));
+
+vi.mock("../infra/backoff.js", () => ({ computeBackoff, sleepWithAbort }));
+
 describe("bot-native-command-menu", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sleepWithAbort.mockResolvedValue(undefined);
+  });
   it("caps menu entries to Telegram limit", () => {
     const allCommands = Array.from({ length: 105 }, (_, i) => ({
       command: `cmd_${i}`,
@@ -85,5 +103,121 @@ describe("bot-native-command-menu", () => {
     });
 
     expect(callOrder).toEqual(["delete", "set"]);
+  });
+
+  it("retries setMyCommands on recoverable network errors without logging intermediate failures", async () => {
+    const networkErr = makeNetworkError("Network request for 'setMyCommands' failed!");
+    const setMyCommands = vi
+      .fn()
+      .mockRejectedValueOnce(networkErr)
+      .mockRejectedValueOnce(networkErr)
+      .mockResolvedValue(true);
+    const deleteMyCommands = vi.fn().mockResolvedValue(true);
+    const errorSpy = vi.fn();
+    const logSpy = vi.fn();
+
+    syncTelegramMenuCommands({
+      bot: {
+        api: { deleteMyCommands, setMyCommands },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: { error: errorSpy, log: logSpy } as unknown as Parameters<
+        typeof syncTelegramMenuCommands
+      >[0]["runtime"],
+      commandsToRegister: [{ command: "cmd", description: "Command" }],
+    });
+
+    await vi.waitFor(() => {
+      expect(setMyCommands).toHaveBeenCalledTimes(3);
+    });
+
+    // No error-level logs should appear for intermediate network failures.
+    expect(errorSpy).not.toHaveBeenCalled();
+    // Retry info messages should be logged.
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("network error, retrying"));
+  });
+
+  it("logs error for setMyCommands after all retries are exhausted", async () => {
+    const networkErr = makeNetworkError("Network request for 'setMyCommands' failed!");
+    const setMyCommands = vi.fn().mockRejectedValue(networkErr);
+    const deleteMyCommands = vi.fn().mockResolvedValue(true);
+    const errorSpy = vi.fn();
+
+    syncTelegramMenuCommands({
+      bot: {
+        api: { deleteMyCommands, setMyCommands },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: { error: errorSpy } as unknown as Parameters<
+        typeof syncTelegramMenuCommands
+      >[0]["runtime"],
+      commandsToRegister: [{ command: "cmd", description: "Command" }],
+    });
+
+    await vi.waitFor(() => {
+      // Should have tried MAX_COMMAND_SYNC_RETRIES + 1 times total (first + 5 retries).
+      expect(setMyCommands).toHaveBeenCalledTimes(6);
+    });
+
+    // Final failure should be logged as an error.
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Telegram command sync failed"));
+  });
+
+  it("suppresses deleteMyCommands network error logging", async () => {
+    const networkErr = makeNetworkError("Network request for 'deleteMyCommands' failed!");
+    const deleteMyCommands = vi.fn().mockRejectedValue(networkErr);
+    const setMyCommands = vi.fn().mockResolvedValue(true);
+    const errorSpy = vi.fn();
+
+    syncTelegramMenuCommands({
+      bot: {
+        api: { deleteMyCommands, setMyCommands },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: { error: errorSpy } as unknown as Parameters<
+        typeof syncTelegramMenuCommands
+      >[0]["runtime"],
+      commandsToRegister: [{ command: "cmd", description: "Command" }],
+    });
+
+    await vi.waitFor(() => {
+      expect(setMyCommands).toHaveBeenCalled();
+    });
+
+    // Network errors on deleteMyCommands must not be logged at error level.
+    expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("deleteMyCommands"));
+  });
+
+  it("stops retrying when abortSignal fires during sleep", async () => {
+    const networkErr = makeNetworkError("Network request for 'setMyCommands' failed!");
+    const setMyCommands = vi.fn().mockRejectedValue(networkErr);
+    const deleteMyCommands = vi.fn().mockResolvedValue(true);
+    const errorSpy = vi.fn();
+
+    const ac = new AbortController();
+
+    // Make sleepWithAbort throw when aborted so the abort is detected.
+    sleepWithAbort.mockImplementationOnce(async () => {
+      ac.abort();
+      throw new Error("aborted");
+    });
+
+    syncTelegramMenuCommands({
+      bot: {
+        api: { deleteMyCommands, setMyCommands },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: { error: errorSpy } as unknown as Parameters<
+        typeof syncTelegramMenuCommands
+      >[0]["runtime"],
+      commandsToRegister: [{ command: "cmd", description: "Command" }],
+      abortSignal: ac.signal,
+    });
+
+    await vi.waitFor(() => {
+      // Sleep was called once then aborted - sync should have stopped.
+      expect(sleepWithAbort).toHaveBeenCalledTimes(1);
+    });
+
+    // Only the first attempt should have run before abort.
+    expect(setMyCommands).toHaveBeenCalledTimes(1);
+    // No error logged when aborted.
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 });
