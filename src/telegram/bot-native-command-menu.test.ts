@@ -5,6 +5,14 @@ import {
   syncTelegramMenuCommands,
 } from "./bot-native-command-menu.js";
 
+/** Creates a mock GrammyError representing the BOT_COMMANDS_TOO_MUCH response. */
+function makeBotCommandsTooMuchError(): Error & { description: string } {
+  return Object.assign(
+    new Error("Call to 'setMyCommands' failed! (400: Bad Request: BOT_COMMANDS_TOO_MUCH)"),
+    { description: "Bad Request: BOT_COMMANDS_TOO_MUCH" },
+  );
+}
+
 /** Creates a grammy-style HttpError with a message indicating a network failure. */
 function makeNetworkError(message: string): Error {
   const err = new Error(message) as Error & { name: string };
@@ -219,5 +227,69 @@ describe("bot-native-command-menu", () => {
     expect(setMyCommands).toHaveBeenCalledTimes(1);
     // No error logged when aborted.
     expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("handles BOT_COMMANDS_TOO_MUCH with one specific error message and no retry", async () => {
+    const tooMuchErr = makeBotCommandsTooMuchError();
+    const setMyCommands = vi.fn().mockRejectedValue(tooMuchErr);
+    const deleteMyCommands = vi.fn().mockResolvedValue(true);
+    const errorSpy = vi.fn();
+
+    syncTelegramMenuCommands({
+      bot: {
+        api: { deleteMyCommands, setMyCommands },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: { error: errorSpy } as unknown as Parameters<
+        typeof syncTelegramMenuCommands
+      >[0]["runtime"],
+      commandsToRegister: [{ command: "cmd", description: "Command" }],
+    });
+
+    await vi.waitFor(() => {
+      expect(errorSpy).toHaveBeenCalled();
+    });
+
+    // Should only have tried once (no retries for BOT_COMMANDS_TOO_MUCH).
+    expect(setMyCommands).toHaveBeenCalledTimes(1);
+    // Should not have retried (sleepWithAbort not called).
+    expect(sleepWithAbort).not.toHaveBeenCalled();
+    // Should log exactly ONE error message with actionable guidance.
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("BOT_COMMANDS_TOO_MUCH"));
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("channels.telegram.commands.native: false"),
+    );
+  });
+
+  it("does not double-log BOT_COMMANDS_TOO_MUCH via withTelegramApiErrorLogging", async () => {
+    // Verify that the specific "telegram setMyCommands failed: ..." line from
+    // withTelegramApiErrorLogging is NOT emitted for BOT_COMMANDS_TOO_MUCH;
+    // only the single actionable message from the catch block should appear.
+    const tooMuchErr = makeBotCommandsTooMuchError();
+    const setMyCommands = vi.fn().mockRejectedValue(tooMuchErr);
+    const deleteMyCommands = vi.fn().mockResolvedValue(true);
+    const errorSpy = vi.fn();
+
+    syncTelegramMenuCommands({
+      bot: {
+        api: { deleteMyCommands, setMyCommands },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: { error: errorSpy } as unknown as Parameters<
+        typeof syncTelegramMenuCommands
+      >[0]["runtime"],
+      commandsToRegister: [{ command: "cmd", description: "Command" }],
+    });
+
+    await vi.waitFor(() => {
+      expect(errorSpy).toHaveBeenCalled();
+    });
+
+    // Must be exactly one error log (not doubled by withTelegramApiErrorLogging).
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    // The logged message must NOT come from withTelegramApiErrorLogging (which would say
+    // "telegram setMyCommands failed: ...").
+    expect(errorSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("telegram setMyCommands failed"),
+    );
   });
 });

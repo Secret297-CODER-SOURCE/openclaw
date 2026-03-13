@@ -88,6 +88,18 @@ const COMMAND_SYNC_RETRY_POLICY = {
 
 const MAX_COMMAND_SYNC_RETRIES = 5;
 
+/** Detect Telegram's BOT_COMMANDS_TOO_MUCH error (400 Bad Request). */
+function isTelegramBotCommandsTooMuch(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const e = err as { description?: unknown; message?: unknown };
+  return (
+    (typeof e.description === "string" && e.description.includes("BOT_COMMANDS_TOO_MUCH")) ||
+    (typeof e.message === "string" && e.message.includes("BOT_COMMANDS_TOO_MUCH"))
+  );
+}
+
 export function syncTelegramMenuCommands(params: {
   bot: Bot;
   runtime: RuntimeEnv;
@@ -124,14 +136,27 @@ export function syncTelegramMenuCommands(params: {
         await withTelegramApiErrorLogging({
           operation: "setMyCommands",
           runtime,
-          // Only log on the final attempt or for non-network errors; intermediate
-          // network failures during startup/reconnect are retried silently.
+          // Suppress logging here for non-recoverable errors (BOT_COMMANDS_TOO_MUCH, etc.)
+          // to avoid double-logging: the catch block below emits the user-visible message.
+          // Only log via withTelegramApiErrorLogging on the final attempt for recoverable
+          // network errors (to provide context that retries were exhausted).
           shouldLog: (err) =>
-            isFinalAttempt || !isRecoverableTelegramNetworkError(err, { context: "unknown" }),
+            isFinalAttempt && isRecoverableTelegramNetworkError(err, { context: "unknown" }),
           fn: () => bot.api.setMyCommands(commandsToRegister),
         });
         return;
       } catch (err) {
+        // BOT_COMMANDS_TOO_MUCH: emit one clear, actionable message and stop — retrying
+        // won't help and the cap should have prevented this (may indicate a stale scope).
+        if (isTelegramBotCommandsTooMuch(err)) {
+          runtime.error?.(
+            `Telegram command sync failed: too many commands (BOT_COMMANDS_TOO_MUCH). ` +
+              `${commandsToRegister.length} command(s) were sent; if this persists, ` +
+              `try disabling native commands with channels.telegram.commands.native: false ` +
+              `or reducing plugin/custom commands.`,
+          );
+          return;
+        }
         if (
           isFinalAttempt ||
           abortSignal?.aborted ||
