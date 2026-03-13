@@ -78,7 +78,7 @@ export function buildCappedTelegramMenuCommands(params: {
   return { commandsToRegister, totalCommands, maxCommands, overflowCount };
 }
 
-// Retry policy for command sync when the network is recovering after an outage.
+// Retry policy for command sync on recoverable network errors.
 const COMMAND_SYNC_RETRY_POLICY = {
   initialMs: 3000,
   maxMs: 60_000,

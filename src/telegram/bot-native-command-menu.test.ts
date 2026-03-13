@@ -161,7 +161,7 @@ describe("bot-native-command-menu", () => {
     });
 
     await vi.waitFor(() => {
-      // Should have tried MAX_COMMAND_SYNC_RETRIES + 1 times total (first + 5 retries).
+      // Should have tried 6 times total (1 initial + 5 retries = MAX_COMMAND_SYNC_RETRIES + 1).
       expect(setMyCommands).toHaveBeenCalledTimes(6);
     });
 
