@@ -205,6 +205,19 @@ export type AppViewState = {
   telegramTaskFormTask: string;
   telegramTaskFormSystemPrompt: string;
   telegramTaskFormOpeningMessage: string;
+  // Telegram scenario / chat panel
+  telegramChatSubPanel: import("./views/telegram-scenario.ts").TelegramChatSubPanel;
+  telegramChatNodes: import("./controllers/telegram.ts").ChatNode[];
+  telegramChatNodesLoading: boolean;
+  telegramChatNodesError: string | null;
+  telegramFlowNodes: import("./controllers/telegram.ts").FlowNode[];
+  telegramFlowNodesLoading: boolean;
+  telegramTrainingPairs: import("./controllers/telegram.ts").TrainingPair[];
+  telegramTrainingGroups: import("./controllers/telegram.ts").TrainingGroup[];
+  telegramTrainingGroupsLimit: number;
+  telegramTrainingLoading: boolean;
+  telegramTrainingError: string | null;
+  telegramShowCreateNodesPrompt: boolean;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;

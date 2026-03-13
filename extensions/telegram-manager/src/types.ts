@@ -245,6 +245,67 @@ export interface ToolCallResult {
   error?: string;
 }
 
+// ─── Conversation scenario (Chat Nodes + Flow Nodes) ──────────────────────────
+
+/** A single message node in a conversation scenario */
+export interface ChatNode {
+  id: string;
+  agentId: string;
+  /** Who speaks this message */
+  role: "manager" | "client";
+  text: string;
+  /** Default next node id (linear flow) */
+  nextNodeId?: string;
+  /** Conditional branches — if client input matches keyword, go to nextNodeId */
+  branches?: { keyword: string; nextNodeId: string }[];
+  /** Optional position hint for graph layout */
+  position?: { x: number; y: number };
+  createdAt: string;
+}
+
+/** A named conversation stage that groups multiple ChatNodes */
+export interface FlowNode {
+  id: string;
+  agentId: string;
+  title: string;
+  description?: string;
+  chatNodeIds: string[];
+  nextFlowNodeIds: string[];
+  position?: { x: number; y: number };
+  createdAt: string;
+}
+
+/** A dialogue pair extracted from a real conversation (for training) */
+export interface TrainingPair {
+  id: string;
+  agentId: string;
+  /** Client message (input) */
+  input: string;
+  /** Manager response */
+  response: string;
+  sourceFile: string;
+  createdAt: string;
+}
+
+// ─── Telegram export format (for training data import) ────────────────────────
+
+export interface TelegramExportMessage {
+  id: number;
+  type: string;
+  date: string;
+  from: string | null;
+  from_id: string;
+  /** Text can be a plain string or an array of string/formatting objects */
+  text: string | (string | { type: string; text: string })[];
+}
+
+export interface TelegramExportChat {
+  name: string | null;
+  type: string;
+  id: number;
+  messages: TelegramExportMessage[];
+}
+
 // ─── Events (push from agent → Gateway → clients) ─────────────────────────────
 
 export interface TelegramEvent {

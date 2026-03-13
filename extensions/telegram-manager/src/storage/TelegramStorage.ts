@@ -8,6 +8,9 @@ import {
   AgentCommunicationMessage,
   BehaviorConfig,
   TelegramEvent,
+  ChatNode,
+  FlowNode,
+  TrainingPair,
 } from "../types";
 
 export type ProxyConfig = {
@@ -101,10 +104,44 @@ export class TelegramStorage {
         updated_at  TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS tg_chat_nodes (
+        id           TEXT PRIMARY KEY,
+        agent_id     TEXT NOT NULL,
+        role         TEXT NOT NULL,
+        text         TEXT NOT NULL,
+        next_node_id TEXT,
+        branches     TEXT NOT NULL DEFAULT '[]',
+        position     TEXT,
+        created_at   TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS tg_flow_nodes (
+        id                  TEXT PRIMARY KEY,
+        agent_id            TEXT NOT NULL,
+        title               TEXT NOT NULL,
+        description         TEXT,
+        chat_node_ids       TEXT NOT NULL DEFAULT '[]',
+        next_flow_node_ids  TEXT NOT NULL DEFAULT '[]',
+        position            TEXT,
+        created_at          TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS tg_training_pairs (
+        id          TEXT PRIMARY KEY,
+        agent_id    TEXT NOT NULL,
+        input       TEXT NOT NULL,
+        response    TEXT NOT NULL,
+        source_file TEXT NOT NULL DEFAULT '',
+        created_at  TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_tg_events_agent ON tg_events(agent_id);
       CREATE INDEX IF NOT EXISTS idx_tg_parsed_agent ON tg_parsed(agent_id);
       CREATE INDEX IF NOT EXISTS idx_agent_missions_master ON agent_missions(master_agent_id);
       CREATE INDEX IF NOT EXISTS idx_comm_msgs_mission ON agent_communication_messages(mission_id);
+      CREATE INDEX IF NOT EXISTS idx_chat_nodes_agent ON tg_chat_nodes(agent_id);
+      CREATE INDEX IF NOT EXISTS idx_flow_nodes_agent ON tg_flow_nodes(agent_id);
+      CREATE INDEX IF NOT EXISTS idx_training_pairs_agent ON tg_training_pairs(agent_id);
     `);
   }
 
@@ -336,6 +373,112 @@ export class TelegramStorage {
       .run(chatKey, serialized, new Date().toISOString());
   }
 
+  // ─── Chat Nodes ───────────────────────────────────────────────────────────
+
+  saveChatNode(node: ChatNode): void {
+    this.db
+      .prepare(`
+        INSERT OR REPLACE INTO tg_chat_nodes
+          (id, agent_id, role, text, next_node_id, branches, position, created_at)
+        VALUES
+          (@id, @agentId, @role, @text, @nextNodeId, @branches, @position, @createdAt)
+      `)
+      .run({
+        id: node.id,
+        agentId: node.agentId,
+        role: node.role,
+        text: node.text,
+        nextNodeId: node.nextNodeId ?? null,
+        branches: JSON.stringify(node.branches ?? []),
+        position: node.position ? JSON.stringify(node.position) : null,
+        createdAt: node.createdAt,
+      });
+  }
+
+  getChatNodes(agentId: string): ChatNode[] {
+    return (
+      this.db
+        .prepare("SELECT * FROM tg_chat_nodes WHERE agent_id = ? ORDER BY created_at ASC")
+        .all(agentId) as any[]
+    ).map(this.toChatNode);
+  }
+
+  deleteChatNode(id: string): void {
+    this.db.prepare("DELETE FROM tg_chat_nodes WHERE id = ?").run(id);
+  }
+
+  clearChatNodes(agentId: string): void {
+    this.db.prepare("DELETE FROM tg_chat_nodes WHERE agent_id = ?").run(agentId);
+  }
+
+  // ─── Flow Nodes ───────────────────────────────────────────────────────────
+
+  saveFlowNode(node: FlowNode): void {
+    this.db
+      .prepare(`
+        INSERT OR REPLACE INTO tg_flow_nodes
+          (id, agent_id, title, description, chat_node_ids, next_flow_node_ids, position, created_at)
+        VALUES
+          (@id, @agentId, @title, @description, @chatNodeIds, @nextFlowNodeIds, @position, @createdAt)
+      `)
+      .run({
+        id: node.id,
+        agentId: node.agentId,
+        title: node.title,
+        description: node.description ?? null,
+        chatNodeIds: JSON.stringify(node.chatNodeIds),
+        nextFlowNodeIds: JSON.stringify(node.nextFlowNodeIds),
+        position: node.position ? JSON.stringify(node.position) : null,
+        createdAt: node.createdAt,
+      });
+  }
+
+  getFlowNodes(agentId: string): FlowNode[] {
+    return (
+      this.db
+        .prepare("SELECT * FROM tg_flow_nodes WHERE agent_id = ? ORDER BY created_at ASC")
+        .all(agentId) as any[]
+    ).map(this.toFlowNode);
+  }
+
+  deleteFlowNode(id: string): void {
+    this.db.prepare("DELETE FROM tg_flow_nodes WHERE id = ?").run(id);
+  }
+
+  // ─── Training Pairs ───────────────────────────────────────────────────────
+
+  saveTrainingPairs(pairs: TrainingPair[]): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO tg_training_pairs (id, agent_id, input, response, source_file, created_at)
+      VALUES (@id, @agentId, @input, @response, @sourceFile, @createdAt)
+    `);
+    const insertMany = this.db.transaction((rows: TrainingPair[]) => {
+      for (const p of rows) {
+        stmt.run({
+          id: p.id,
+          agentId: p.agentId,
+          input: p.input,
+          response: p.response,
+          sourceFile: p.sourceFile,
+          createdAt: p.createdAt,
+        });
+      }
+    });
+    insertMany(pairs);
+  }
+
+  getTrainingPairs(agentId: string): TrainingPair[] {
+    return (
+      this.db
+        .prepare("SELECT * FROM tg_training_pairs WHERE agent_id = ? ORDER BY created_at ASC")
+        .all(agentId) as any[]
+    ).map(this.toTrainingPair);
+  }
+
+  clearTrainingPairs(agentId: string): void {
+    this.db.prepare("DELETE FROM tg_training_pairs WHERE agent_id = ?").run(agentId);
+  }
+
   // ─── Agent workspace ─────────────────────────────────────────────────────
 
   /** Returns the workspace directory path for a given agent (may not exist yet). */
@@ -396,6 +539,43 @@ export class TelegramStorage {
 
     if (!apiId || !apiHash) return null;
     return { apiId, apiHash, ...(proxy ? { proxy } : {}) };
+  }
+
+  private toChatNode(row: any): ChatNode {
+    return {
+      id: row.id,
+      agentId: row.agent_id,
+      role: row.role,
+      text: row.text,
+      nextNodeId: row.next_node_id ?? undefined,
+      branches: JSON.parse(row.branches ?? "[]"),
+      position: row.position ? JSON.parse(row.position) : undefined,
+      createdAt: row.created_at,
+    };
+  }
+
+  private toFlowNode(row: any): FlowNode {
+    return {
+      id: row.id,
+      agentId: row.agent_id,
+      title: row.title,
+      description: row.description ?? undefined,
+      chatNodeIds: JSON.parse(row.chat_node_ids ?? "[]"),
+      nextFlowNodeIds: JSON.parse(row.next_flow_node_ids ?? "[]"),
+      position: row.position ? JSON.parse(row.position) : undefined,
+      createdAt: row.created_at,
+    };
+  }
+
+  private toTrainingPair(row: any): TrainingPair {
+    return {
+      id: row.id,
+      agentId: row.agent_id,
+      input: row.input,
+      response: row.response,
+      sourceFile: row.source_file,
+      createdAt: row.created_at,
+    };
   }
 
   private toRecord(row: any): AgentRecord {

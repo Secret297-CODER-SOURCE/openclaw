@@ -289,6 +289,21 @@ export class OpenClawApp extends LitElement {
   @state() telegramTaskFormSystemPrompt = "";
   @state() telegramTaskFormOpeningMessage = "";
 
+  // Scenario / Chat panel
+  @state() telegramChatSubPanel: import("./views/telegram-scenario.ts").TelegramChatSubPanel =
+    "chat";
+  @state() telegramChatNodes: import("./controllers/telegram.ts").ChatNode[] = [];
+  @state() telegramChatNodesLoading = false;
+  @state() telegramChatNodesError: string | null = null;
+  @state() telegramFlowNodes: import("./controllers/telegram.ts").FlowNode[] = [];
+  @state() telegramFlowNodesLoading = false;
+  @state() telegramTrainingPairs: import("./controllers/telegram.ts").TrainingPair[] = [];
+  @state() telegramTrainingGroups: import("./controllers/telegram.ts").TrainingGroup[] = [];
+  @state() telegramTrainingGroupsLimit = 100;
+  @state() telegramTrainingLoading = false;
+  @state() telegramTrainingError: string | null = null;
+  @state() telegramShowCreateNodesPrompt = false;
+
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
   @state() sessionsError: string | null = null;

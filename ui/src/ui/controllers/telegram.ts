@@ -643,7 +643,9 @@ export async function loadTelegramAgentFiles(
   state: TelegramAgentFilesState,
   agentId: string,
 ): Promise<void> {
-  if (!isReady(state) || state.agentFilesLoading) {
+  // Note: do NOT guard on state.agentFilesLoading — the caller (onSelectPanel)
+  // pre-sets it to true to suppress the "click to load" flash, then calls us.
+  if (!isReady(state)) {
     return;
   }
   state.agentFilesLoading = true;
@@ -695,6 +697,375 @@ export async function loadTelegramAgentFileContent(
   } finally {
     state.agentFilesLoading = false;
   }
+}
+
+// ─── Scenario types (mirror extensions/telegram-manager/src/types.ts) ────────
+
+export type ChatNode = {
+  id: string;
+  agentId: string;
+  role: "manager" | "client";
+  text: string;
+  nextNodeId?: string;
+  branches?: { keyword: string; nextNodeId: string }[];
+  position?: { x: number; y: number };
+  createdAt: string;
+};
+
+export type FlowNode = {
+  id: string;
+  agentId: string;
+  title: string;
+  description?: string;
+  chatNodeIds: string[];
+  nextFlowNodeIds: string[];
+  position?: { x: number; y: number };
+  createdAt: string;
+};
+
+export type TrainingPair = {
+  id: string;
+  agentId: string;
+  input: string;
+  response: string;
+  sourceFile: string;
+  createdAt: string;
+};
+
+// ─── Scenario controller ──────────────────────────────────────────────────────
+
+/** One conversation (personal chat) extracted from a Telegram export */
+export type TrainingGroup = {
+  chatId: string;
+  participantName: string;
+  firstDate: string; // ISO date-time of first message in chat
+  lastDate: string; // ISO date-time of last message in chat
+  pairs: Array<{ input: string; response: string }>;
+};
+
+type TelegramScenarioState = TelegramState & {
+  telegramChatNodes: ChatNode[];
+  telegramChatNodesLoading: boolean;
+  telegramChatNodesError: string | null;
+  telegramFlowNodes: FlowNode[];
+  telegramFlowNodesLoading: boolean;
+  telegramTrainingPairs: TrainingPair[];
+  telegramTrainingGroups: TrainingGroup[];
+  telegramTrainingLoading: boolean;
+  telegramTrainingError: string | null;
+  telegramShowCreateNodesPrompt: boolean;
+};
+
+export async function loadTelegramChatNodes(
+  state: TelegramScenarioState,
+  agentId: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  state.telegramChatNodesLoading = true;
+  state.telegramChatNodesError = null;
+  try {
+    const res = await state.client!.request<ChatNode[]>("telegram.scenario.getChatNodes", {
+      agentId,
+    });
+    state.telegramChatNodes = res ?? [];
+  } catch (err) {
+    const msg = String(err);
+    // Silently ignore "unknown method" — handlers may not be deployed yet;
+    // nodes are managed in-memory and remain intact.
+    if (!msg.includes("unknown method")) {
+      state.telegramChatNodesError = msg;
+    }
+  } finally {
+    state.telegramChatNodesLoading = false;
+  }
+}
+
+export async function loadTelegramFlowNodes(
+  state: TelegramScenarioState,
+  agentId: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  state.telegramFlowNodesLoading = true;
+  try {
+    const res = await state.client!.request<FlowNode[]>("telegram.scenario.getFlowNodes", {
+      agentId,
+    });
+    state.telegramFlowNodes = res ?? [];
+  } catch {
+    // non-fatal
+  } finally {
+    state.telegramFlowNodesLoading = false;
+  }
+}
+
+export async function addTelegramChatNode(
+  state: TelegramScenarioState,
+  agentId: string,
+  role: "manager" | "client",
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  try {
+    const node: Partial<ChatNode> = {
+      role,
+      text: role === "manager" ? "Сообщение менеджера" : "Сообщение клиента",
+    };
+    await state.client!.request("telegram.scenario.saveChatNode", { agentId, node });
+    await loadTelegramChatNodes(state, agentId);
+  } catch (err) {
+    state.telegramChatNodesError = String(err);
+  }
+}
+
+export async function deleteTelegramChatNode(
+  state: TelegramScenarioState,
+  agentId: string,
+  nodeId: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  try {
+    await state.client!.request("telegram.scenario.deleteChatNode", { nodeId });
+    await loadTelegramChatNodes(state, agentId);
+  } catch (err) {
+    state.telegramChatNodesError = String(err);
+  }
+}
+
+// ─── Client-side Telegram export parser ──────────────────────────────────────
+
+type TgExportMsg = {
+  type: string;
+  from: string | null;
+  from_id: string;
+  text: string | unknown[];
+  date?: string; // ISO date-time, e.g. "2026-01-23T15:08:29"
+};
+
+type TgChat = { type: string; id?: number | string; name?: string; messages?: TgExportMsg[] };
+
+function flattenText(t: string | unknown[]): string {
+  if (typeof t === "string") {
+    return t.trim();
+  }
+  return (t as Array<string | { text?: string }>)
+    .map((p) => (typeof p === "string" ? p : (p?.text ?? "")))
+    .join("")
+    .trim();
+}
+
+/** Parse a Telegram Desktop JSON export and return pairs grouped by conversation. */
+function extractGroupedPairs(json: string): TrainingGroup[] {
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(json) as Record<string, unknown>;
+  } catch {
+    throw new Error("Файл не является корректным JSON.");
+  }
+
+  // Supported formats:
+  // 1. Single-chat export:  { name, type, id, messages: [...] }
+  // 2. Full account export: { about, chats: { list: [ { type, id, messages }, ... ] } }
+  let chats: TgChat[] = [];
+  let managerFromId: string | null = null;
+
+  if (Array.isArray(data.messages)) {
+    // Format 1: wrap as a single chat
+    chats = [
+      {
+        type: "personal_chat",
+        id: typeof data.id === "number" ? data.id : 0,
+        name: typeof data.name === "string" ? data.name : "",
+        messages: data.messages as TgExportMsg[],
+      },
+    ];
+  } else if (data.chats && typeof data.chats === "object") {
+    // Format 2: full account export — identify manager via saved_messages
+    const list = ((data.chats as Record<string, unknown>).list ?? []) as TgChat[];
+    const saved = list.find((c) => c.type === "saved_messages");
+    const ownerMsg = (saved?.messages ?? []).find((m) => m.type === "message" && m.from_id);
+    if (ownerMsg) {
+      managerFromId = ownerMsg.from_id;
+    }
+    chats = list.filter(
+      (c) => c.type === "personal_chat" && Array.isArray(c.messages) && c.messages.length > 0,
+    );
+  }
+
+  if (chats.length === 0) {
+    return [];
+  }
+
+  // For single-chat format: detect manager by from === null or most-frequent sender
+  if (!managerFromId) {
+    const freq: Record<string, number> = {};
+    outer: for (const chat of chats) {
+      for (const m of chat.messages ?? []) {
+        if (m.type !== "message") {
+          continue;
+        }
+        if (m.from === null) {
+          managerFromId = m.from_id;
+          break outer;
+        }
+        freq[m.from_id] = (freq[m.from_id] ?? 0) + 1;
+      }
+    }
+    if (!managerFromId) {
+      managerFromId = Object.entries(freq).toSorted((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    }
+  }
+
+  const groups: TrainingGroup[] = [];
+
+  for (const chat of chats) {
+    const messages = chat.messages ?? [];
+    const pairs: Array<{ input: string; response: string }> = [];
+    const dates: string[] = [];
+    let pendingClient: string | null = null;
+    let participantName = chat.name ?? "";
+
+    for (const m of messages) {
+      if (m.type !== "message") {
+        continue;
+      }
+      const text = flattenText(m.text);
+      if (!text) {
+        continue;
+      }
+
+      const isManager = m.from_id === managerFromId || m.from === null;
+
+      // Capture the client's display name from the first non-manager message
+      if (!isManager && !participantName && m.from) {
+        participantName = m.from;
+      }
+
+      if (m.date) {
+        dates.push(m.date);
+      }
+
+      if (!isManager) {
+        pendingClient = text;
+      } else if (pendingClient) {
+        pairs.push({ input: pendingClient, response: text });
+        pendingClient = null;
+      }
+    }
+
+    if (pairs.length > 0) {
+      const sortedDates = [...dates].toSorted();
+      groups.push({
+        chatId: String(chat.id ?? groups.length),
+        participantName: participantName || "Неизвестный",
+        firstDate: sortedDates[0] ?? "",
+        lastDate: sortedDates.at(-1) ?? "",
+        pairs,
+      });
+    }
+  }
+
+  return groups;
+}
+
+export async function processTelegramTrainingFile(
+  state: TelegramScenarioState,
+  agentId: string,
+  json: string,
+  fileName: string,
+): Promise<void> {
+  // No gateway required — parse fully in-browser to avoid WS size limits and
+  // dependency on new plugin handlers that may not be deployed yet.
+  state.telegramTrainingLoading = true;
+  state.telegramTrainingError = null;
+  state.telegramShowCreateNodesPrompt = false;
+  state.telegramTrainingPairs = [];
+  state.telegramTrainingGroups = [];
+  try {
+    // Yield to the event loop so "Обработка…" renders before the blocking parse
+    await new Promise<void>((r) => setTimeout(r, 32));
+    const groups = extractGroupedPairs(json);
+
+    if (groups.length === 0) {
+      state.telegramTrainingError = "Пары диалога не найдены в файле.";
+      return;
+    }
+
+    // Store groups + flat pairs in state — no gateway round-trip needed
+    state.telegramTrainingGroups = groups;
+    const now = new Date().toISOString();
+    let idx = 0;
+    state.telegramTrainingPairs = groups.flatMap((g) =>
+      g.pairs.map((p) => ({
+        id: String(idx++),
+        agentId,
+        input: p.input,
+        response: p.response,
+        sourceFile: fileName,
+        createdAt: now,
+      })),
+    );
+  } catch (err) {
+    state.telegramTrainingError = String(err);
+  } finally {
+    state.telegramTrainingLoading = false;
+  }
+}
+
+/** Build ChatNodes from a single training group's pairs and append to node list. */
+export async function createNodesFromTelegramTraining(
+  state: TelegramScenarioState,
+  agentId: string,
+  group: TrainingGroup,
+): Promise<void> {
+  const { pairs, chatId } = group;
+  if (pairs.length === 0) {
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const nodes: ChatNode[] = [];
+  for (let i = 0; i < pairs.length; i++) {
+    const pair = pairs[i];
+    const clientId = `${chatId}-c-${i}`;
+    const managerId = `${chatId}-m-${i}`;
+    nodes.push({
+      id: clientId,
+      agentId,
+      role: "client",
+      text: pair.input,
+      nextNodeId: managerId,
+      createdAt: now,
+    });
+    nodes.push({
+      id: managerId,
+      agentId,
+      role: "manager",
+      text: pair.response,
+      nextNodeId: i + 1 < pairs.length ? `${chatId}-c-${i + 1}` : undefined,
+      createdAt: now,
+    });
+  }
+
+  // Try to persist to gateway; nodes usable in-memory regardless
+  if (isReady(state)) {
+    try {
+      for (const node of nodes) {
+        await state.client!.request("telegram.scenario.saveChatNode", { agentId, node });
+      }
+    } catch {
+      // Gateway handler not yet deployed
+    }
+  }
+
+  // Append new group's nodes to existing node list
+  state.telegramChatNodes = [...state.telegramChatNodes, ...nodes];
 }
 
 /** Save a Telegram agent core file via telegram.agent.setCoreFile */

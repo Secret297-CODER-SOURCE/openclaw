@@ -20,6 +20,11 @@ import {
   HttpRoute,
   TelegramEvent,
   TaskSession,
+  ChatNode,
+  FlowNode,
+  TrainingPair,
+  TelegramExportChat,
+  TelegramExportMessage,
 } from "./types";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -509,6 +514,221 @@ export class TelegramPlugin implements GatewayPlugin {
           break;
         }
 
+        // ── Scenario: Chat Nodes ───────────────────────────────────────────
+
+        case "telegram.scenario.getChatNodes": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          respond(this.storage.getChatNodes(String(p.agentId)));
+          break;
+        }
+
+        case "telegram.scenario.saveChatNode": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          if (!p.node || typeof p.node !== "object") {
+            fail("node is required");
+            break;
+          }
+          const n = p.node as Partial<ChatNode>;
+          const now = new Date().toISOString();
+          const node: ChatNode = {
+            id: n.id ?? randomUUID(),
+            agentId: String(p.agentId),
+            role: n.role === "manager" || n.role === "client" ? n.role : "manager",
+            text: String(n.text ?? ""),
+            nextNodeId: n.nextNodeId ?? undefined,
+            branches: Array.isArray(n.branches) ? n.branches : [],
+            position: n.position ?? undefined,
+            createdAt: n.createdAt ?? now,
+          };
+          this.storage.saveChatNode(node);
+          respond(node);
+          break;
+        }
+
+        case "telegram.scenario.deleteChatNode": {
+          if (!p.nodeId) {
+            fail("nodeId is required");
+            break;
+          }
+          this.storage.deleteChatNode(String(p.nodeId));
+          respond({ ok: true });
+          break;
+        }
+
+        case "telegram.scenario.clearChatNodes": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          this.storage.clearChatNodes(String(p.agentId));
+          respond({ ok: true });
+          break;
+        }
+
+        // ── Scenario: Flow Nodes ───────────────────────────────────────────
+
+        case "telegram.scenario.getFlowNodes": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          respond(this.storage.getFlowNodes(String(p.agentId)));
+          break;
+        }
+
+        case "telegram.scenario.saveFlowNode": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          if (!p.node || typeof p.node !== "object") {
+            fail("node is required");
+            break;
+          }
+          const fn = p.node as Partial<FlowNode>;
+          const now = new Date().toISOString();
+          const flowNode: FlowNode = {
+            id: fn.id ?? randomUUID(),
+            agentId: String(p.agentId),
+            title: String(fn.title ?? ""),
+            description: fn.description ?? undefined,
+            chatNodeIds: Array.isArray(fn.chatNodeIds) ? fn.chatNodeIds.map(String) : [],
+            nextFlowNodeIds: Array.isArray(fn.nextFlowNodeIds)
+              ? fn.nextFlowNodeIds.map(String)
+              : [],
+            position: fn.position ?? undefined,
+            createdAt: fn.createdAt ?? now,
+          };
+          this.storage.saveFlowNode(flowNode);
+          respond(flowNode);
+          break;
+        }
+
+        case "telegram.scenario.deleteFlowNode": {
+          if (!p.nodeId) {
+            fail("nodeId is required");
+            break;
+          }
+          this.storage.deleteFlowNode(String(p.nodeId));
+          respond({ ok: true });
+          break;
+        }
+
+        // ── Scenario: Training ─────────────────────────────────────────────
+
+        case "telegram.scenario.processTraining": {
+          // Parse Telegram export JSON, extract dialogue pairs. Does NOT save to DB.
+          if (!p.json || typeof p.json !== "string") {
+            fail("json string is required");
+            break;
+          }
+          const result = extractTrainingPairs(p.json as string);
+          respond(result);
+          break;
+        }
+
+        case "telegram.scenario.saveTrainingPairs": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          if (!Array.isArray(p.pairs)) {
+            fail("pairs array is required");
+            break;
+          }
+          const agentId = String(p.agentId);
+          const sourceFile = String(p.sourceFile ?? "");
+          const now = new Date().toISOString();
+          const pairs: TrainingPair[] = (p.pairs as { input: string; response: string }[]).map(
+            (pr) => ({
+              id: randomUUID(),
+              agentId,
+              input: String(pr.input ?? ""),
+              response: String(pr.response ?? ""),
+              sourceFile,
+              createdAt: now,
+            }),
+          );
+          // Replace all existing training pairs for this agent
+          this.storage.clearTrainingPairs(agentId);
+          this.storage.saveTrainingPairs(pairs);
+          respond({ ok: true, count: pairs.length });
+          break;
+        }
+
+        case "telegram.scenario.getTrainingPairs": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          respond(this.storage.getTrainingPairs(String(p.agentId)));
+          break;
+        }
+
+        case "telegram.scenario.createNodesFromPairs": {
+          // Convert saved training pairs into ChatNodes and FlowNodes
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          const agentId = String(p.agentId);
+          const pairs = this.storage.getTrainingPairs(agentId);
+          if (pairs.length === 0) {
+            respond({ ok: true, created: 0 });
+            break;
+          }
+          const now = new Date().toISOString();
+          // Clear existing chat nodes and create new ones from pairs
+          this.storage.clearChatNodes(agentId);
+          const chatNodes: ChatNode[] = [];
+          for (let i = 0; i < pairs.length; i++) {
+            const pr = pairs[i];
+            const clientId = randomUUID();
+            const managerId = randomUUID();
+            const nextClientId = i < pairs.length - 1 ? randomUUID() : undefined;
+            chatNodes.push({
+              id: clientId,
+              agentId,
+              role: "client",
+              text: pr.input,
+              nextNodeId: managerId,
+              branches: [],
+              createdAt: now,
+            });
+            chatNodes.push({
+              id: managerId,
+              agentId,
+              role: "manager",
+              text: pr.response,
+              nextNodeId: nextClientId,
+              branches: [],
+              createdAt: now,
+            });
+          }
+          for (const n of chatNodes) {
+            this.storage.saveChatNode(n);
+          }
+          // Create a single "Training Import" flow node grouping all chat nodes
+          const flowNode: FlowNode = {
+            id: randomUUID(),
+            agentId,
+            title: "Обучение (импорт)",
+            description: `Создано из ${pairs.length} пар диалога`,
+            chatNodeIds: chatNodes.map((n) => n.id),
+            nextFlowNodeIds: [],
+            createdAt: now,
+          };
+          this.storage.saveFlowNode(flowNode);
+          respond({ ok: true, created: chatNodes.length, flowNodeId: flowNode.id });
+          break;
+        }
+
         default:
           fail(`Unknown method: ${msg.method}`);
       }
@@ -715,6 +935,68 @@ export class TelegramPlugin implements GatewayPlugin {
       },
     ];
   }
+}
+
+// ─── Training pair extraction ─────────────────────────────────────────────────
+
+/** Flatten Telegram export text (string or array of strings/objects) to plain text. */
+function flattenExportText(text: TelegramExportMessage["text"]): string {
+  if (typeof text === "string") return text;
+  return text
+    .map((t) => (typeof t === "string" ? t : ((t as { text?: string }).text ?? "")))
+    .join("");
+}
+
+/**
+ * Parse a raw Telegram export JSON string, detect manager vs client, and
+ * return dialogue pairs {input, response} plus metadata.
+ */
+function extractTrainingPairs(json: string): {
+  pairs: { input: string; response: string }[];
+  managerFromId: string;
+  error?: string;
+} {
+  let chat: TelegramExportChat;
+  try {
+    chat = JSON.parse(json) as TelegramExportChat;
+  } catch {
+    return { pairs: [], managerFromId: "", error: "Invalid JSON" };
+  }
+  if (!Array.isArray(chat.messages)) {
+    return { pairs: [], managerFromId: "", error: "No messages array found" };
+  }
+
+  // Identify manager: sender with from === null is the account owner (exporter)
+  const msgs = chat.messages.filter((m) => m.type === "message");
+  const nullSender = msgs.find((m) => m.from === null);
+  let managerFromId = nullSender?.from_id ?? "";
+
+  if (!managerFromId) {
+    // Fallback: most frequent sender
+    const counts: Record<string, number> = {};
+    for (const m of msgs) counts[m.from_id] = (counts[m.from_id] ?? 0) + 1;
+    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    managerFromId = sorted[0]?.[0] ?? "";
+  }
+
+  // Build pairs: for each manager message, find the preceding client message
+  const pairs: { input: string; response: string }[] = [];
+  let pendingClient: string | null = null;
+
+  for (const m of msgs) {
+    const text = flattenExportText(m.text).trim();
+    if (!text) continue;
+    if (m.from_id === managerFromId) {
+      if (pendingClient !== null) {
+        pairs.push({ input: pendingClient, response: text });
+        pendingClient = null;
+      }
+    } else {
+      pendingClient = text;
+    }
+  }
+
+  return { pairs, managerFromId };
 }
 
 // Mask token / sessionString in API responses

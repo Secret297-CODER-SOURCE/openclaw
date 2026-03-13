@@ -4,6 +4,9 @@ import type {
   TelegramAgentEvent,
   TelegramAgentRecord,
   TaskSession,
+  ChatNode,
+  FlowNode,
+  TrainingPair,
 } from "../controllers/telegram.ts";
 import {
   formatCronPayload,
@@ -13,6 +16,8 @@ import {
 } from "../presenter.ts";
 import type { AgentsFilesListResult, CronJob, CronStatus } from "../types.ts";
 import { renderAgentFiles } from "./agents-panels-status-files.ts";
+import { renderChatPanel, renderSchemaPanel } from "./telegram-scenario.ts";
+import type { TelegramChatSubPanel, ScenarioProps } from "./telegram-scenario.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -23,7 +28,11 @@ export type TelegramPanel =
   | "events"
   | "cron"
   | "files"
-  | "tasks";
+  | "tasks"
+  | "chat"
+  | "schema";
+
+export type { TelegramChatSubPanel };
 
 export type TelegramProps = {
   loading: boolean;
@@ -135,6 +144,28 @@ export type TelegramProps = {
   onTaskFormOpeningMessageChange: (v: string) => void;
   onTaskAssign: (agentId: string) => void;
   onTaskComplete: (agentId: string, sessionId: string) => void;
+  // Scenario / Chat panel
+  chatSubPanel: TelegramChatSubPanel;
+  chatNodes: ChatNode[];
+  chatNodesLoading: boolean;
+  chatNodesError: string | null;
+  flowNodes: FlowNode[];
+  flowNodesLoading: boolean;
+  trainingPairs: TrainingPair[];
+  trainingGroups: TrainingGroup[];
+  trainingGroupsLimit: number;
+  trainingLoading: boolean;
+  trainingError: string | null;
+  showCreateNodesPrompt: boolean;
+  onSelectChatSubPanel: (sub: TelegramChatSubPanel) => void;
+  onTrainingFileLoad: (agentId: string, json: string, fileName: string) => void;
+  onTrainingCreateNodes: (agentId: string, group: TrainingGroup) => void;
+  onTrainingDismiss: () => void;
+  onTrainingShowMore: () => void;
+  onAddChatNode: (agentId: string, role: "manager" | "client") => void;
+  onDeleteChatNode: (agentId: string, nodeId: string) => void;
+  onLoadChatNodes: (agentId: string) => void;
+  onLoadFlowNodes: (agentId: string) => void;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -308,6 +339,8 @@ function renderPanelTabs(props: TelegramProps, agent: TelegramAgentRecord) {
     { id: "tasks", label: "Tasks" },
     { id: "cron", label: "Cron" },
     { id: "files", label: "Files" },
+    { id: "chat", label: "Чат" },
+    { id: "schema", label: "Схема" },
   ];
 
   return html`
@@ -886,6 +919,30 @@ function renderDetail(props: TelegramProps) {
     `;
   }
 
+  const scenarioProps: ScenarioProps = {
+    chatSubPanel: props.chatSubPanel,
+    chatNodes: props.chatNodes,
+    chatNodesLoading: props.chatNodesLoading,
+    chatNodesError: props.chatNodesError,
+    flowNodes: props.flowNodes,
+    flowNodesLoading: props.flowNodesLoading,
+    trainingPairs: props.trainingPairs,
+    trainingGroups: props.trainingGroups,
+    trainingGroupsLimit: props.trainingGroupsLimit,
+    trainingLoading: props.trainingLoading,
+    trainingError: props.trainingError,
+    showCreateNodesPrompt: props.showCreateNodesPrompt,
+    onSelectChatSubPanel: props.onSelectChatSubPanel,
+    onTrainingFileLoad: props.onTrainingFileLoad,
+    onTrainingCreateNodes: props.onTrainingCreateNodes,
+    onTrainingDismiss: props.onTrainingDismiss,
+    onTrainingShowMore: props.onTrainingShowMore,
+    onAddChatNode: props.onAddChatNode,
+    onDeleteChatNode: props.onDeleteChatNode,
+    onLoadChatNodes: props.onLoadChatNodes,
+    onLoadFlowNodes: props.onLoadFlowNodes,
+  };
+
   return html`
     <section class="agents-main">
       <section class="card agent-header">
@@ -917,6 +974,8 @@ function renderDetail(props: TelegramProps) {
       ${props.activePanel === "tasks" ? renderTasksPanel(props, agent.id) : nothing}
       ${props.activePanel === "cron" ? renderCronPanel(props) : nothing}
       ${props.activePanel === "files" ? renderFilesPanel(props, agent.id) : nothing}
+      ${props.activePanel === "chat" ? renderChatPanel(scenarioProps, agent) : nothing}
+      ${props.activePanel === "schema" ? renderSchemaPanel(scenarioProps, agent) : nothing}
     </section>
   `;
 }

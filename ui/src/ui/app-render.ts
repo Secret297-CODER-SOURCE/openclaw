@@ -80,6 +80,12 @@ import {
   loadTelegramAgentFiles,
   loadTelegramAgentFileContent,
   saveTelegramAgentFile,
+  loadTelegramChatNodes,
+  loadTelegramFlowNodes,
+  addTelegramChatNode,
+  deleteTelegramChatNode,
+  processTelegramTrainingFile,
+  createNodesFromTelegramTraining,
 } from "./controllers/telegram.ts";
 import { icons } from "./icons.ts";
 import { TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
@@ -579,6 +585,16 @@ export function renderApp(state: AppViewState) {
                   state.telegramTaskFormTask = "";
                   state.telegramTaskFormSystemPrompt = "";
                   state.telegramTaskFormOpeningMessage = "";
+                  // Reset scenario state when switching agents
+                  state.telegramChatNodes = [];
+                  state.telegramChatNodesError = null;
+                  state.telegramFlowNodes = [];
+                  state.telegramTrainingPairs = [];
+                  state.telegramTrainingGroups = [];
+                  state.telegramTrainingGroupsLimit = 100;
+                  state.telegramTrainingError = null;
+                  state.telegramShowCreateNodesPrompt = false;
+                  state.telegramChatSubPanel = "chat";
                 },
                 onSelectPanel: (panel: TelegramPanel) => {
                   state.telegramActivePanel = panel;
@@ -600,6 +616,8 @@ export function renderApp(state: AppViewState) {
                       void loadTelegramAgentFiles(state, agentId);
                     }
                   }
+                  // Nodes are managed in-memory client-side; gateway handlers
+                  // may not be deployed yet, so we skip auto-loading here.
                 },
                 onCreateNameChange: (v) => {
                   state.telegramCreateName = v;
@@ -832,6 +850,40 @@ export function renderApp(state: AppViewState) {
                 },
                 onTaskComplete: (agentId, sessionId) => {
                   void completeTelegramTaskSession(state, agentId, sessionId);
+                },
+                // Scenario / Chat panel
+                chatSubPanel: state.telegramChatSubPanel,
+                chatNodes: state.telegramChatNodes,
+                chatNodesLoading: state.telegramChatNodesLoading,
+                chatNodesError: state.telegramChatNodesError,
+                flowNodes: state.telegramFlowNodes,
+                flowNodesLoading: state.telegramFlowNodesLoading,
+                trainingPairs: state.telegramTrainingPairs,
+                trainingGroups: state.telegramTrainingGroups,
+                trainingGroupsLimit: state.telegramTrainingGroupsLimit,
+                trainingLoading: state.telegramTrainingLoading,
+                trainingError: state.telegramTrainingError,
+                showCreateNodesPrompt: state.telegramShowCreateNodesPrompt,
+                onSelectChatSubPanel: (sub) => {
+                  state.telegramChatSubPanel = sub;
+                },
+                onLoadChatNodes: (agentId) => void loadTelegramChatNodes(state, agentId),
+                onLoadFlowNodes: (agentId) => void loadTelegramFlowNodes(state, agentId),
+                onAddChatNode: (agentId, role) => void addTelegramChatNode(state, agentId, role),
+                onDeleteChatNode: (agentId, nodeId) =>
+                  void deleteTelegramChatNode(state, agentId, nodeId),
+                onTrainingFileLoad: (agentId, json, fileName) => {
+                  state.telegramTrainingGroupsLimit = 100; // reset pagination on new file
+                  void processTelegramTrainingFile(state, agentId, json, fileName);
+                },
+                onTrainingCreateNodes: (agentId, group) => {
+                  void createNodesFromTelegramTraining(state, agentId, group);
+                },
+                onTrainingDismiss: () => {
+                  state.telegramShowCreateNodesPrompt = false;
+                },
+                onTrainingShowMore: () => {
+                  state.telegramTrainingGroupsLimit += 100;
                 },
               })
             : nothing
