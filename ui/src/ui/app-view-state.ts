@@ -219,6 +219,7 @@ export type AppViewState = {
   telegramMissionSendFromId: string;
   telegramMissionSendToId: string;
   telegramMissionSendContent: string;
+  telegramChatViewMode: "chat" | "nodes";
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;

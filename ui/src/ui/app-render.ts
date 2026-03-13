@@ -596,6 +596,7 @@ export function renderApp(state: AppViewState) {
                   state.telegramMissionSendFromId = "";
                   state.telegramMissionSendToId = "";
                   state.telegramMissionSendContent = "";
+                  state.telegramChatViewMode = "chat";
                 },
                 onSelectPanel: (panel: TelegramPanel) => {
                   state.telegramActivePanel = panel;
@@ -622,6 +623,16 @@ export function renderApp(state: AppViewState) {
                     state.telegramSelectedMissionId = null;
                     state.telegramMissionMessages = [];
                     void loadTelegramMissions(state);
+                  }
+                  if (panel === "chat" || panel === "schemas") {
+                    // Load missions first; for chat, load all messages after missions arrive
+                    void loadTelegramMissions(state).then(() => {
+                      if (panel === "chat") {
+                        for (const m of state.telegramMissions) {
+                          void loadTelegramMissionMessages(state, m.id);
+                        }
+                      }
+                    });
                   }
                 },
                 onCreateNameChange: (v) => {
@@ -939,6 +950,11 @@ export function renderApp(state: AppViewState) {
                   if (result) {
                     state.telegramMissionSendContent = "";
                   }
+                },
+                // Chat panel
+                chatViewMode: state.telegramChatViewMode,
+                onChatViewModeChange: (mode) => {
+                  state.telegramChatViewMode = mode;
                 },
               })
             : nothing

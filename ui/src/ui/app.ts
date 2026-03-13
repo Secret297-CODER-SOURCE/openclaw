@@ -303,6 +303,8 @@ export class OpenClawApp extends LitElement {
   @state() telegramMissionSendFromId = "";
   @state() telegramMissionSendToId = "";
   @state() telegramMissionSendContent = "";
+  // Chat panel view mode toggle ("chat" = bubbles, "nodes" = graph view)
+  @state() telegramChatViewMode: "chat" | "nodes" = "chat";
 
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
