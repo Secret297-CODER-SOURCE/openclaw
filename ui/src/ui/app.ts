@@ -289,6 +289,21 @@ export class OpenClawApp extends LitElement {
   @state() telegramTaskFormSystemPrompt = "";
   @state() telegramTaskFormOpeningMessage = "";
 
+  // Communication structure (missions)
+  @state() telegramMissions: import("./controllers/telegram.ts").AgentMissionRecord[] = [];
+  @state() telegramMissionsLoading = false;
+  @state() telegramMissionsError: string | null = null;
+  @state() telegramMissionsBusy = false;
+  @state() telegramMissionMessages: import("./controllers/telegram.ts").AgentCommMessageRecord[] = [];
+  @state() telegramSelectedMissionId: string | null = null;
+  @state() telegramMissionCreateTitle = "";
+  @state() telegramMissionCreateGoal = "";
+  @state() telegramMissionCreateSystemPrompt = "";
+  @state() telegramMissionCreateParticipantIds: string[] = [];
+  @state() telegramMissionSendFromId = "";
+  @state() telegramMissionSendToId = "";
+  @state() telegramMissionSendContent = "";
+
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
   @state() sessionsError: string | null = null;

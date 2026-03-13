@@ -80,6 +80,11 @@ import {
   loadTelegramAgentFiles,
   loadTelegramAgentFileContent,
   saveTelegramAgentFile,
+  loadTelegramMissions,
+  createTelegramMission,
+  completeTelegramMission,
+  loadTelegramMissionMessages,
+  sendTelegramAgentMessage,
 } from "./controllers/telegram.ts";
 import { icons } from "./icons.ts";
 import { TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
@@ -600,6 +605,12 @@ export function renderApp(state: AppViewState) {
                       void loadTelegramAgentFiles(state, agentId);
                     }
                   }
+                  if (panel === "communication") {
+                    // Reset mission selection and load missions
+                    state.telegramSelectedMissionId = null;
+                    state.telegramMissionMessages = [];
+                    void loadTelegramMissions(state);
+                  }
                 },
                 onCreateNameChange: (v) => {
                   state.telegramCreateName = v;
@@ -832,6 +843,81 @@ export function renderApp(state: AppViewState) {
                 },
                 onTaskComplete: (agentId, sessionId) => {
                   void completeTelegramTaskSession(state, agentId, sessionId);
+                },
+                // Communication structure panel
+                missions: state.telegramMissions,
+                missionsLoading: state.telegramMissionsLoading,
+                missionsError: state.telegramMissionsError,
+                missionsBusy: state.telegramMissionsBusy,
+                missionMessages: state.telegramMissionMessages,
+                selectedMissionId: state.telegramSelectedMissionId,
+                missionCreateTitle: state.telegramMissionCreateTitle,
+                missionCreateGoal: state.telegramMissionCreateGoal,
+                missionCreateSystemPrompt: state.telegramMissionCreateSystemPrompt,
+                missionCreateParticipantIds: state.telegramMissionCreateParticipantIds,
+                missionSendFromId: state.telegramMissionSendFromId,
+                missionSendToId: state.telegramMissionSendToId,
+                missionSendContent: state.telegramMissionSendContent,
+                onMissionsRefresh: () => void loadTelegramMissions(state),
+                onMissionCreateTitleChange: (v) => {
+                  state.telegramMissionCreateTitle = v;
+                },
+                onMissionCreateGoalChange: (v) => {
+                  state.telegramMissionCreateGoal = v;
+                },
+                onMissionCreateSystemPromptChange: (v) => {
+                  state.telegramMissionCreateSystemPrompt = v;
+                },
+                onMissionCreateParticipantIdsChange: (ids) => {
+                  state.telegramMissionCreateParticipantIds = ids;
+                },
+                onMissionCreate: async (masterAgentId) => {
+                  const result = await createTelegramMission(
+                    state,
+                    masterAgentId,
+                    state.telegramMissionCreateTitle,
+                    state.telegramMissionCreateGoal,
+                    state.telegramMissionCreateParticipantIds,
+                    state.telegramMissionCreateSystemPrompt || undefined,
+                  );
+                  if (result) {
+                    state.telegramMissionCreateTitle = "";
+                    state.telegramMissionCreateGoal = "";
+                    state.telegramMissionCreateSystemPrompt = "";
+                    state.telegramMissionCreateParticipantIds = [];
+                  }
+                },
+                onMissionComplete: (missionId) => {
+                  void completeTelegramMission(state, missionId);
+                },
+                onMissionViewMessages: async (missionId) => {
+                  state.telegramSelectedMissionId = missionId;
+                  await loadTelegramMissionMessages(state, missionId);
+                },
+                onMissionBack: () => {
+                  state.telegramSelectedMissionId = null;
+                  state.telegramMissionMessages = [];
+                },
+                onMissionSendFromIdChange: (v) => {
+                  state.telegramMissionSendFromId = v;
+                },
+                onMissionSendToIdChange: (v) => {
+                  state.telegramMissionSendToId = v;
+                },
+                onMissionSendContentChange: (v) => {
+                  state.telegramMissionSendContent = v;
+                },
+                onMissionSend: async (missionId) => {
+                  const result = await sendTelegramAgentMessage(
+                    state,
+                    state.telegramMissionSendFromId,
+                    state.telegramMissionSendToId,
+                    missionId,
+                    state.telegramMissionSendContent,
+                  );
+                  if (result) {
+                    state.telegramMissionSendContent = "";
+                  }
                 },
               })
             : nothing

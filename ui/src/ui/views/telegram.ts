@@ -4,6 +4,8 @@ import type {
   TelegramAgentEvent,
   TelegramAgentRecord,
   TaskSession,
+  AgentMissionRecord,
+  AgentCommMessageRecord,
 } from "../controllers/telegram.ts";
 import {
   formatCronPayload,
@@ -13,6 +15,7 @@ import {
 } from "../presenter.ts";
 import type { AgentsFilesListResult, CronJob, CronStatus } from "../types.ts";
 import { renderAgentFiles } from "./agents-panels-status-files.ts";
+import { formatRelativeTimestamp } from "../format.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -23,7 +26,8 @@ export type TelegramPanel =
   | "events"
   | "cron"
   | "files"
-  | "tasks";
+  | "tasks"
+  | "communication";
 
 export type TelegramProps = {
   loading: boolean;
@@ -135,6 +139,33 @@ export type TelegramProps = {
   onTaskFormOpeningMessageChange: (v: string) => void;
   onTaskAssign: (agentId: string) => void;
   onTaskComplete: (agentId: string, sessionId: string) => void;
+  // Communication structure panel
+  missions: AgentMissionRecord[];
+  missionsLoading: boolean;
+  missionsError: string | null;
+  missionsBusy: boolean;
+  missionMessages: AgentCommMessageRecord[];
+  selectedMissionId: string | null;
+  missionCreateTitle: string;
+  missionCreateGoal: string;
+  missionCreateSystemPrompt: string;
+  missionCreateParticipantIds: string[];
+  missionSendFromId: string;
+  missionSendToId: string;
+  missionSendContent: string;
+  onMissionsRefresh: () => void;
+  onMissionCreateTitleChange: (v: string) => void;
+  onMissionCreateGoalChange: (v: string) => void;
+  onMissionCreateSystemPromptChange: (v: string) => void;
+  onMissionCreateParticipantIdsChange: (ids: string[]) => void;
+  onMissionCreate: (masterAgentId: string) => void;
+  onMissionComplete: (missionId: string) => void;
+  onMissionViewMessages: (missionId: string) => void;
+  onMissionBack: () => void;
+  onMissionSendFromIdChange: (v: string) => void;
+  onMissionSendToIdChange: (v: string) => void;
+  onMissionSendContentChange: (v: string) => void;
+  onMissionSend: (missionId: string) => void;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -308,6 +339,7 @@ function renderPanelTabs(props: TelegramProps, agent: TelegramAgentRecord) {
     { id: "tasks", label: "Tasks" },
     { id: "cron", label: "Cron" },
     { id: "files", label: "Files" },
+    { id: "communication", label: "Communication" },
   ];
 
   return html`
@@ -869,6 +901,298 @@ function renderFilesPanel(props: TelegramProps, agentId: string) {
   });
 }
 
+// ─── Detail: communication structure panel ────────────────────────────────────
+
+function renderCommunicationPanel(props: TelegramProps, agent: TelegramAgentRecord) {
+  // Filter missions relevant to this agent (master or participant)
+  const agentMissions = props.missions.filter(
+    (m) => m.masterAgentId === agent.id || m.participantAgentIds.includes(agent.id),
+  );
+
+  if (props.selectedMissionId) {
+    const mission = agentMissions.find((m) => m.id === props.selectedMissionId) ?? null;
+    return renderMissionMessages(props, agent, mission);
+  }
+
+  const canCreate =
+    !props.missionsBusy &&
+    props.missionCreateTitle.trim() !== "" &&
+    props.missionCreateGoal.trim() !== "";
+
+  return html`
+    <section class="card">
+      <div class="row" style="justify-content: space-between; align-items: flex-start;">
+        <div>
+          <div class="card-title">Communication Structure</div>
+          <div class="card-sub">Missions and inter-agent communication for this agent.</div>
+        </div>
+        <button
+          class="btn btn--sm"
+          ?disabled=${props.missionsLoading}
+          @click=${() => props.onMissionsRefresh()}
+        >
+          ${props.missionsLoading ? "Loading…" : "Refresh"}
+        </button>
+      </div>
+
+      ${
+        props.missionsError
+          ? html`<div class="callout danger" style="margin-top: 12px;">${props.missionsError}</div>`
+          : nothing
+      }
+
+      <!-- Create mission form -->
+      <details style="margin-top: 16px; margin-bottom: 16px;">
+        <summary style="cursor: pointer; font-weight: 500; font-size: 0.9em;">
+          + Create Mission
+        </summary>
+        <div class="stack" style="margin-top: 12px;">
+          <div class="field">
+            <span>Title</span>
+            <input
+              type="text"
+              placeholder="Mission title…"
+              .value=${props.missionCreateTitle}
+              @input=${(e: Event) =>
+                props.onMissionCreateTitleChange((e.target as HTMLInputElement).value)}
+            />
+          </div>
+          <div class="field">
+            <span>Goal</span>
+            <textarea
+              rows="3"
+              placeholder="Describe the shared goal for all participating agents…"
+              .value=${props.missionCreateGoal}
+              @input=${(e: Event) =>
+                props.onMissionCreateGoalChange((e.target as HTMLTextAreaElement).value)}
+            ></textarea>
+          </div>
+          <div class="field">
+            <span>System Prompt <span class="muted" style="font-size:0.85em;">(optional)</span></span>
+            <textarea
+              rows="2"
+              placeholder="Optional system prompt override for sub-agents…"
+              .value=${props.missionCreateSystemPrompt}
+              @input=${(e: Event) =>
+                props.onMissionCreateSystemPromptChange(
+                  (e.target as HTMLTextAreaElement).value,
+                )}
+            ></textarea>
+          </div>
+          <div class="field">
+            <span>Participants</span>
+            <div class="stack" style="margin-top: 4px; gap: 4px;">
+              ${props.agents
+                .filter((a) => a.id !== agent.id)
+                .map(
+                  (a) => html`
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;">
+                      <input
+                        type="checkbox"
+                        .checked=${props.missionCreateParticipantIds.includes(a.id)}
+                        @change=${(e: Event) => {
+                          const checked = (e.target as HTMLInputElement).checked;
+                          const ids = checked
+                            ? [...props.missionCreateParticipantIds, a.id]
+                            : props.missionCreateParticipantIds.filter((id) => id !== a.id);
+                          props.onMissionCreateParticipantIdsChange(ids);
+                        }}
+                      />
+                      ${a.name}
+                    </label>
+                  `,
+                )}
+            </div>
+          </div>
+          <button
+            class="btn primary"
+            ?disabled=${!canCreate}
+            @click=${() => props.onMissionCreate(agent.id)}
+          >
+            ${props.missionsBusy ? "Creating…" : "Create Mission"}
+          </button>
+        </div>
+      </details>
+
+      <!-- Mission list -->
+      <div style="margin-top: 8px;">
+        ${
+          agentMissions.length === 0
+            ? html`<div class="muted">No missions yet for this agent.</div>`
+            : agentMissions.map((m) =>
+                renderMissionCard(props, m, agent),
+              )
+        }
+      </div>
+    </section>
+  `;
+}
+
+function missionStatusColor(status: string): string {
+  switch (status) {
+    case "active":
+      return "#3a7";
+    case "completed":
+      return "#888";
+    default:
+      return "#a73";
+  }
+}
+
+function renderMissionCard(
+  props: TelegramProps,
+  mission: AgentMissionRecord,
+  currentAgent: TelegramAgentRecord,
+) {
+  const masterAgent = props.agents.find((a) => a.id === mission.masterAgentId);
+  const participants = props.agents.filter((a) => mission.participantAgentIds.includes(a.id));
+  const role = mission.masterAgentId === currentAgent.id ? "master" : "participant";
+  const statusColor = missionStatusColor(mission.status);
+
+  return html`
+    <div style="padding:12px;border:1px solid var(--color-border,#333);border-radius:6px;margin-bottom:10px;background:var(--color-card-bg,#1a1a1a);">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:600;font-size:13px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+            ${mission.title}
+            <span style="font-size:10px;padding:2px 6px;border-radius:3px;background:${statusColor}22;color:${statusColor};border:1px solid ${statusColor}44;">${mission.status}</span>
+            <span class="chip" style="font-size:10px;">${role}</span>
+          </div>
+          <div style="font-size:12px;color:var(--color-muted,#888);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title=${mission.goal}>
+            ${mission.goal.length > 120 ? mission.goal.slice(0, 120) + "…" : mission.goal}
+          </div>
+          <div style="font-size:11px;color:var(--color-muted,#888);margin-top:4px;">
+            Master: ${masterAgent?.name ?? mission.masterAgentId}
+            ${
+              participants.length > 0
+                ? html` · Participants: ${participants.map((a) => a.name).join(", ")}`
+                : nothing
+            }
+            · ${formatRelativeTimestamp(Date.parse(mission.createdAt))}
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;">
+          <button class="btn btn--sm" @click=${() => props.onMissionViewMessages(mission.id)}>
+            Messages
+          </button>
+          ${
+            mission.status === "active"
+              ? html`<button class="btn btn--sm danger" @click=${() => props.onMissionComplete(mission.id)}>Complete</button>`
+              : nothing
+          }
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderMissionMessages(
+  props: TelegramProps,
+  agent: TelegramAgentRecord,
+  mission: AgentMissionRecord | null,
+) {
+  const canSend =
+    !props.missionsBusy &&
+    props.missionSendFromId !== "" &&
+    props.missionSendToId !== "" &&
+    props.missionSendContent.trim() !== "";
+
+  return html`
+    <section class="card">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+        <button class="btn btn--sm" @click=${props.onMissionBack}>← Back</button>
+        <div>
+          <div class="card-title" style="margin-bottom:0;">${mission?.title ?? "Mission Messages"}</div>
+          ${
+            mission
+              ? html`<div class="card-sub">${mission.goal.length > 100 ? mission.goal.slice(0, 100) + "…" : mission.goal}</div>`
+              : nothing
+          }
+        </div>
+      </div>
+
+      <!-- Message thread -->
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;max-height:360px;overflow-y:auto;padding-right:4px;">
+        ${
+          props.missionMessages.length === 0
+            ? html`<div class="muted" style="text-align:center;padding:16px 0;">No messages yet.</div>`
+            : props.missionMessages.map((msg) => renderMsgBubble(msg, props.agents))
+        }
+      </div>
+
+      <!-- Send message form -->
+      <div style="border-top:1px solid var(--color-border,#333);padding-top:12px;display:flex;flex-direction:column;gap:8px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div class="field">
+            <span>From</span>
+            <select
+              .value=${props.missionSendFromId}
+              @change=${(e: Event) =>
+                props.onMissionSendFromIdChange((e.target as HTMLSelectElement).value)}
+            >
+              <option value="">— select —</option>
+              ${props.agents.map((a) => html`<option value=${a.id}>${a.name}</option>`)}
+            </select>
+          </div>
+          <div class="field">
+            <span>To</span>
+            <select
+              .value=${props.missionSendToId}
+              @change=${(e: Event) =>
+                props.onMissionSendToIdChange((e.target as HTMLSelectElement).value)}
+            >
+              <option value="">— select —</option>
+              ${props.agents.map((a) => html`<option value=${a.id}>${a.name}</option>`)}
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <span>Message</span>
+          <textarea
+            rows="3"
+            placeholder="Message content…"
+            .value=${props.missionSendContent}
+            @input=${(e: Event) =>
+              props.onMissionSendContentChange((e.target as HTMLTextAreaElement).value)}
+          ></textarea>
+        </div>
+        <div style="display:flex;justify-content:flex-end;">
+          <button
+            class="btn primary"
+            ?disabled=${!canSend}
+            @click=${() => {
+              if (mission) {
+                props.onMissionSend(mission.id);
+              }
+            }}
+          >
+            ${props.missionsBusy ? "Sending…" : "Send"}
+          </button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderMsgBubble(msg: AgentCommMessageRecord, agents: TelegramAgentRecord[]) {
+  const fromAgent = agents.find((a) => a.id === msg.fromAgentId);
+  const toAgent = agents.find((a) => a.id === msg.toAgentId);
+
+  return html`
+    <div style="padding:8px 10px;border-radius:6px;border:1px solid var(--color-border,#333);background:var(--color-card-bg,#1a1a1a);">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+        <div style="font-size:11px;font-weight:600;color:var(--color-text);">
+          ${fromAgent?.name ?? msg.fromAgentName}
+          <span style="color:var(--color-muted,#888);font-weight:400;"> → </span>
+          ${toAgent?.name ?? msg.toAgentId}
+        </div>
+        <div style="font-size:10px;color:var(--color-muted,#888);">${formatRelativeTimestamp(Date.parse(msg.timestamp))}</div>
+      </div>
+      <div style="font-size:13px;white-space:pre-wrap;word-break:break-word;">${msg.content}</div>
+    </div>
+  `;
+}
+
 // ─── Main panel ───────────────────────────────────────────────────────────────
 
 function renderDetail(props: TelegramProps) {
@@ -917,6 +1241,7 @@ function renderDetail(props: TelegramProps) {
       ${props.activePanel === "tasks" ? renderTasksPanel(props, agent.id) : nothing}
       ${props.activePanel === "cron" ? renderCronPanel(props) : nothing}
       ${props.activePanel === "files" ? renderFilesPanel(props, agent.id) : nothing}
+      ${props.activePanel === "communication" ? renderCommunicationPanel(props, agent) : nothing}
     </section>
   `;
 }
