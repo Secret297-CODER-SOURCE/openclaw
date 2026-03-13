@@ -334,12 +334,12 @@ function renderPanelTabs(props: TelegramProps, agent: TelegramAgentRecord) {
     ...(agent.type === "userbot"
       ? [{ id: "auth" as TelegramPanel, label: t("ui.panelAuth") }]
       : []),
+    { id: "communication", label: "Communication" },
     { id: "behaviors", label: t("ui.panelBehaviors") },
-    { id: "events", label: t("ui.panelEvents") },
     { id: "tasks", label: "Tasks" },
+    { id: "events", label: t("ui.panelEvents") },
     { id: "cron", label: "Cron" },
     { id: "files", label: "Files" },
-    { id: "communication", label: "Communication" },
   ];
 
   return html`
@@ -414,6 +414,19 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
           ? html`<div class="callout danger" style="margin-top: 16px;">${agent.lastError}</div>`
           : nothing
       }
+
+      <!-- Quick-nav to Communication tab -->
+      <div style="margin-top: 16px; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+        <span style="font-size: 13px; color: var(--color-muted, #888);">
+          Set up missions and inter-agent communication structure:
+        </span>
+        <button
+          class="btn btn--sm"
+          @click=${() => props.onSelectPanel("communication")}
+        >
+          → Communication
+        </button>
+      </div>
 
       <div class="row" style="margin-top: 20px; flex-wrap: wrap;">
         <button
@@ -907,8 +920,8 @@ function renderFilesPanel(props: TelegramProps, agentId: string) {
 function getCommunicationBehavior(
   agent: TelegramAgentRecord,
 ): { enabled: boolean; activeMissionIds: string[] } | null {
-  type CommBehaviorShape = { type: string; enabled?: boolean; activeMissionIds?: string[] };
-  const b = (agent.behaviors as CommBehaviorShape[]).find((beh) => beh.type === "communication");
+  type CommunicationBehaviorShape = { type: string; enabled?: boolean; activeMissionIds?: string[] };
+  const b = (agent.behaviors as CommunicationBehaviorShape[]).find((beh) => beh.type === "communication");
   if (!b) return null;
   return { enabled: b.enabled ?? true, activeMissionIds: b.activeMissionIds ?? [] };
 }

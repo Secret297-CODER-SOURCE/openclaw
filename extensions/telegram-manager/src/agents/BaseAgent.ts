@@ -136,10 +136,10 @@ export abstract class BaseAgent extends EventEmitter {
    * Does NOT call onBehaviorsChanged so running connections are not disrupted.
    */
   addMissionToCommunicationBehavior(missionId: string): void {
-    const b = this.getBehavior<CommunicationBehavior>("communication");
-    if (b) {
-      if (b.activeMissionIds.includes(missionId)) return;
-      b.activeMissionIds.push(missionId);
+    const commBehavior = this.getBehavior<CommunicationBehavior>("communication");
+    if (commBehavior) {
+      if (commBehavior.activeMissionIds.includes(missionId)) return;
+      commBehavior.activeMissionIds.push(missionId);
     } else {
       this.record.behaviors = [
         ...this.record.behaviors,
@@ -154,11 +154,11 @@ export abstract class BaseAgent extends EventEmitter {
    * Does NOT call onBehaviorsChanged so running connections are not disrupted.
    */
   removeMissionFromCommunicationBehavior(missionId: string): void {
-    const b = this.getBehavior<CommunicationBehavior>("communication");
-    if (!b) return;
-    const idx = b.activeMissionIds.indexOf(missionId);
+    const commBehavior = this.getBehavior<CommunicationBehavior>("communication");
+    if (!commBehavior) return;
+    const idx = commBehavior.activeMissionIds.indexOf(missionId);
     if (idx < 0) return;
-    b.activeMissionIds.splice(idx, 1);
+    commBehavior.activeMissionIds.splice(idx, 1);
     this.storage.updateBehaviors(this.id, this.record.behaviors);
   }
 
