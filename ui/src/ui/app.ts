@@ -300,6 +300,8 @@ export class OpenClawApp extends LitElement {
   @state() telegramTrainingPairs: import("./controllers/telegram.ts").TrainingPair[] = [];
   @state() telegramTrainingGroups: import("./controllers/telegram.ts").TrainingGroup[] = [];
   @state() telegramTrainingGroupsLimit = 100;
+  @state() telegramTrainingSelectedChatId: string | null = null;
+  @state() telegramTrainingSearchQuery = "";
   @state() telegramTrainingLoading = false;
   @state() telegramTrainingError: string | null = null;
   @state() telegramShowCreateNodesPrompt = false;

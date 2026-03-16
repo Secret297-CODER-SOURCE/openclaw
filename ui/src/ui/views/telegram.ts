@@ -154,11 +154,15 @@ export type TelegramProps = {
   trainingPairs: TrainingPair[];
   trainingGroups: TrainingGroup[];
   trainingGroupsLimit: number;
+  trainingSelectedChatId: string | null;
+  trainingSearchQuery: string;
   trainingLoading: boolean;
   trainingError: string | null;
   showCreateNodesPrompt: boolean;
   onSelectChatSubPanel: (sub: TelegramChatSubPanel) => void;
   onTrainingFileLoad: (agentId: string, json: string, fileName: string) => void;
+  onTrainingSelectChat: (id: string | null) => void;
+  onTrainingSearchChange: (q: string) => void;
   onTrainingCreateNodes: (agentId: string, group: TrainingGroup) => void;
   onTrainingDismiss: () => void;
   onTrainingShowMore: () => void;
@@ -929,11 +933,15 @@ function renderDetail(props: TelegramProps) {
     trainingPairs: props.trainingPairs,
     trainingGroups: props.trainingGroups,
     trainingGroupsLimit: props.trainingGroupsLimit,
+    trainingSelectedChatId: props.trainingSelectedChatId,
+    trainingSearchQuery: props.trainingSearchQuery,
     trainingLoading: props.trainingLoading,
     trainingError: props.trainingError,
     showCreateNodesPrompt: props.showCreateNodesPrompt,
     onSelectChatSubPanel: props.onSelectChatSubPanel,
     onTrainingFileLoad: props.onTrainingFileLoad,
+    onTrainingSelectChat: props.onTrainingSelectChat,
+    onTrainingSearchChange: props.onTrainingSearchChange,
     onTrainingCreateNodes: props.onTrainingCreateNodes,
     onTrainingDismiss: props.onTrainingDismiss,
     onTrainingShowMore: props.onTrainingShowMore,

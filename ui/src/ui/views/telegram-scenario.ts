@@ -16,11 +16,15 @@ export type ScenarioProps = {
   trainingPairs: TrainingPair[];
   trainingGroups: TrainingGroup[];
   trainingGroupsLimit: number;
+  trainingSelectedChatId: string | null;
+  trainingSearchQuery: string;
   trainingLoading: boolean;
   trainingError: string | null;
   showCreateNodesPrompt: boolean;
   onSelectChatSubPanel: (sub: TelegramChatSubPanel) => void;
   onTrainingFileLoad: (agentId: string, json: string, fileName: string) => void;
+  onTrainingSelectChat: (id: string | null) => void;
+  onTrainingSearchChange: (q: string) => void;
   onTrainingCreateNodes: (agentId: string, group: TrainingGroup) => void;
   onTrainingDismiss: () => void;
   onTrainingShowMore: () => void;
@@ -215,140 +219,209 @@ function fmtDate(iso: string): string {
   return d.length === 3 ? `${d[2]}.${d[1]}.${d[0]}` : iso.slice(0, 10);
 }
 
+/** Avatar initials from a name */
+function avatarInitials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return name.slice(0, 2).toUpperCase();
+}
+
+/** Short date: "13.03" or "13.03.25" if not current year */
+function fmtShortDate(iso: string): string {
+  if (!iso) {
+    return "";
+  }
+  const parts = iso.slice(0, 10).split("-");
+  if (parts.length !== 3) {
+    return iso.slice(0, 10);
+  }
+  const [y, m, d] = parts;
+  const currentYear = String(new Date().getFullYear());
+  return y === currentYear ? `${d}.${m}` : `${d}.${m}.${y.slice(2)}`;
+}
+
 function renderTrainingView(props: ScenarioProps, agent: TelegramAgentRecord) {
-  const groups = props.trainingGroups;
-  const visibleGroups = groups.slice(0, props.trainingGroupsLimit);
+  const allGroups = props.trainingGroups;
+  const q = props.trainingSearchQuery.trim().toLowerCase();
+  // Apply search filter
+  const filtered = q
+    ? allGroups.filter((g) => g.participantName.toLowerCase().includes(q) || g.chatId.includes(q))
+    : allGroups;
+  const visibleGroups = filtered.slice(0, props.trainingGroupsLimit);
+  const hiddenCount = filtered.length - visibleGroups.length;
   const totalPairs = props.trainingPairs.length;
-  const hiddenCount = groups.length - visibleGroups.length;
 
-  return html`
-    <section class="card">
-      <div class="card-title">Обучение</div>
-      <div class="card-sub">
-        Загрузите экспорт переписки из Telegram (формат JSON Desktop Export). Пары
-        «клиент → менеджер» сгруппированы по чату с датами.
-      </div>
+  const selectedGroup = props.trainingSelectedChatId
+    ? (allGroups.find((g) => g.chatId === props.trainingSelectedChatId) ?? null)
+    : null;
 
-      <div style="margin-top: 16px;">
-        <label
-          class="btn primary"
-          style="cursor: pointer; display: inline-block;"
-          title="Загрузить файл JSON"
-        >
-          ${props.trainingLoading ? "Обработка…" : "Загрузить JSON"}
-          <input
-            type="file"
-            accept=".json"
-            style="display: none;"
-            ?disabled=${props.trainingLoading}
-            @change=${(e: Event) => {
-              const file = (e.target as HTMLInputElement).files?.[0];
-              if (!file) {
-                return;
-              }
-              const reader = new FileReader();
-              reader.addEventListener("load", (ev) => {
-                const json = ev.target?.result as string;
-                props.onTrainingFileLoad(agent.id, json, file.name);
-              });
-              reader.readAsText(file);
-              (e.target as HTMLInputElement).value = "";
-            }}
-          />
-        </label>
-      </div>
-
+  // ── Top toolbar (always visible) ──────────────────────────────────────────
+  const toolbar = html`
+    <div class="tg-msng-toolbar">
+      <label
+        class="btn primary btn--sm"
+        style="cursor: pointer;"
+        title="Загрузить файл JSON"
+      >
+        ${props.trainingLoading ? "Обработка…" : "Загрузить JSON"}
+        <input
+          type="file"
+          accept=".json"
+          style="display: none;"
+          ?disabled=${props.trainingLoading}
+          @change=${(e: Event) => {
+            const file = (e.target as HTMLInputElement).files?.[0];
+            if (!file) {
+              return;
+            }
+            const reader = new FileReader();
+            reader.addEventListener("load", (ev) => {
+              props.onTrainingFileLoad(agent.id, ev.target?.result as string, file.name);
+            });
+            reader.readAsText(file);
+            (e.target as HTMLInputElement).value = "";
+          }}
+        />
+      </label>
       ${
-        props.trainingError
-          ? html`<div class="callout danger" style="margin-top: 12px;">${props.trainingError}</div>`
+        allGroups.length > 0
+          ? html`<span class="tg-msng-stats">${allGroups.length} чатов · ${totalPairs} пар</span>`
           : nothing
       }
-
       ${
-        groups.length > 0
-          ? html`
-        <div style="margin-top: 16px; display: flex; align-items: center; gap: 10px;">
-          <span class="card-title" style="font-size: 0.85em; margin: 0;">
-            ${groups.length} чатов · ${totalPairs} пар
-          </span>
+        props.trainingError
+          ? html`<span class="tg-msng-error">${props.trainingError}</span>`
+          : nothing
+      }
+    </div>
+  `;
+
+  // ── Empty / loading state ─────────────────────────────────────────────────
+  if (allGroups.length === 0) {
+    return html`
+      <section class="card" style="padding: 0; overflow: hidden;">
+        <div style="padding: 20px;">
+          <div class="card-title">Обучение</div>
+          <div class="card-sub" style="margin-bottom: 16px;">
+            Загрузите экспорт переписки из Telegram (JSON Desktop Export). Пары «клиент → менеджер»
+            сгруппируются по чатам.
+          </div>
+          ${toolbar}
+        </div>
+      </section>
+    `;
+  }
+
+  // ── Messenger layout ───────────────────────────────────────────────────────
+  return html`
+    <section class="card tg-msng-card">
+      ${toolbar}
+
+      <div class="tg-msng-layout">
+        <!-- ── Sidebar (chat list) ── -->
+        <div class="tg-msng-sidebar">
+          <div class="tg-msng-search">
+            <input
+              class="tg-msng-search-input"
+              type="search"
+              placeholder="Поиск чата…"
+              .value=${props.trainingSearchQuery}
+              @input=${(e: Event) => props.onTrainingSearchChange((e.target as HTMLInputElement).value)}
+            />
+          </div>
+
+          <div class="tg-msng-chat-list">
+            ${visibleGroups.map(
+              (group) => html`
+              <div
+                class="tg-msng-chat-item ${group.chatId === props.trainingSelectedChatId ? "active" : ""}"
+                @click=${() => props.onTrainingSelectChat(group.chatId)}
+              >
+                <div class="tg-msng-avatar">${avatarInitials(group.participantName)}</div>
+                <div class="tg-msng-chat-info">
+                  <div class="tg-msng-chat-name">${group.participantName}</div>
+                  <div class="tg-msng-chat-meta">
+                    <span class="tg-msng-chat-date">${fmtShortDate(group.lastDate)}</span>
+                    <span class="tg-msng-chat-count">${group.pairs.length} пар</span>
+                  </div>
+                </div>
+              </div>
+            `,
+            )}
+
+            ${
+              hiddenCount > 0
+                ? html`
+                <div class="tg-msng-load-more">
+                  <button class="btn btn--sm" @click=${props.onTrainingShowMore}>
+                    Ещё ${Math.min(hiddenCount, 100)} из ${hiddenCount}
+                  </button>
+                </div>
+              `
+                : nothing
+            }
+
+            ${
+              filtered.length === 0 && q
+                ? html`
+                    <div class="tg-msng-empty-search">Ничего не найдено</div>
+                  `
+                : nothing
+            }
+          </div>
         </div>
 
-        <div style="margin-top: 12px;" class="list">
-          ${visibleGroups.map(
-            (group) => html`
-            <details class="tg-chat-group list-item" style="flex-direction: column; align-items: stretch; padding: 0;">
-              <summary style="
-                display: flex; align-items: center; gap: 8px; padding: 10px 12px;
-                cursor: pointer; list-style: none; user-select: none;
-              ">
-                <span style="font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                  ${group.participantName}
-                </span>
-                <span class="chip">${group.pairs.length} пар</span>
-                <span class="muted" style="font-size: 0.78em; white-space: nowrap;">
-                  ${fmtDate(group.firstDate)}${group.firstDate !== group.lastDate ? ` – ${fmtDate(group.lastDate)}` : ""}
-                </span>
-                <span class="muted" style="font-size: 0.75em; color: var(--color-muted);">
-                  #${group.chatId}
-                </span>
-              </summary>
-
-              <div style="padding: 0 12px 12px;">
+        <!-- ── Conversation panel ── -->
+        <div class="tg-msng-convo">
+          ${
+            selectedGroup
+              ? html`
+              <!-- Header -->
+              <div class="tg-msng-convo-header">
+                <div class="tg-msng-avatar tg-msng-avatar--sm">${avatarInitials(selectedGroup.participantName)}</div>
+                <div class="tg-msng-convo-title">
+                  <div class="tg-msng-convo-name">${selectedGroup.participantName}</div>
+                  <div class="tg-msng-convo-sub">
+                    ${selectedGroup.pairs.length} пар ·
+                    ${fmtDate(selectedGroup.firstDate)}${selectedGroup.firstDate !== selectedGroup.lastDate ? ` – ${fmtDate(selectedGroup.lastDate)}` : ""}
+                    · #${selectedGroup.chatId}
+                  </div>
+                </div>
                 <button
                   class="btn btn--sm primary"
-                  style="margin-bottom: 10px;"
-                  @click=${(e: Event) => {
-                    e.stopPropagation();
-                    props.onTrainingCreateNodes(agent.id, group);
-                  }}
+                  @click=${() => props.onTrainingCreateNodes(agent.id, selectedGroup)}
                 >
                   + Создать ноды
                 </button>
-
-                <div class="list" style="margin: 0;">
-                  ${group.pairs.slice(0, 30).map(
-                    (pair, i) => html`
-                    <div class="list-item" style="flex-direction: column; align-items: flex-start; gap: 4px; padding: 6px 0;">
-                      <div style="font-size: 0.75em; color: var(--color-muted);">Пара ${i + 1}</div>
-                      <div class="tg-training-pair">
-                        <div class="tg-training-input">
-                          <span class="chip">Клиент</span>
-                          <span>${pair.input}</span>
-                        </div>
-                        <div class="tg-training-response">
-                          <span class="chip chip-ok">Менеджер</span>
-                          <span>${pair.response}</span>
-                        </div>
-                      </div>
-                    </div>
-                  `,
-                  )}
-                  ${
-                    group.pairs.length > 30
-                      ? html`<div class="muted" style="padding: 4px 0; font-size: 0.8em;">… и ещё ${group.pairs.length - 30} пар</div>`
-                      : nothing
-                  }
-                </div>
               </div>
-            </details>
-          `,
-          )}
 
-          ${
-            hiddenCount > 0
-              ? html`
-            <div style="padding: 10px 0; text-align: center;">
-              <button class="btn" @click=${props.onTrainingShowMore}>
-                Показать ещё ${Math.min(hiddenCount, 100)} чатов (осталось ${hiddenCount})
-              </button>
-            </div>
-          `
-              : nothing
+              <!-- Bubbles -->
+              <div class="tg-msng-bubbles">
+                ${selectedGroup.pairs.map(
+                  (pair) => html`
+                  <div class="tg-msng-bubble tg-msng-bubble--client">
+                    <div class="tg-msng-bubble-label">Клиент</div>
+                    <div class="tg-msng-bubble-text">${pair.input}</div>
+                  </div>
+                  <div class="tg-msng-bubble tg-msng-bubble--manager">
+                    <div class="tg-msng-bubble-label">Менеджер</div>
+                    <div class="tg-msng-bubble-text">${pair.response}</div>
+                  </div>
+                `,
+                )}
+              </div>
+            `
+              : html`
+                  <div class="tg-msng-convo-placeholder">
+                    <div class="tg-msng-placeholder-icon">💬</div>
+                    <div>Выберите чат слева</div>
+                  </div>
+                `
           }
         </div>
-      `
-          : nothing
-      }
+      </div>
     </section>
   `;
 }

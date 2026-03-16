@@ -807,19 +807,25 @@ export async function addTelegramChatNode(
   agentId: string,
   role: "manager" | "client",
 ): Promise<void> {
-  if (!isReady(state)) {
-    return;
+  const now = new Date().toISOString();
+  const node: ChatNode = {
+    id: `${agentId}-${role}-${Date.now()}`,
+    agentId,
+    role,
+    text: role === "manager" ? "Сообщение менеджера" : "Сообщение клиента",
+    createdAt: now,
+  };
+
+  // Persist to gateway when available; usable in-memory regardless
+  if (isReady(state)) {
+    try {
+      await state.client!.request("telegram.scenario.saveChatNode", { agentId, node });
+    } catch {
+      // Gateway handler not yet deployed — in-memory only
+    }
   }
-  try {
-    const node: Partial<ChatNode> = {
-      role,
-      text: role === "manager" ? "Сообщение менеджера" : "Сообщение клиента",
-    };
-    await state.client!.request("telegram.scenario.saveChatNode", { agentId, node });
-    await loadTelegramChatNodes(state, agentId);
-  } catch (err) {
-    state.telegramChatNodesError = String(err);
-  }
+
+  state.telegramChatNodes = [...state.telegramChatNodes, node];
 }
 
 export async function deleteTelegramChatNode(
@@ -827,14 +833,16 @@ export async function deleteTelegramChatNode(
   agentId: string,
   nodeId: string,
 ): Promise<void> {
-  if (!isReady(state)) {
-    return;
-  }
-  try {
-    await state.client!.request("telegram.scenario.deleteChatNode", { nodeId });
-    await loadTelegramChatNodes(state, agentId);
-  } catch (err) {
-    state.telegramChatNodesError = String(err);
+  // Remove from in-memory state immediately
+  state.telegramChatNodes = state.telegramChatNodes.filter((n) => n.id !== nodeId);
+
+  // Also try gateway; ignore errors (handler may not be deployed)
+  if (isReady(state)) {
+    try {
+      await state.client!.request("telegram.scenario.deleteChatNode", { agentId, nodeId });
+    } catch {
+      // non-fatal
+    }
   }
 }
 

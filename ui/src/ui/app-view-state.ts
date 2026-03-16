@@ -215,6 +215,8 @@ export type AppViewState = {
   telegramTrainingPairs: import("./controllers/telegram.ts").TrainingPair[];
   telegramTrainingGroups: import("./controllers/telegram.ts").TrainingGroup[];
   telegramTrainingGroupsLimit: number;
+  telegramTrainingSelectedChatId: string | null;
+  telegramTrainingSearchQuery: string;
   telegramTrainingLoading: boolean;
   telegramTrainingError: string | null;
   telegramShowCreateNodesPrompt: boolean;

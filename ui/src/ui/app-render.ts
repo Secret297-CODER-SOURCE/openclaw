@@ -592,6 +592,8 @@ export function renderApp(state: AppViewState) {
                   state.telegramTrainingPairs = [];
                   state.telegramTrainingGroups = [];
                   state.telegramTrainingGroupsLimit = 100;
+                  state.telegramTrainingSelectedChatId = null;
+                  state.telegramTrainingSearchQuery = "";
                   state.telegramTrainingError = null;
                   state.telegramShowCreateNodesPrompt = false;
                   state.telegramChatSubPanel = "chat";
@@ -861,6 +863,8 @@ export function renderApp(state: AppViewState) {
                 trainingPairs: state.telegramTrainingPairs,
                 trainingGroups: state.telegramTrainingGroups,
                 trainingGroupsLimit: state.telegramTrainingGroupsLimit,
+                trainingSelectedChatId: state.telegramTrainingSelectedChatId,
+                trainingSearchQuery: state.telegramTrainingSearchQuery,
                 trainingLoading: state.telegramTrainingLoading,
                 trainingError: state.telegramTrainingError,
                 showCreateNodesPrompt: state.telegramShowCreateNodesPrompt,
@@ -874,7 +878,16 @@ export function renderApp(state: AppViewState) {
                   void deleteTelegramChatNode(state, agentId, nodeId),
                 onTrainingFileLoad: (agentId, json, fileName) => {
                   state.telegramTrainingGroupsLimit = 100; // reset pagination on new file
+                  state.telegramTrainingSelectedChatId = null;
+                  state.telegramTrainingSearchQuery = "";
                   void processTelegramTrainingFile(state, agentId, json, fileName);
+                },
+                onTrainingSelectChat: (id) => {
+                  state.telegramTrainingSelectedChatId = id;
+                },
+                onTrainingSearchChange: (q) => {
+                  state.telegramTrainingSearchQuery = q;
+                  state.telegramTrainingSelectedChatId = null;
                 },
                 onTrainingCreateNodes: (agentId, group) => {
                   void createNodesFromTelegramTraining(state, agentId, group);
