@@ -145,14 +145,22 @@ const plugin = {
         await telegramPlugin.handleMessage({ method, id: undefined, params: params ?? {} }, (r) => {
           replied = true;
           if (r.error) {
-            respond(false, { error: r.error });
+            // Pass error as the ErrorShape third argument so the UI receives the
+            // actual message (e.g. "Agent not running") instead of the generic
+            // "request failed" fallback that comes from an empty error shape.
+            respond(false, undefined, { code: "UNAVAILABLE", message: r.error } as Parameters<
+              typeof respond
+            >[2]);
           } else {
             respond(true, r.result);
           }
         });
 
         if (!replied) {
-          respond(false, { error: "telegram-manager: no reply from plugin" });
+          respond(false, undefined, {
+            code: "UNAVAILABLE",
+            message: "telegram-manager: no reply from plugin",
+          } as Parameters<typeof respond>[2]);
         }
       };
     }

@@ -7,6 +7,9 @@ import type {
   ChatNode,
   FlowNode,
   TrainingPair,
+  TrainingGroup,
+  TrainingLabel,
+  DialogAnalysisResult,
 } from "../controllers/telegram.ts";
 import {
   formatCronPayload,
@@ -18,6 +21,7 @@ import type { AgentsFilesListResult, CronJob, CronStatus } from "../types.ts";
 import { renderAgentFiles } from "./agents-panels-status-files.ts";
 import { renderChatPanel, renderSchemaPanel } from "./telegram-scenario.ts";
 import type { TelegramChatSubPanel, ScenarioProps } from "./telegram-scenario.ts";
+import type { WebchatProps } from "./telegram-webchat.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -170,6 +174,36 @@ export type TelegramProps = {
   onDeleteChatNode: (agentId: string, nodeId: string) => void;
   onLoadChatNodes: (agentId: string) => void;
   onLoadFlowNodes: (agentId: string) => void;
+  // Labels & AI analysis
+  trainingLabels: Record<string, TrainingLabel>;
+  analysisResult: string | null;
+  analysisLoading: boolean;
+  analysisError: string | null;
+  onTrainingSetLabel: (chatId: string, label: TrainingLabel) => void;
+  onRunAnalysis: (agentId: string) => void;
+  // Per-dialog batch analysis
+  analysisResults: Record<string, DialogAnalysisResult>;
+  batchRunning: boolean;
+  batchProgress: number;
+  batchTotal: number;
+  batchError: string | null;
+  onRunBatchAnalysis: (agentId: string, force?: boolean) => void;
+  onCancelBatchAnalysis: () => void;
+  // Webchat (Telegram Web messenger)
+  webchatDialogs: import("../controllers/telegram.ts").TelegramDialog[];
+  webchatDialogsLoading: boolean;
+  webchatDialogsError: string | null;
+  webchatSelectedId: string | null;
+  webchatMessages: import("../controllers/telegram.ts").TelegramWebMessage[];
+  webchatMessagesLoading: boolean;
+  webchatInput: string;
+  webchatSending: boolean;
+  webchatSearchQuery: string;
+  onWebchatRefresh: (agentId: string) => void;
+  onWebchatSelectDialog: (agentId: string, dialogId: string, dialogName: string) => void;
+  onWebchatInputChange: (v: string) => void;
+  onWebchatSend: (agentId: string) => void;
+  onWebchatSearchChange: (q: string) => void;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -949,6 +983,40 @@ function renderDetail(props: TelegramProps) {
     onDeleteChatNode: props.onDeleteChatNode,
     onLoadChatNodes: props.onLoadChatNodes,
     onLoadFlowNodes: props.onLoadFlowNodes,
+    trainingLabels: props.trainingLabels,
+    analysisResult: props.analysisResult,
+    analysisLoading: props.analysisLoading,
+    analysisError: props.analysisError,
+    onTrainingSetLabel: props.onTrainingSetLabel,
+    onRunAnalysis: props.onRunAnalysis,
+    analysisResults: props.analysisResults,
+    batchRunning: props.batchRunning,
+    batchProgress: props.batchProgress,
+    batchTotal: props.batchTotal,
+    batchError: props.batchError,
+    onRunBatchAnalysis: props.onRunBatchAnalysis,
+    onCancelBatchAnalysis: props.onCancelBatchAnalysis,
+    // Webchat: only provide for userbot agents
+    webchat:
+      agent.type === "userbot"
+        ? ({
+            agent,
+            dialogs: props.webchatDialogs,
+            dialogsLoading: props.webchatDialogsLoading,
+            dialogsError: props.webchatDialogsError,
+            selectedDialogId: props.webchatSelectedId,
+            messages: props.webchatMessages,
+            messagesLoading: props.webchatMessagesLoading,
+            input: props.webchatInput,
+            sending: props.webchatSending,
+            searchQuery: props.webchatSearchQuery,
+            onRefreshDialogs: () => props.onWebchatRefresh(agent.id),
+            onSelectDialog: (id, name) => props.onWebchatSelectDialog(agent.id, id, name),
+            onInputChange: props.onWebchatInputChange,
+            onSend: () => props.onWebchatSend(agent.id),
+            onSearchChange: props.onWebchatSearchChange,
+          } satisfies WebchatProps)
+        : undefined,
   };
 
   return html`

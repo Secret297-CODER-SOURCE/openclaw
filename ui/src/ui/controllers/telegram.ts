@@ -741,6 +741,19 @@ export type TrainingGroup = {
   firstDate: string; // ISO date-time of first message in chat
   lastDate: string; // ISO date-time of last message in chat
   pairs: Array<{ input: string; response: string }>;
+  /** Manual label: did this chat result in a sale/conversion? */
+  label?: "success" | "fail" | "neutral";
+};
+
+/** Label assigned to a training chat */
+export type TrainingLabel = "success" | "fail" | "neutral";
+
+/** Per-dialog AI analysis result */
+export type DialogAnalysisResult = {
+  status: TrainingLabel;
+  score: number; // 0–100
+  reason: string;
+  analyzedAt: string; // ISO timestamp
 };
 
 type TelegramScenarioState = TelegramState & {
@@ -754,6 +767,20 @@ type TelegramScenarioState = TelegramState & {
   telegramTrainingLoading: boolean;
   telegramTrainingError: string | null;
   telegramShowCreateNodesPrompt: boolean;
+  // Labels (success/fail/neutral) assigned to each training chat by chatId
+  telegramTrainingLabels: Record<string, TrainingLabel>;
+  // Whole-dataset AI analysis (freeform text result)
+  telegramAnalysisResult: string | null;
+  telegramAnalysisLoading: boolean;
+  telegramAnalysisError: string | null;
+  // Per-dialog AI analysis results
+  telegramAnalysisResults: Record<string, DialogAnalysisResult>;
+  telegramBatchRunning: boolean;
+  telegramBatchProgress: number;
+  telegramBatchTotal: number;
+  telegramBatchError: string | null;
+  /** Non-reactive abort ref — set by runBatchAnalysis, read by cancelBatchAnalysis */
+  _telegramBatchAbort?: { cancelled: boolean };
 };
 
 export async function loadTelegramChatNodes(
@@ -1019,6 +1046,13 @@ export async function processTelegramTrainingFile(
         createdAt: now,
       })),
     );
+    // Persist parsed groups immediately; labels/results will be saved separately
+    saveTelegramTraining(
+      agentId,
+      groups,
+      state.telegramTrainingLabels,
+      state.telegramAnalysisResults,
+    );
   } catch (err) {
     state.telegramTrainingError = String(err);
   } finally {
@@ -1074,6 +1108,623 @@ export async function createNodesFromTelegramTraining(
 
   // Append new group's nodes to existing node list
   state.telegramChatNodes = [...state.telegramChatNodes, ...nodes];
+}
+
+// ─── Per-dialog AI Analysis (batch) ───────────────────────────────────────────
+
+/**
+ * Prompt sent with every dialog to instruct the AI on evaluation criteria.
+ * Returned JSON must match { status, score, reason }.
+ */
+const DIALOG_ANALYSIS_PROMPT = `Ты анализируешь диалоги менеджеров с клиентами.
+Определи успешность диалога.
+
+Критерии успешного диалога:
+- менеджер проявляет инициативу
+- задаёт уточняющие вопросы
+- выявляет потребность клиента
+- предлагает решение
+- клиент продолжает диалог
+- есть признаки движения к сделке
+
+Неуспешный диалог:
+- менеджер отвечает односложно
+- менеджер не задаёт вопросов
+- клиент теряет интерес
+- диалог быстро заканчивается
+- отсутствует предложение решения
+
+Нейтральный диалог:
+- мало сообщений
+- диалог не завершён
+- недостаточно данных
+
+Ответ верни строго в JSON:
+{"status": "success" | "fail" | "neutral", "score": 0-100, "reason": "краткая причина"}
+
+Диалог:`;
+
+/** True if the text is blank, emoji-only, or too short to be meaningful */
+function isEmptyOrTrivial(text: string): boolean {
+  const t = text.trim();
+  if (!t) {
+    return true;
+  }
+  // Strip common emoji unicode blocks; if nothing meaningful remains → trivial
+  const stripped = t.replace(/\p{Emoji_Presentation}/gu, "").replace(/\s/g, "");
+  return stripped.length === 0;
+}
+
+/**
+ * Convert a TrainingGroup's pairs into a formatted dialog string for the AI.
+ * Uses the last 30 pairs; skips blank / emoji-only turns.
+ */
+function formatDialogForAnalysis(group: TrainingGroup): string {
+  const pairs = group.pairs.slice(-30);
+  const lines: string[] = [];
+  for (const pair of pairs) {
+    if (!isEmptyOrTrivial(pair.input)) {
+      lines.push(`Клиент: ${pair.input.trim()}`);
+    }
+    if (!isEmptyOrTrivial(pair.response)) {
+      lines.push(`Менеджер: ${pair.response.trim()}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+/** Parse a gateway response into a DialogAnalysisResult, or null if unparseable */
+function parseAnalysisResponse(
+  res: Record<string, unknown> | null | undefined,
+): DialogAnalysisResult | null {
+  if (!res) {
+    return null;
+  }
+
+  // Case 1: fields are top-level on the response object
+  if (typeof res.status === "string" && typeof res.score === "number") {
+    const status = (
+      ["success", "fail", "neutral"].includes(res.status) ? res.status : "neutral"
+    ) as TrainingLabel;
+    return {
+      status,
+      score: Math.min(100, Math.max(0, res.score)),
+      reason: typeof res.reason === "string" ? res.reason : "",
+      analyzedAt: new Date().toISOString(),
+    };
+  }
+
+  // Case 2: result/text/content field holds a JSON string (AI free-text wrapper)
+  const raw = res.result ?? res.text ?? res.content ?? null;
+  if (typeof raw === "string") {
+    try {
+      // Extract the first JSON object from the string (AI may add surrounding text)
+      const match = raw.match(/\{[\s\S]*?"status"[\s\S]*?\}/);
+      const parsed = JSON.parse(match ? match[0] : raw) as {
+        status?: string;
+        score?: number;
+        reason?: string;
+      };
+      const status = (
+        ["success", "fail", "neutral"].includes(parsed.status ?? "") ? parsed.status : "neutral"
+      ) as TrainingLabel;
+      return {
+        status,
+        score: Math.min(100, Math.max(0, parsed.score ?? 50)),
+        reason: parsed.reason ?? "",
+        analyzedAt: new Date().toISOString(),
+      };
+    } catch {
+      // Unparseable — fall through
+    }
+  }
+  return null;
+}
+
+/**
+ * Analyze a single dialog via the gateway (used for re-check of individual chats).
+ * Calls telegram.tool.call → analyze_dialog.
+ */
+export async function analyzeDialogChat(
+  state: TelegramScenarioState,
+  agentId: string,
+  group: TrainingGroup,
+): Promise<DialogAnalysisResult | null> {
+  if (!isReady(state)) {
+    return null;
+  }
+  const dialog = formatDialogForAnalysis(group);
+  if (!dialog.trim()) {
+    return null;
+  }
+  try {
+    const res = await state.client!.request<Record<string, unknown>>("telegram.tool.call", {
+      agentId,
+      tool: "analyze_dialog",
+      args: { dialog, chatId: group.chatId, prompt: DIALOG_ANALYSIS_PROMPT },
+    });
+    return parseAnalysisResponse(res);
+  } catch {
+    return null;
+  }
+}
+
+// ─── Batch API (multi-dialog per round-trip) ──────────────────────────────────
+
+type BatchResultItem = {
+  chatId: string;
+  status: TrainingLabel;
+  score: number;
+  reason: string;
+} | null;
+
+/**
+ * Check whether the server-side plugin has a direct AI adapter available
+ * (ANTHROPIC_API_KEY / OPENAI_API_KEY). Returns true when inner batch calls
+ * bypass the gateway lane and can run in parallel safely.
+ * Returns false on any error (safe default → single-dialog mode).
+ */
+async function checkBatchCapability(
+  state: TelegramScenarioState,
+  agentId: string,
+): Promise<boolean> {
+  if (!isReady(state)) {
+    return false;
+  }
+  try {
+    const res = await state.client!.request<{ directAdapter: boolean }>("telegram.tool.call", {
+      agentId,
+      tool: "check_batch_capability",
+      args: {},
+    });
+    return res.directAdapter;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Send a batch of dialogs in ONE WebSocket round-trip.
+ * Only effective when isDirectAdapter=true (server uses direct API, no lane).
+ */
+async function analyzeDialogsBatch(
+  state: TelegramScenarioState,
+  agentId: string,
+  groups: TrainingGroup[],
+): Promise<BatchResultItem[]> {
+  if (!isReady(state) || groups.length === 0) {
+    return [];
+  }
+  const dialogs = groups.map((g) => ({
+    chatId: g.chatId,
+    dialog: formatDialogForAnalysis(g),
+  }));
+  try {
+    const res = await state.client!.request<{ results: BatchResultItem[] }>("telegram.tool.call", {
+      agentId,
+      tool: "analyze_dialogs_batch",
+      args: { dialogs, prompt: DIALOG_ANALYSIS_PROMPT },
+    });
+    return res.results ?? [];
+  } catch {
+    return groups.map(() => null);
+  }
+}
+
+/**
+ * Run batch AI analysis over all (or only un-analyzed) training groups.
+ *
+ * Strategy is chosen automatically:
+ *  • Direct adapter available (ANTHROPIC_API_KEY etc.) →
+ *    3 workers × 6 dialogs/request = 18 truly-parallel AI calls, ~10× faster
+ *  • Gateway adapter only →
+ *    2 workers × 1 dialog/request — safe, no lane congestion, 2× faster
+ *
+ * Lesson learned: server-side parallelism (inner batching) doesn't help —
+ * every AI call (HTTP or WS) goes through the same gateway main lane,
+ * so piling up requests only increases queue depth and slows each call.
+ *
+ * @param force — when true, re-analyzes even already-analyzed chats
+ */
+// Strategy constants: chosen based on server capability
+// Direct adapter (ANTHROPIC_API_KEY etc.) → high concurrency, batch mode
+// Gateway adapter only → low concurrency, single-dialog mode (safe)
+const STRATEGY_DIRECT = { concurrency: 3, innerBatch: 6, flushEvery: 12 }; // 18 parallel AI calls
+const STRATEGY_GATEWAY = { concurrency: 2, innerBatch: 1, flushEvery: 4 }; // 2 parallel, no lane flood
+
+export async function runBatchAnalysis(
+  state: TelegramScenarioState,
+  agentId: string,
+  force = false,
+): Promise<void> {
+  if (!isReady(state) || state.telegramBatchRunning) {
+    return;
+  }
+
+  const groups = state.telegramTrainingGroups;
+  const toAnalyze = force ? groups : groups.filter((g) => !state.telegramAnalysisResults[g.chatId]);
+
+  if (toAnalyze.length === 0) {
+    return;
+  }
+
+  const abortRef = { cancelled: false };
+  state._telegramBatchAbort = abortRef;
+  state.telegramBatchRunning = true;
+  state.telegramBatchProgress = 0;
+  state.telegramBatchTotal = toAnalyze.length;
+  state.telegramBatchError = null;
+
+  // Auto-detect strategy: one round-trip to ask the server if direct API is available
+  const hasDirect = await checkBatchCapability(state, agentId);
+  const { concurrency, innerBatch, flushEvery } = hasDirect ? STRATEGY_DIRECT : STRATEGY_GATEWAY;
+
+  // Mutable accumulators — avoid O(n²) spread on every single result
+  const accumulated: Record<string, DialogAnalysisResult> = {
+    ...state.telegramAnalysisResults,
+  };
+  const accumulatedLabels: Record<string, TrainingLabel> = {
+    ...state.telegramTrainingLabels,
+  };
+
+  // Pre-slice into chunks of innerBatch (chunk array is read-only, so index is shared safely)
+  const chunks: TrainingGroup[][] = [];
+  for (let i = 0; i < toAnalyze.length; i += innerBatch) {
+    chunks.push(toAnalyze.slice(i, i + innerBatch));
+  }
+
+  let nextChunkIdx = 0;
+  let completedCount = 0;
+
+  const flush = async () => {
+    state.telegramAnalysisResults = { ...accumulated };
+    state.telegramTrainingLabels = { ...accumulatedLabels };
+    // Persist incremental results so progress survives a page reload
+    saveTelegramTraining(agentId, state.telegramTrainingGroups, accumulatedLabels, accumulated);
+    await new Promise<void>((r) => setTimeout(r, 0));
+  };
+
+  const processResult = (group: TrainingGroup, result: DialogAnalysisResult | null) => {
+    if (result) {
+      accumulated[group.chatId] = result;
+      if (!accumulatedLabels[group.chatId]) {
+        accumulatedLabels[group.chatId] = result.status;
+      }
+    }
+    completedCount++;
+    state.telegramBatchProgress = completedCount;
+  };
+
+  // Worker: pulls chunks from the shared queue (JS single-thread → chunkIdx++ is atomic)
+  const worker = async () => {
+    while (nextChunkIdx < chunks.length && !abortRef.cancelled) {
+      const ci = nextChunkIdx++;
+      if (ci >= chunks.length) {
+        break;
+      }
+      const chunk = chunks[ci];
+
+      if (innerBatch === 1) {
+        // Single-dialog mode (gateway adapter): one analyzeDialogChat per worker slot
+        const result = await analyzeDialogChat(state, agentId, chunk[0]);
+        processResult(chunk[0], result);
+      } else {
+        // Batch mode (direct adapter): server runs chunk in parallel, no lane flooding
+        const batchResults = await analyzeDialogsBatch(state, agentId, chunk);
+        const now = new Date().toISOString();
+        for (let j = 0; j < chunk.length; j++) {
+          const item = batchResults[j] ?? null;
+          const result: DialogAnalysisResult | null = item
+            ? { status: item.status, score: item.score, reason: item.reason, analyzedAt: now }
+            : null;
+          processResult(chunk[j], result);
+        }
+      }
+
+      if (completedCount % flushEvery === 0) {
+        await flush();
+      }
+    }
+  };
+
+  try {
+    await Promise.allSettled(Array.from({ length: concurrency }, worker));
+  } catch (err) {
+    state.telegramBatchError = String(err);
+  } finally {
+    await flush();
+    state.telegramBatchRunning = false;
+  }
+}
+
+/** Cancel a running batch analysis. Safe to call even when not running. */
+export function cancelBatchAnalysis(state: TelegramScenarioState): void {
+  if (state._telegramBatchAbort) {
+    state._telegramBatchAbort.cancelled = true;
+  }
+  state.telegramBatchRunning = false;
+}
+
+// ─── AI Analysis (whole-dataset freeform) ─────────────────────────────────────
+
+/**
+ * Send labeled training pairs to the gateway for AI analysis.
+ * Builds a structured JSON payload and calls telegram.tool.call →
+ * analyze_training_data. Returns the AI's text response.
+ */
+export async function analyzeTrainingData(
+  state: TelegramScenarioState,
+  agentId: string,
+): Promise<void> {
+  if (!isReady(state) || state.telegramAnalysisLoading) {
+    return;
+  }
+
+  const groups = state.telegramTrainingGroups;
+  const labels = state.telegramTrainingLabels;
+
+  const labeled = groups.filter((g) => labels[g.chatId] && labels[g.chatId] !== "neutral");
+  if (labeled.length === 0 && groups.length === 0) {
+    state.telegramAnalysisError = "Нет чатов для анализа. Загрузите экспорт переписки.";
+    return;
+  }
+
+  state.telegramAnalysisLoading = true;
+  state.telegramAnalysisError = null;
+  state.telegramAnalysisResult = null;
+
+  try {
+    // Build compact payload: success and fail chats with their pairs
+    const payload: {
+      success: Array<{ name: string; pairs: Array<{ q: string; a: string }> }>;
+      fail: Array<{ name: string; pairs: Array<{ q: string; a: string }> }>;
+      total: number;
+      labeled: number;
+    } = {
+      success: [],
+      fail: [],
+      total: groups.length,
+      labeled: 0,
+    };
+
+    for (const g of groups) {
+      const label = labels[g.chatId] ?? "neutral";
+      if (label === "success" || label === "fail") {
+        payload.labeled++;
+        const entry = {
+          name: g.participantName,
+          pairs: g.pairs.slice(0, 20).map((p) => ({ q: p.input, a: p.response })),
+        };
+        if (label === "success") {
+          payload.success.push(entry);
+        } else {
+          payload.fail.push(entry);
+        }
+      }
+    }
+
+    if (payload.labeled === 0) {
+      // Still allow analysis — pass all as "unclassified" for general review
+      for (const g of groups.slice(0, 10)) {
+        payload.success.push({
+          name: g.participantName,
+          pairs: g.pairs.slice(0, 10).map((p) => ({ q: p.input, a: p.response })),
+        });
+        payload.labeled++;
+      }
+    }
+
+    const res = await state.client!.request<{ result?: string; text?: string; content?: string }>(
+      "telegram.tool.call",
+      {
+        agentId,
+        tool: "analyze_training_data",
+        args: payload,
+      },
+    );
+
+    // Accept result from various response shapes
+    const text = res?.result ?? res?.text ?? res?.content ?? null;
+    if (typeof text === "string") {
+      state.telegramAnalysisResult = text;
+    } else {
+      // Gateway handler may not exist yet — show raw response for debugging
+      state.telegramAnalysisResult = JSON.stringify(res, null, 2);
+    }
+  } catch (err) {
+    state.telegramAnalysisError = String(err);
+  } finally {
+    state.telegramAnalysisLoading = false;
+  }
+}
+
+// ─── Webchat (Telegram-Web-like) ──────────────────────────────────────────────
+
+/** A single dialog entry returned by get_dialogs tool */
+export type TelegramDialog = {
+  id: string;
+  name: string;
+  type: "user" | "group" | "channel";
+  username: string | null;
+  lastMessage: string;
+  lastMessageDate: string | null;
+  unreadCount: number;
+  lastMessageOut: boolean;
+};
+
+/** A single message returned by getMessages tool (with out field) */
+export type TelegramWebMessage = {
+  id: string;
+  text: string;
+  date: string | null;
+  out: boolean;
+  hasMedia: boolean;
+  mediaType: string | null;
+};
+
+type WebchatState = TelegramState & {
+  telegramWebchatDialogs: TelegramDialog[];
+  telegramWebchatDialogsLoading: boolean;
+  telegramWebchatDialogsError: string | null;
+  telegramWebchatSelectedId: string | null;
+  telegramWebchatMessages: TelegramWebMessage[];
+  telegramWebchatMessagesLoading: boolean;
+  telegramWebchatInput: string;
+  telegramWebchatSending: boolean;
+  telegramWebchatSearchQuery: string;
+};
+
+/** Load recent dialogs from the userbot agent */
+export async function loadWebchatDialogs(state: WebchatState, agentId: string): Promise<void> {
+  if (!isReady(state) || state.telegramWebchatDialogsLoading) {
+    return;
+  }
+  state.telegramWebchatDialogsLoading = true;
+  state.telegramWebchatDialogsError = null;
+  try {
+    const res = await state.client!.request<TelegramDialog[]>("telegram.tool.call", {
+      agentId,
+      tool: "get_dialogs",
+      args: { limit: 30 },
+    });
+    state.telegramWebchatDialogs = Array.isArray(res) ? res : [];
+  } catch (err) {
+    state.telegramWebchatDialogsError = String(err);
+  } finally {
+    state.telegramWebchatDialogsLoading = false;
+  }
+}
+
+/** Load message history for a dialog */
+export async function loadWebchatMessages(
+  state: WebchatState,
+  agentId: string,
+  dialogId: string,
+  silent = false,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  if (!silent) {
+    state.telegramWebchatMessagesLoading = true;
+  }
+  try {
+    const res = await state.client!.request<TelegramWebMessage[]>("telegram.tool.call", {
+      agentId,
+      tool: "getMessages",
+      args: { target: dialogId, limit: 50 },
+    });
+    if (Array.isArray(res)) {
+      // GramJS returns newest-first; reverse so oldest is on top
+      state.telegramWebchatMessages = [...res].toReversed();
+    }
+  } catch {
+    // Silent fail during polling
+  } finally {
+    if (!silent) {
+      state.telegramWebchatMessagesLoading = false;
+    }
+  }
+}
+
+/** Send a message to the selected dialog */
+export async function sendWebchatMessage(
+  state: WebchatState,
+  agentId: string,
+  dialogId: string,
+  message: string,
+): Promise<void> {
+  if (!isReady(state) || !message.trim() || state.telegramWebchatSending) {
+    return;
+  }
+  state.telegramWebchatSending = true;
+  try {
+    await state.client!.request("telegram.tool.call", {
+      agentId,
+      tool: "sendMessage",
+      args: { target: dialogId, message: message.trim() },
+    });
+    // Refresh messages after successful send
+    await loadWebchatMessages(state, agentId, dialogId, true);
+  } catch {
+    // Non-fatal
+  } finally {
+    state.telegramWebchatSending = false;
+  }
+}
+
+// ─── Training persistence (localStorage) ──────────────────────────────────────
+
+const LS_TRAINING_PREFIX = "openclaw_tg_training_";
+
+type TrainingSnapshot = {
+  groups: TrainingGroup[];
+  labels: Record<string, TrainingLabel>;
+  analysisResults: Record<string, DialogAnalysisResult>;
+  savedAt: string;
+};
+
+/**
+ * Persist training groups, labels, and analysis results to localStorage.
+ * Keyed by agentId so each agent has its own training data.
+ * Silent on quota / storage errors — non-critical.
+ */
+export function saveTelegramTraining(
+  agentId: string,
+  groups: TrainingGroup[],
+  labels: Record<string, TrainingLabel>,
+  analysisResults: Record<string, DialogAnalysisResult>,
+): void {
+  try {
+    const snapshot: TrainingSnapshot = {
+      groups,
+      labels,
+      analysisResults,
+      savedAt: new Date().toISOString(),
+    };
+    localStorage.setItem(`${LS_TRAINING_PREFIX}${agentId}`, JSON.stringify(snapshot));
+  } catch {
+    // Quota exceeded or storage unavailable — silently skip
+  }
+}
+
+/**
+ * Restore previously persisted training data into state.
+ * Rebuilds the flat training pairs list from stored groups.
+ * Returns true if data was found and restored, false otherwise.
+ */
+export function restoreTelegramTraining(state: TelegramScenarioState, agentId: string): boolean {
+  try {
+    const raw = localStorage.getItem(`${LS_TRAINING_PREFIX}${agentId}`);
+    if (!raw) {
+      return false;
+    }
+    const saved = JSON.parse(raw) as TrainingSnapshot;
+    if (!Array.isArray(saved.groups) || saved.groups.length === 0) {
+      return false;
+    }
+
+    state.telegramTrainingGroups = saved.groups;
+    state.telegramTrainingLabels = saved.labels ?? {};
+    state.telegramAnalysisResults = saved.analysisResults ?? {};
+
+    // Rebuild flat pairs list (same logic as processTelegramTrainingFile)
+    const now = new Date().toISOString();
+    let idx = 0;
+    state.telegramTrainingPairs = saved.groups.flatMap((g) =>
+      g.pairs.map((p) => ({
+        id: String(idx++),
+        agentId,
+        input: p.input,
+        response: p.response,
+        sourceFile: "(кэш)",
+        createdAt: now,
+      })),
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Save a Telegram agent core file via telegram.agent.setCoreFile */

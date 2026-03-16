@@ -220,6 +220,32 @@ export type AppViewState = {
   telegramTrainingLoading: boolean;
   telegramTrainingError: string | null;
   telegramShowCreateNodesPrompt: boolean;
+  // Labels (success/fail/neutral) keyed by chatId
+  telegramTrainingLabels: Record<string, import("./controllers/telegram.ts").TrainingLabel>;
+  // Whole-dataset AI analysis (freeform text result)
+  telegramAnalysisResult: string | null;
+  telegramAnalysisLoading: boolean;
+  telegramAnalysisError: string | null;
+  // Per-dialog batch AI analysis
+  telegramAnalysisResults: Record<string, import("./controllers/telegram.ts").DialogAnalysisResult>;
+  telegramBatchRunning: boolean;
+  telegramBatchProgress: number;
+  telegramBatchTotal: number;
+  telegramBatchError: string | null;
+  /** Non-reactive abort ref set by runBatchAnalysis */
+  _telegramBatchAbort?: { cancelled: boolean };
+  // Webchat (Telegram-Web-like messenger)
+  telegramWebchatDialogs: import("./controllers/telegram.ts").TelegramDialog[];
+  telegramWebchatDialogsLoading: boolean;
+  telegramWebchatDialogsError: string | null;
+  telegramWebchatSelectedId: string | null;
+  telegramWebchatMessages: import("./controllers/telegram.ts").TelegramWebMessage[];
+  telegramWebchatMessagesLoading: boolean;
+  telegramWebchatInput: string;
+  telegramWebchatSending: boolean;
+  telegramWebchatSearchQuery: string;
+  /** Non-reactive: holds the polling interval ID */
+  _telegramWebchatPollTimer?: number | null;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;

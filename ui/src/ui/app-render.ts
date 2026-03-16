@@ -86,6 +86,14 @@ import {
   deleteTelegramChatNode,
   processTelegramTrainingFile,
   createNodesFromTelegramTraining,
+  analyzeTrainingData,
+  runBatchAnalysis,
+  cancelBatchAnalysis,
+  saveTelegramTraining,
+  restoreTelegramTraining,
+  loadWebchatDialogs,
+  loadWebchatMessages,
+  sendWebchatMessage,
 } from "./controllers/telegram.ts";
 import { icons } from "./icons.ts";
 import { TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
@@ -597,6 +605,23 @@ export function renderApp(state: AppViewState) {
                   state.telegramTrainingError = null;
                   state.telegramShowCreateNodesPrompt = false;
                   state.telegramChatSubPanel = "chat";
+                  // Labels and analysis results reset before restore (in case nothing saved)
+                  state.telegramTrainingLabels = {};
+                  state.telegramAnalysisResults = {};
+                  // Restore previously persisted training data for this agent (if any)
+                  if (id) {
+                    restoreTelegramTraining(state, id);
+                  }
+                  // Reset webchat state for the new agent
+                  if (state._telegramWebchatPollTimer !== null) {
+                    clearInterval(state._telegramWebchatPollTimer);
+                    state._telegramWebchatPollTimer = null;
+                  }
+                  state.telegramWebchatDialogs = [];
+                  state.telegramWebchatSelectedId = null;
+                  state.telegramWebchatMessages = [];
+                  state.telegramWebchatInput = "";
+                  state.telegramWebchatSearchQuery = "";
                 },
                 onSelectPanel: (panel: TelegramPanel) => {
                   state.telegramActivePanel = panel;
@@ -620,6 +645,27 @@ export function renderApp(state: AppViewState) {
                   }
                   // Nodes are managed in-memory client-side; gateway handlers
                   // may not be deployed yet, so we skip auto-loading here.
+                  if (panel === "chat" && state.telegramSelectedId) {
+                    // Load webchat dialogs when entering Чат panel (userbot only)
+                    const agentType = state.telegramAgents?.find(
+                      (a) => a.id === state.telegramSelectedId,
+                    )?.type;
+                    if (agentType === "userbot") {
+                      if (state._telegramWebchatPollTimer !== null) {
+                        clearInterval(state._telegramWebchatPollTimer);
+                        state._telegramWebchatPollTimer = null;
+                      }
+                      state.telegramWebchatMessages = [];
+                      state.telegramWebchatSelectedId = null;
+                      void loadWebchatDialogs(state, state.telegramSelectedId);
+                    }
+                  } else if (panel !== "chat") {
+                    // Clear poll timer when leaving Чат panel
+                    if (state._telegramWebchatPollTimer !== null) {
+                      clearInterval(state._telegramWebchatPollTimer);
+                      state._telegramWebchatPollTimer = null;
+                    }
+                  }
                 },
                 onCreateNameChange: (v) => {
                   state.telegramCreateName = v;
@@ -880,7 +926,20 @@ export function renderApp(state: AppViewState) {
                   state.telegramTrainingGroupsLimit = 100; // reset pagination on new file
                   state.telegramTrainingSelectedChatId = null;
                   state.telegramTrainingSearchQuery = "";
-                  void processTelegramTrainingFile(state, agentId, json, fileName);
+                  state.telegramAnalysisResult = null;
+                  state.telegramAnalysisError = null;
+                  // Reset batch state for the new file
+                  state.telegramAnalysisResults = {};
+                  state.telegramBatchRunning = false;
+                  state.telegramBatchProgress = 0;
+                  state.telegramBatchTotal = 0;
+                  state.telegramBatchError = null;
+                  void processTelegramTrainingFile(state, agentId, json, fileName).then(() => {
+                    // Auto-start batch analysis once parsing is done and gateway is ready
+                    if (state.connected) {
+                      void runBatchAnalysis(state, agentId);
+                    }
+                  });
                 },
                 onTrainingSelectChat: (id) => {
                   state.telegramTrainingSelectedChatId = id;
@@ -897,6 +956,83 @@ export function renderApp(state: AppViewState) {
                 },
                 onTrainingShowMore: () => {
                   state.telegramTrainingGroupsLimit += 100;
+                },
+                trainingLabels: state.telegramTrainingLabels,
+                onTrainingSetLabel: (chatId, label) => {
+                  const updatedLabels = {
+                    ...state.telegramTrainingLabels,
+                    [chatId]: label,
+                  };
+                  state.telegramTrainingLabels = updatedLabels;
+                  // Persist label change immediately
+                  if (state.telegramSelectedId) {
+                    saveTelegramTraining(
+                      state.telegramSelectedId,
+                      state.telegramTrainingGroups,
+                      updatedLabels,
+                      state.telegramAnalysisResults,
+                    );
+                  }
+                },
+                analysisResult: state.telegramAnalysisResult,
+                analysisLoading: state.telegramAnalysisLoading,
+                analysisError: state.telegramAnalysisError,
+                onRunAnalysis: (agentId) => {
+                  void analyzeTrainingData(state, agentId);
+                },
+                // Per-dialog batch analysis
+                analysisResults: state.telegramAnalysisResults,
+                batchRunning: state.telegramBatchRunning,
+                batchProgress: state.telegramBatchProgress,
+                batchTotal: state.telegramBatchTotal,
+                batchError: state.telegramBatchError,
+                onRunBatchAnalysis: (agentId, force) => {
+                  void runBatchAnalysis(state, agentId, force ?? false);
+                },
+                onCancelBatchAnalysis: () => {
+                  cancelBatchAnalysis(state);
+                },
+                // Webchat
+                webchatDialogs: state.telegramWebchatDialogs,
+                webchatDialogsLoading: state.telegramWebchatDialogsLoading,
+                webchatDialogsError: state.telegramWebchatDialogsError,
+                webchatSelectedId: state.telegramWebchatSelectedId,
+                webchatMessages: state.telegramWebchatMessages,
+                webchatMessagesLoading: state.telegramWebchatMessagesLoading,
+                webchatInput: state.telegramWebchatInput,
+                webchatSending: state.telegramWebchatSending,
+                webchatSearchQuery: state.telegramWebchatSearchQuery,
+                onWebchatRefresh: (agentId) => {
+                  void loadWebchatDialogs(state, agentId);
+                },
+                onWebchatSelectDialog: (agentId, dialogId) => {
+                  state.telegramWebchatSelectedId = dialogId;
+                  state.telegramWebchatMessages = [];
+                  void loadWebchatMessages(state, agentId, dialogId);
+                  // Start polling for new messages every 4s
+                  if (state._telegramWebchatPollTimer !== null) {
+                    clearInterval(state._telegramWebchatPollTimer);
+                  }
+                  state._telegramWebchatPollTimer = window.setInterval(() => {
+                    if (state.telegramWebchatSelectedId === dialogId && state.telegramSelectedId) {
+                      void loadWebchatMessages(state, state.telegramSelectedId, dialogId, true);
+                    }
+                  }, 4000);
+                },
+                onWebchatInputChange: (v) => {
+                  state.telegramWebchatInput = v;
+                },
+                onWebchatSend: async (agentId) => {
+                  const msg = state.telegramWebchatInput;
+                  const dialogId = state.telegramWebchatSelectedId;
+                  if (!msg.trim() || !dialogId) {
+                    return;
+                  }
+                  state.telegramWebchatInput = "";
+                  await sendWebchatMessage(state, agentId, dialogId, msg);
+                },
+                onWebchatSearchChange: (q) => {
+                  state.telegramWebchatSearchQuery = q;
                 },
               })
             : nothing

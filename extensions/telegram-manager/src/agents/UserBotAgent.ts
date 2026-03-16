@@ -216,14 +216,43 @@ export class UserBotAgent extends BaseAgent {
         return { ok: true, scheduled: true, delayMs: delay, target };
       }
 
+      case "get_dialogs": {
+        const limit = typeof args.limit === "number" ? args.limit : 30;
+        const dialogs = await this.client.getDialogs({ limit });
+        return (dialogs as any[]).map((d: any) => {
+          const entity = d.entity;
+          let name = "Unknown";
+          if (entity) {
+            const first = entity.firstName || "";
+            const last = entity.lastName || "";
+            if (first || last) {
+              name = [first, last].filter(Boolean).join(" ");
+            } else if (entity.title) {
+              name = entity.title;
+            }
+          }
+          return {
+            id: String(d.id),
+            name,
+            type: d.isUser ? "user" : d.isGroup ? "group" : "channel",
+            username: entity?.username ?? null,
+            lastMessage: d.message?.message || "",
+            lastMessageDate: d.message?.date ? new Date(d.message.date * 1000).toISOString() : null,
+            unreadCount: d.unreadCount ?? 0,
+            lastMessageOut: !!d.message?.out,
+          };
+        });
+      }
       case "getMessages": {
         const { target, limit } = args as any;
         const msgs = await this.client.getMessages(target, { limit: limit ?? 50 });
         return msgs.map((m: any) => ({
-          id: m.id,
-          text: m.message,
-          date: new Date(m.date * 1000).toISOString(),
+          id: String(m.id),
+          text: m.message ?? "",
+          date: m.date ? new Date(m.date * 1000).toISOString() : null,
           hasMedia: !!m.media,
+          out: !!m.out,
+          mediaType: m.media ? (m.media.className ?? "media") : null,
         }));
       }
       case "getMembers": {

@@ -1,5 +1,10 @@
 // plugins/telegram/src/agents/AgentManager.ts
 import { randomUUID } from "crypto";
+import {
+  analyzeOnce,
+  analyzeOnceDirect,
+  isDirectAdapterAvailable,
+} from "../behaviors/AiReplyEngine";
 import { TelegramStorage } from "../storage/TelegramStorage";
 import {
   AgentRecord,
@@ -143,7 +148,122 @@ export class AgentManager {
   // ─── Tools ────────────────────────────────────────────────────────────────
 
   async callTool(id: string, tool: string, args: Record<string, unknown>): Promise<unknown> {
+    // analyze_dialog / analyze_dialogs_batch are handled at manager level —
+    // they only need AI, not an agent-specific Telegram connection.
+    if (tool === "analyze_dialog") {
+      return this.runAnalyzeDialog(args);
+    }
+    if (tool === "analyze_dialogs_batch") {
+      return this.runAnalyzeDialogsBatch(args);
+    }
+    if (tool === "check_batch_capability") {
+      // Report whether direct (non-gateway) AI adapter is available.
+      // Client uses this to decide batch size: large batches only help when
+      // inner AI calls bypass the gateway lane.
+      return { directAdapter: isDirectAdapterAvailable() };
+    }
     return this.get_or_throw(id).callTool(tool, args);
+  }
+
+  /**
+   * Parse the raw AI text response into a structured result.
+   * Extracts the first JSON object, normalises status and score.
+   */
+  private parseDialogResult(text: string): {
+    status: "success" | "fail" | "neutral";
+    score: number;
+    reason: string;
+  } | null {
+    const match = text.match(/\{[\s\S]*?\}/);
+    if (!match) return null;
+    try {
+      const parsed = JSON.parse(match[0]) as Record<string, unknown>;
+      const rawStatus = parsed["status"];
+      const status = (
+        ["success", "fail", "neutral"].includes(rawStatus as string) ? rawStatus : "neutral"
+      ) as "success" | "fail" | "neutral";
+      const rawScore = parsed["score"];
+      const score = typeof rawScore === "number" ? Math.max(0, Math.min(100, rawScore)) : 50;
+      const reason = typeof parsed["reason"] === "string" ? (parsed["reason"] as string) : "";
+      return { status, score, reason };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Analyze a single dialog text via the configured AI adapter.
+   * Expects args: { dialog: string; prompt?: string }
+   * Returns: { status; score; reason }
+   */
+  private async runAnalyzeDialog(args: Record<string, unknown>): Promise<{
+    status: "success" | "fail" | "neutral";
+    score: number;
+    reason: string;
+  }> {
+    const { dialog, prompt } = args as { dialog?: string; prompt?: string };
+    if (!dialog?.trim()) {
+      return { status: "neutral", score: 0, reason: "Empty dialog" };
+    }
+    const fullPrompt = prompt ? `${prompt}\n${dialog}` : dialog;
+    const text = await analyzeOnce(fullPrompt);
+    const result = this.parseDialogResult(text);
+    if (result) return result;
+    this.logger.warn("[TG] analyze_dialog: unexpected AI response", {
+      snippet: text.slice(0, 120),
+    });
+    throw new Error(`analyze_dialog: failed to parse AI response: ${text.slice(0, 120)}`);
+  }
+
+  /**
+   * Analyze a BATCH of dialogs in one WebSocket round-trip.
+   * All AI calls run in parallel server-side — only one lane slot consumed.
+   *
+   * Expects args: {
+   *   dialogs: Array<{ chatId: string; dialog: string }>;
+   *   prompt?: string;
+   * }
+   * Returns: {
+   *   results: Array<{ chatId; status; score; reason } | null>
+   * }
+   */
+  private async runAnalyzeDialogsBatch(args: Record<string, unknown>): Promise<{
+    results: Array<{
+      chatId: string;
+      status: "success" | "fail" | "neutral";
+      score: number;
+      reason: string;
+    } | null>;
+  }> {
+    const { dialogs, prompt } = args as {
+      dialogs: Array<{ chatId: string; dialog: string }>;
+      prompt?: string;
+    };
+
+    if (!Array.isArray(dialogs) || dialogs.length === 0) {
+      return { results: [] };
+    }
+
+    // Use analyzeOnceDirect() which bypasses the gateway lane when env-var API
+    // keys (ANTHROPIC_API_KEY / OPENAI_API_KEY) are available. This allows all
+    // dialogs in the batch to run truly in parallel without lane congestion.
+    // Falls back to the gateway adapter (lane-limited) when no direct key exists.
+    const settled = await Promise.allSettled(
+      dialogs.map(async ({ chatId, dialog }) => {
+        if (!dialog?.trim()) {
+          return { chatId, status: "neutral" as const, score: 0, reason: "Empty dialog" };
+        }
+        const fullPrompt = prompt ? `${prompt}\n${dialog}` : dialog;
+        const text = await analyzeOnceDirect(fullPrompt);
+        const parsed = this.parseDialogResult(text);
+        if (!parsed) return null;
+        return { chatId, ...parsed };
+      }),
+    );
+
+    return {
+      results: settled.map((r) => (r.status === "fulfilled" ? r.value : null)),
+    };
   }
 
   // ─── Task sessions ────────────────────────────────────────────────────────

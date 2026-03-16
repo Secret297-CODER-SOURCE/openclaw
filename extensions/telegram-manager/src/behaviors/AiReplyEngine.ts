@@ -27,6 +27,9 @@ export type ModelAdapter = (
 let _adapter: ModelAdapter | null = null;
 // Cached env-resolved adapter so we don't re-create adapters on every call.
 let _cachedEnvAdapter: ModelAdapter | null = null;
+// Separate cache for the direct (non-gateway) adapter used in batch analysis.
+// Not cleared by setModelAdapter() so it survives gateway adapter registration.
+let _cachedDirectAdapter: ModelAdapter | null = null;
 
 /**
  * Set the model adapter used by aiReply().
@@ -37,6 +40,22 @@ export function setModelAdapter(adapter: ModelAdapter): void {
   _adapter = adapter;
   _cachedEnvAdapter = null;
   cachedAnthropicClient = null;
+  // NOTE: _cachedDirectAdapter is intentionally NOT cleared here so that
+  // direct env-var adapters (for batch analysis) remain available even after
+  // the gateway adapter is registered.
+}
+
+/**
+ * Returns true if a direct AI adapter (Anthropic or OpenAI-compatible env vars)
+ * is available. When true, analyzeOnceDirect() bypasses the gateway lane and
+ * can run many calls in parallel without causing lane congestion.
+ */
+export function isDirectAdapterAvailable(): boolean {
+  return !!(
+    process.env.ANTHROPIC_API_KEY?.trim() ||
+    process.env.OPENAI_API_KEY?.trim() ||
+    process.env.OPENAI_BASE_URL?.trim()
+  );
 }
 
 // ─── Anthropic adapter (env-var fallback) ─────────────────────────────────────
@@ -209,6 +228,62 @@ async function runAnthropicWithTools(
   }
 
   return "…"; // fallback after max iterations
+}
+
+// ─── One-shot analysis calls ──────────────────────────────────────────────────
+
+const ANALYSIS_SYSTEM_PROMPT =
+  "You are a helpful assistant. When asked for JSON output, respond ONLY with valid JSON — no markdown fences, no prose explanation.";
+
+/**
+ * Resolve a direct (non-gateway) adapter using env-var API keys.
+ * Returns null if no direct key is configured.
+ */
+function resolveAdapterDirect(): ModelAdapter | null {
+  if (_cachedDirectAdapter) return _cachedDirectAdapter;
+
+  const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim();
+  if (anthropicKey) {
+    _cachedDirectAdapter = makeAnthropicAdapter();
+    return _cachedDirectAdapter;
+  }
+
+  const openaiKey = process.env.OPENAI_API_KEY?.trim();
+  const openaiBase = process.env.OPENAI_BASE_URL?.trim();
+  if (openaiKey || openaiBase) {
+    const baseUrl = (openaiBase ?? "https://api.openai.com/v1").replace(/\/$/, "");
+    const model = process.env.TG_AI_MODEL?.trim() || "gpt-4o";
+    _cachedDirectAdapter = makeOpenAiCompatAdapter(baseUrl, openaiKey ?? "", model);
+    return _cachedDirectAdapter;
+  }
+
+  return null; // no direct adapter available
+}
+
+/**
+ * Make a single stateless AI call via the gateway adapter.
+ * Uses the main lane — limit concurrency to avoid lane congestion.
+ */
+export async function analyzeOnce(userMessage: string): Promise<string> {
+  const adapter = resolveAdapter();
+  return adapter([{ role: "user", content: userMessage }], ANALYSIS_SYSTEM_PROMPT);
+}
+
+/**
+ * Make a single stateless AI call, preferring a DIRECT API adapter
+ * (ANTHROPIC_API_KEY / OPENAI_API_KEY) over the gateway adapter.
+ *
+ * Direct calls bypass the gateway main lane entirely, so many of these can
+ * run in parallel without queueAhead warnings. Falls back to analyzeOnce()
+ * (gateway lane) when no direct key is configured.
+ */
+export async function analyzeOnceDirect(userMessage: string): Promise<string> {
+  const direct = resolveAdapterDirect();
+  if (direct) {
+    return direct([{ role: "user", content: userMessage }], ANALYSIS_SYSTEM_PROMPT);
+  }
+  // No direct key — use the gateway adapter (lane-limited, caller should limit concurrency)
+  return analyzeOnce(userMessage);
 }
 
 // ─── Conversation history ──────────────────────────────────────────────────────

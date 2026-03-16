@@ -305,6 +305,36 @@ export class OpenClawApp extends LitElement {
   @state() telegramTrainingLoading = false;
   @state() telegramTrainingError: string | null = null;
   @state() telegramShowCreateNodesPrompt = false;
+  @state() telegramTrainingLabels: Record<
+    string,
+    import("./controllers/telegram.ts").TrainingLabel
+  > = {};
+  @state() telegramAnalysisResult: string | null = null;
+  @state() telegramAnalysisLoading = false;
+  @state() telegramAnalysisError: string | null = null;
+  @state() telegramAnalysisResults: Record<
+    string,
+    import("./controllers/telegram.ts").DialogAnalysisResult
+  > = {};
+  @state() telegramBatchRunning = false;
+  @state() telegramBatchProgress = 0;
+  @state() telegramBatchTotal = 0;
+  @state() telegramBatchError: string | null = null;
+  // Non-reactive: mutated in-place by runBatchAnalysis/cancelBatchAnalysis
+  _telegramBatchAbort: { cancelled: boolean } = { cancelled: false };
+
+  // Webchat (Telegram-Web-like messenger)
+  @state() telegramWebchatDialogs: import("./controllers/telegram.ts").TelegramDialog[] = [];
+  @state() telegramWebchatDialogsLoading = false;
+  @state() telegramWebchatDialogsError: string | null = null;
+  @state() telegramWebchatSelectedId: string | null = null;
+  @state() telegramWebchatMessages: import("./controllers/telegram.ts").TelegramWebMessage[] = [];
+  @state() telegramWebchatMessagesLoading = false;
+  @state() telegramWebchatInput = "";
+  @state() telegramWebchatSending = false;
+  @state() telegramWebchatSearchQuery = "";
+  // Non-reactive: holds the polling interval ID
+  _telegramWebchatPollTimer: number | null = null;
 
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
