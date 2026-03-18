@@ -213,6 +213,8 @@ export type AppViewState = {
   telegramChatNodesError: string | null;
   telegramFlowNodes: import("./controllers/telegram.ts").FlowNode[];
   telegramFlowNodesLoading: boolean;
+  /** Schema scope: personal (per-agent) or shared (global across agents). */
+  telegramSchemaScope: import("./controllers/telegram.ts").TrainingScope;
   telegramTrainingPairs: import("./controllers/telegram.ts").TrainingPair[];
   telegramTrainingGroups: import("./controllers/telegram.ts").TrainingGroup[];
   telegramTrainingGroupsLimit: number;

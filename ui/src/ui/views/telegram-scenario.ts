@@ -66,6 +66,9 @@ export type ScenarioProps = {
   onDeleteChatNode: (agentId: string, nodeId: string) => void;
   onLoadChatNodes: (agentId: string) => void;
   onLoadFlowNodes: (agentId: string) => void;
+  /** Schema (flow nodes) scope. */
+  schemaScope: TrainingScope;
+  onSchemaScopeChange: (agentId: string, scope: TrainingScope) => void;
   onRunAnalysis: (agentId: string) => void;
   // Per-dialog batch analysis
   analysisResults: Record<string, DialogAnalysisResult>;
@@ -1320,13 +1323,40 @@ function renderAnalysisView(props: ScenarioProps, agent: TelegramAgentRecord) {
 
 // ─── Schema view (Flow Nodes pipeline) ────────────────────────────────────────
 
-export function renderSchemaPanel(props: ScenarioProps, _agent: TelegramAgentRecord) {
+export function renderSchemaPanel(props: ScenarioProps, agent: TelegramAgentRecord) {
   const flowNodes = props.flowNodes;
+  const scope = props.schemaScope;
+
+  // ── Scope switcher (reuses training scope styling) ────────────────────────
+  const scopeToggle = html`
+    <div class="tg-scope-row">
+      <span class="tg-scope-row__label">Схема:</span>
+      <div class="tg-scope-switcher">
+        <button
+          type="button"
+          class="tg-scope-btn ${scope === "personal" ? "active" : ""}"
+          @click=${() => props.onSchemaScopeChange(agent.id, "personal")}
+          aria-pressed=${scope === "personal"}
+        >
+          👤 Личная
+        </button>
+        <button
+          type="button"
+          class="tg-scope-btn ${scope === "shared" ? "active" : ""}"
+          @click=${() => props.onSchemaScopeChange(agent.id, "shared")}
+          aria-pressed=${scope === "shared"}
+        >
+          🌐 Общая
+        </button>
+      </div>
+    </div>
+  `;
 
   if (props.flowNodesLoading) {
     return html`
       <section class="card">
-        <div class="muted">Загрузка схемы…</div>
+        ${scopeToggle}
+        <div class="muted" style="padding: 8px 0;">Загрузка схемы…</div>
       </section>
     `;
   }
@@ -1334,9 +1364,15 @@ export function renderSchemaPanel(props: ScenarioProps, _agent: TelegramAgentRec
   if (flowNodes.length === 0) {
     return html`
       <section class="card">
+        ${scopeToggle}
         <div class="card-title">Схема</div>
         <div class="card-sub">
-          Структура общения (этапы диалога). Создайте ноды через раздел «Чат» → «Обучение».
+          Структура общения (этапы диалога).
+          ${
+            scope === "shared"
+              ? "Нет общих этапов — создайте ноды в любом агенте и сохраните в «Общую» схему."
+              : "Создайте ноды через раздел «Чат» → «Обучение»."
+          }
         </div>
         <div class="muted" style="margin-top: 16px">
           Нет этапов диалога. После создания нод они сгруппируются здесь.
@@ -1347,7 +1383,8 @@ export function renderSchemaPanel(props: ScenarioProps, _agent: TelegramAgentRec
 
   return html`
     <section class="card">
-      <div class="card-title">Схема</div>
+      ${scopeToggle}
+      <div class="card-title" style="margin-top: 8px;">Схема</div>
       <div class="card-sub">Этапы диалога — путь от старта до конверсии.</div>
 
       <div class="tg-schema-pipeline" style="margin-top: 20px;">

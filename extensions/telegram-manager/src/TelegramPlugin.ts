@@ -578,7 +578,8 @@ export class TelegramPlugin implements GatewayPlugin {
             fail("agentId is required");
             break;
           }
-          respond(this.storage.getFlowNodes(String(p.agentId)));
+          const fnScope = p.scope === "shared" ? "shared" : "personal";
+          respond(this.storage.getFlowNodes(String(p.agentId), fnScope));
           break;
         }
 
@@ -592,10 +593,12 @@ export class TelegramPlugin implements GatewayPlugin {
             break;
           }
           const fn = p.node as Partial<FlowNode>;
+          const sfScope: "personal" | "shared" = p.scope === "shared" ? "shared" : "personal";
           const now = new Date().toISOString();
           const flowNode: FlowNode = {
             id: fn.id ?? randomUUID(),
             agentId: String(p.agentId),
+            scope: sfScope,
             title: String(fn.title ?? ""),
             description: fn.description ?? undefined,
             chatNodeIds: Array.isArray(fn.chatNodeIds) ? fn.chatNodeIds.map(String) : [],
@@ -707,6 +710,7 @@ export class TelegramPlugin implements GatewayPlugin {
             fail("agentId is required");
             break;
           }
+          const cnpScope: "personal" | "shared" = p.scope === "shared" ? "shared" : "personal";
           const agentId = String(p.agentId);
           const pairs = this.storage.getTrainingPairs(agentId);
           if (pairs.length === 0) {
@@ -748,6 +752,7 @@ export class TelegramPlugin implements GatewayPlugin {
           const flowNode: FlowNode = {
             id: randomUUID(),
             agentId,
+            scope: cnpScope,
             title: "Обучение (импорт)",
             description: `Создано из ${pairs.length} пар диалога`,
             chatNodeIds: chatNodes.map((n) => n.id),

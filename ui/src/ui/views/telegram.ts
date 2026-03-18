@@ -158,6 +158,11 @@ export type TelegramProps = {
   chatNodesError: string | null;
   flowNodes: FlowNode[];
   flowNodesLoading: boolean;
+  schemaScope: import("../controllers/telegram.ts").TrainingScope;
+  onSchemaScopeChange: (
+    agentId: string,
+    scope: import("../controllers/telegram.ts").TrainingScope,
+  ) => void;
   trainingPairs: TrainingPair[];
   trainingGroups: TrainingGroup[];
   trainingGroupsLimit: number;
@@ -1016,6 +1021,8 @@ function renderDetail(props: TelegramProps) {
     onDeleteChatNode: props.onDeleteChatNode,
     onLoadChatNodes: props.onLoadChatNodes,
     onLoadFlowNodes: props.onLoadFlowNodes,
+    schemaScope: props.schemaScope,
+    onSchemaScopeChange: props.onSchemaScopeChange,
     trainingLabels: props.trainingLabels,
     analysisResult: props.analysisResult,
     analysisLoading: props.analysisLoading,

@@ -715,6 +715,8 @@ export type ChatNode = {
 export type FlowNode = {
   id: string;
   agentId: string;
+  /** Schema scope: "personal" (per-agent) or "shared" (across all agents). */
+  scope?: "personal" | "shared";
   title: string;
   description?: string;
   chatNodeIds: string[];
@@ -762,6 +764,8 @@ type TelegramScenarioState = TelegramState & {
   telegramChatNodesError: string | null;
   telegramFlowNodes: FlowNode[];
   telegramFlowNodesLoading: boolean;
+  /** Schema scope: "personal" (per-agent) or "shared" (across all agents). */
+  telegramSchemaScope: TrainingScope;
   telegramTrainingPairs: TrainingPair[];
   telegramTrainingGroups: TrainingGroup[];
   telegramTrainingLoading: boolean;
@@ -814,6 +818,7 @@ export async function loadTelegramChatNodes(
 export async function loadTelegramFlowNodes(
   state: TelegramScenarioState,
   agentId: string,
+  scope: TrainingScope = "personal",
 ): Promise<void> {
   if (!isReady(state)) {
     return;
@@ -822,6 +827,7 @@ export async function loadTelegramFlowNodes(
   try {
     const res = await state.client!.request<FlowNode[]>("telegram.scenario.getFlowNodes", {
       agentId,
+      scope,
     });
     state.telegramFlowNodes = res ?? [];
   } catch {

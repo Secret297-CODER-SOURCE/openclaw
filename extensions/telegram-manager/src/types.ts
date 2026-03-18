@@ -267,6 +267,8 @@ export interface ChatNode {
 export interface FlowNode {
   id: string;
   agentId: string;
+  /** Schema scope: "personal" (per-agent) or "shared" (across all agents). */
+  scope?: "personal" | "shared";
   title: string;
   description?: string;
   chatNodeIds: string[];

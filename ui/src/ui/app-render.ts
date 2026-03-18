@@ -914,6 +914,7 @@ export function renderApp(state: AppViewState) {
                 chatNodesError: state.telegramChatNodesError,
                 flowNodes: state.telegramFlowNodes,
                 flowNodesLoading: state.telegramFlowNodesLoading,
+                schemaScope: state.telegramSchemaScope,
                 trainingPairs: state.telegramTrainingPairs,
                 trainingGroups: state.telegramTrainingGroups,
                 trainingGroupsLimit: state.telegramTrainingGroupsLimit,
@@ -1018,7 +1019,13 @@ export function renderApp(state: AppViewState) {
                   }
                 },
                 onLoadChatNodes: (agentId) => void loadTelegramChatNodes(state, agentId),
-                onLoadFlowNodes: (agentId) => void loadTelegramFlowNodes(state, agentId),
+                onLoadFlowNodes: (agentId) =>
+                  void loadTelegramFlowNodes(state, agentId, state.telegramSchemaScope),
+                onSchemaScopeChange: (agentId, scope) => {
+                  state.telegramSchemaScope = scope;
+                  state.telegramFlowNodes = [];
+                  void loadTelegramFlowNodes(state, agentId, scope);
+                },
                 onAddChatNode: (agentId, role) => void addTelegramChatNode(state, agentId, role),
                 onDeleteChatNode: (agentId, nodeId) =>
                   void deleteTelegramChatNode(state, agentId, nodeId),

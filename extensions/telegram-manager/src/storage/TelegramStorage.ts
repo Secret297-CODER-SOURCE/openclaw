@@ -118,6 +118,7 @@ export class TelegramStorage {
       CREATE TABLE IF NOT EXISTS tg_flow_nodes (
         id                  TEXT PRIMARY KEY,
         agent_id            TEXT NOT NULL,
+        scope               TEXT NOT NULL DEFAULT 'personal',
         title               TEXT NOT NULL,
         description         TEXT,
         chat_node_ids       TEXT NOT NULL DEFAULT '[]',
@@ -152,6 +153,15 @@ export class TelegramStorage {
       CREATE INDEX IF NOT EXISTS idx_flow_nodes_agent ON tg_flow_nodes(agent_id);
       CREATE INDEX IF NOT EXISTS idx_training_pairs_agent ON tg_training_pairs(agent_id);
     `);
+
+    // Incremental migration: add scope column to tg_flow_nodes for existing DBs
+    const cols = this.db.prepare("PRAGMA table_info(tg_flow_nodes)").all() as Array<{
+      name: string;
+    }>;
+    if (!cols.some((c) => c.name === "scope")) {
+      this.db.exec("ALTER TABLE tg_flow_nodes ADD COLUMN scope TEXT NOT NULL DEFAULT 'personal'");
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_flow_nodes_scope ON tg_flow_nodes(scope)");
+    }
   }
 
   // ─── Agents ───────────────────────────────────────────────────────────────
@@ -423,16 +433,18 @@ export class TelegramStorage {
   // ─── Flow Nodes ───────────────────────────────────────────────────────────
 
   saveFlowNode(node: FlowNode): void {
+    const scope = node.scope ?? "personal";
     this.db
       .prepare(`
         INSERT OR REPLACE INTO tg_flow_nodes
-          (id, agent_id, title, description, chat_node_ids, next_flow_node_ids, position, created_at)
+          (id, agent_id, scope, title, description, chat_node_ids, next_flow_node_ids, position, created_at)
         VALUES
-          (@id, @agentId, @title, @description, @chatNodeIds, @nextFlowNodeIds, @position, @createdAt)
+          (@id, @agentId, @scope, @title, @description, @chatNodeIds, @nextFlowNodeIds, @position, @createdAt)
       `)
       .run({
         id: node.id,
         agentId: node.agentId,
+        scope,
         title: node.title,
         description: node.description ?? null,
         chatNodeIds: JSON.stringify(node.chatNodeIds),
@@ -442,12 +454,19 @@ export class TelegramStorage {
       });
   }
 
-  getFlowNodes(agentId: string): FlowNode[] {
-    return (
-      this.db
-        .prepare("SELECT * FROM tg_flow_nodes WHERE agent_id = ? ORDER BY created_at ASC")
-        .all(agentId) as any[]
-    ).map(this.toFlowNode);
+  /** Get flow nodes by agent + scope.
+   * personal: rows owned by agentId with scope='personal'
+   * shared: all rows with scope='shared' (cross-agent)
+   */
+  getFlowNodes(agentId: string, scope: "personal" | "shared" = "personal"): FlowNode[] {
+    const sql =
+      scope === "shared"
+        ? "SELECT * FROM tg_flow_nodes WHERE scope = 'shared' ORDER BY created_at ASC"
+        : "SELECT * FROM tg_flow_nodes WHERE agent_id = ? AND scope = 'personal' ORDER BY created_at ASC";
+    const rows = (
+      scope === "shared" ? this.db.prepare(sql).all() : this.db.prepare(sql).all(agentId)
+    ) as Array<Record<string, unknown>>;
+    return rows.map(this.toFlowNode);
   }
 
   deleteFlowNode(id: string): void {
@@ -588,16 +607,18 @@ export class TelegramStorage {
     };
   }
 
-  private toFlowNode(row: any): FlowNode {
+  private toFlowNode(row: Record<string, unknown>): FlowNode {
+    const scope = (row.scope as string | undefined) ?? "personal";
     return {
-      id: row.id,
-      agentId: row.agent_id,
-      title: row.title,
-      description: row.description ?? undefined,
-      chatNodeIds: JSON.parse(row.chat_node_ids ?? "[]"),
-      nextFlowNodeIds: JSON.parse(row.next_flow_node_ids ?? "[]"),
-      position: row.position ? JSON.parse(row.position) : undefined,
-      createdAt: row.created_at,
+      id: row.id as string,
+      agentId: row.agent_id as string,
+      scope: scope === "shared" ? "shared" : "personal",
+      title: row.title as string,
+      description: (row.description as string | undefined) ?? undefined,
+      chatNodeIds: JSON.parse((row.chat_node_ids as string) ?? "[]"),
+      nextFlowNodeIds: JSON.parse((row.next_flow_node_ids as string) ?? "[]"),
+      position: row.position ? JSON.parse(row.position as string) : undefined,
+      createdAt: row.created_at as string,
     };
   }
 
