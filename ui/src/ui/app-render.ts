@@ -89,8 +89,10 @@ import {
   analyzeTrainingData,
   runBatchAnalysis,
   cancelBatchAnalysis,
-  saveTelegramTraining,
-  restoreTelegramTraining,
+  saveTrainingToGateway,
+  loadTrainingFromGateway,
+  buildFlatPairs,
+  applyTrainingEditorSave,
   loadWebchatDialogs,
   loadWebchatMessages,
   sendWebchatMessage,
@@ -608,9 +610,11 @@ export function renderApp(state: AppViewState) {
                   // Labels and analysis results reset before restore (in case nothing saved)
                   state.telegramTrainingLabels = {};
                   state.telegramAnalysisResults = {};
-                  // Restore previously persisted training data for this agent (if any)
+                  // Restore previously persisted training data for this agent (if any),
+                  // using the active scope (personal = per-agentId, shared = global key).
+                  // Uses gateway as primary source with localStorage fallback.
                   if (id) {
-                    restoreTelegramTraining(state, id);
+                    void loadTrainingFromGateway(state, id, state.telegramTrainingScope);
                   }
                   // Reset webchat state for the new agent
                   if (state._telegramWebchatPollTimer !== null) {
@@ -899,8 +903,12 @@ export function renderApp(state: AppViewState) {
                 onTaskComplete: (agentId, sessionId) => {
                   void completeTelegramTaskSession(state, agentId, sessionId);
                 },
-                // Scenario / Chat panel
+                // ── Scenario / Chat panel ──────────────────────────────────────────
                 chatSubPanel: state.telegramChatSubPanel,
+                nodesGraphMode: state.telegramNodesGraphMode,
+                onNodesGraphModeChange: (mode) => {
+                  state.telegramNodesGraphMode = mode;
+                },
                 chatNodes: state.telegramChatNodes,
                 chatNodesLoading: state.telegramChatNodesLoading,
                 chatNodesError: state.telegramChatNodesError,
@@ -914,8 +922,100 @@ export function renderApp(state: AppViewState) {
                 trainingLoading: state.telegramTrainingLoading,
                 trainingError: state.telegramTrainingError,
                 showCreateNodesPrompt: state.telegramShowCreateNodesPrompt,
+                trainingScope: state.telegramTrainingScope,
+                // Computed stats for both scopes: active scope is live, inactive is cached
+                trainingPersonalStats:
+                  state.telegramTrainingScope === "personal"
+                    ? {
+                        chats: state.telegramTrainingGroups.length,
+                        pairs: state.telegramTrainingPairs.length,
+                      }
+                    : state.telegramTrainingPersonalStats,
+                trainingSharedStats:
+                  state.telegramTrainingScope === "shared"
+                    ? {
+                        chats: state.telegramTrainingGroups.length,
+                        pairs: state.telegramTrainingPairs.length,
+                      }
+                    : state.telegramTrainingSharedStats,
+                onTrainingScopeChange: (agentId, scope) => {
+                  // Save outgoing scope data and cache its stats before clearing state
+                  const oldScope = state.telegramTrainingScope;
+                  void saveTrainingToGateway(state, agentId, oldScope);
+                  const stats = {
+                    chats: state.telegramTrainingGroups.length,
+                    pairs: state.telegramTrainingPairs.length,
+                  };
+                  if (oldScope === "personal") {
+                    state.telegramTrainingPersonalStats = stats;
+                  } else {
+                    state.telegramTrainingSharedStats = stats;
+                  }
+                  // Switch scope, clear state, then load from the new scope
+                  state.telegramTrainingScope = scope;
+                  state.telegramTrainingPairs = [];
+                  state.telegramTrainingGroups = [];
+                  state.telegramTrainingLabels = {};
+                  state.telegramAnalysisResults = {};
+                  state.telegramTrainingSelectedChatId = null;
+                  state.telegramTrainingEditorOpen = false;
+                  void loadTrainingFromGateway(state, agentId, scope);
+                },
+                onTrainingDeletePair: (chatId, pairIdx) => {
+                  const agentId = state.telegramSelectedId ?? "";
+                  const groups = state.telegramTrainingGroups.map((g) => {
+                    if (g.chatId !== chatId) {
+                      return g;
+                    }
+                    return { ...g, pairs: g.pairs.filter((_, i) => i !== pairIdx) };
+                  });
+                  state.telegramTrainingGroups = groups;
+                  state.telegramTrainingPairs = buildFlatPairs(groups, agentId);
+                  void saveTrainingToGateway(state, agentId, state.telegramTrainingScope);
+                },
+                onTrainingDeleteGroup: (chatId) => {
+                  const agentId = state.telegramSelectedId ?? "";
+                  const groups = state.telegramTrainingGroups.filter((g) => g.chatId !== chatId);
+                  state.telegramTrainingGroups = groups;
+                  if (state.telegramTrainingSelectedChatId === chatId) {
+                    state.telegramTrainingSelectedChatId = null;
+                  }
+                  // Remove associated label and analysis result
+                  const labels = { ...state.telegramTrainingLabels };
+                  const results = { ...state.telegramAnalysisResults };
+                  delete labels[chatId];
+                  delete results[chatId];
+                  state.telegramTrainingLabels = labels;
+                  state.telegramAnalysisResults = results;
+                  state.telegramTrainingPairs = buildFlatPairs(groups, agentId);
+                  void saveTrainingToGateway(state, agentId, state.telegramTrainingScope);
+                },
                 onSelectChatSubPanel: (sub) => {
                   state.telegramChatSubPanel = sub;
+                  // Auto-load graph data when the Nodes tab is opened
+                  if (sub === "nodes") {
+                    const aid = state.telegramSelectedId;
+                    if (aid) {
+                      if (state.telegramChatNodes.length === 0 && !state.telegramChatNodesLoading) {
+                        void loadTelegramChatNodes(state, aid);
+                      }
+                      if (
+                        state.telegramTrainingGroups.length === 0 &&
+                        !state.telegramTrainingLoading
+                      ) {
+                        void loadTrainingFromGateway(state, aid, state.telegramTrainingScope);
+                      }
+                      // Load webchat dialogs for userbot agents (used by "Чаты" graph)
+                      const agentType = state.telegramAgents?.find((a) => a.id === aid)?.type;
+                      if (
+                        agentType === "userbot" &&
+                        state.telegramWebchatDialogs.length === 0 &&
+                        !state.telegramWebchatDialogsLoading
+                      ) {
+                        void loadWebchatDialogs(state, aid);
+                      }
+                    }
+                  }
                 },
                 onLoadChatNodes: (agentId) => void loadTelegramChatNodes(state, agentId),
                 onLoadFlowNodes: (agentId) => void loadTelegramFlowNodes(state, agentId),
@@ -928,8 +1028,8 @@ export function renderApp(state: AppViewState) {
                   state.telegramTrainingSearchQuery = "";
                   state.telegramAnalysisResult = null;
                   state.telegramAnalysisError = null;
-                  // Reset batch state for the new file
-                  state.telegramAnalysisResults = {};
+                  // NOTE: keep telegramAnalysisResults and telegramTrainingLabels —
+                  // processTelegramTrainingFile merges groups by chatId and preserves existing results
                   state.telegramBatchRunning = false;
                   state.telegramBatchProgress = 0;
                   state.telegramBatchTotal = 0;
@@ -940,6 +1040,41 @@ export function renderApp(state: AppViewState) {
                       void runBatchAnalysis(state, agentId);
                     }
                   });
+                },
+                // Inline JSON editor
+                trainingEditorOpen: state.telegramTrainingEditorOpen,
+                trainingEditorJson: state.telegramTrainingEditorJson,
+                trainingEditorError: state.telegramTrainingEditorError,
+                onTrainingEditorOpen: () => {
+                  const snapshot = {
+                    groups: state.telegramTrainingGroups,
+                    labels: state.telegramTrainingLabels,
+                    analysisResults: state.telegramAnalysisResults,
+                    savedAt: new Date().toISOString(),
+                  };
+                  state.telegramTrainingEditorJson = JSON.stringify(snapshot, null, 2);
+                  state.telegramTrainingEditorError = null;
+                  state.telegramTrainingEditorOpen = true;
+                },
+                onTrainingEditorChange: (json) => {
+                  state.telegramTrainingEditorJson = json;
+                  state.telegramTrainingEditorError = null;
+                },
+                onTrainingEditorSave: (json) => {
+                  const agentId = state.telegramSelectedId ?? "";
+                  void applyTrainingEditorSave(state, agentId, state.telegramTrainingScope, json)
+                    .then(() => {
+                      state.telegramTrainingEditorOpen = false;
+                      state.telegramTrainingEditorError = null;
+                    })
+                    .catch((err: unknown) => {
+                      state.telegramTrainingEditorError =
+                        err instanceof Error ? err.message : "Ошибка при разборе JSON";
+                    });
+                },
+                onTrainingEditorClose: () => {
+                  state.telegramTrainingEditorOpen = false;
+                  state.telegramTrainingEditorError = null;
                 },
                 onTrainingSelectChat: (id) => {
                   state.telegramTrainingSelectedChatId = id;
@@ -964,13 +1099,12 @@ export function renderApp(state: AppViewState) {
                     [chatId]: label,
                   };
                   state.telegramTrainingLabels = updatedLabels;
-                  // Persist label change immediately
+                  // Persist label change immediately under the active scope
                   if (state.telegramSelectedId) {
-                    saveTelegramTraining(
+                    void saveTrainingToGateway(
+                      state,
                       state.telegramSelectedId,
-                      state.telegramTrainingGroups,
-                      updatedLabels,
-                      state.telegramAnalysisResults,
+                      state.telegramTrainingScope,
                     );
                   }
                 },

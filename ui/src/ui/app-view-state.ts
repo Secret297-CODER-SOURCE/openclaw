@@ -207,6 +207,7 @@ export type AppViewState = {
   telegramTaskFormOpeningMessage: string;
   // Telegram scenario / chat panel
   telegramChatSubPanel: import("./views/telegram-scenario.ts").TelegramChatSubPanel;
+  telegramNodesGraphMode: import("./views/telegram-scenario.ts").NodesGraphMode;
   telegramChatNodes: import("./controllers/telegram.ts").ChatNode[];
   telegramChatNodesLoading: boolean;
   telegramChatNodesError: string | null;
@@ -220,6 +221,18 @@ export type AppViewState = {
   telegramTrainingLoading: boolean;
   telegramTrainingError: string | null;
   telegramShowCreateNodesPrompt: boolean;
+  /** Training scope: personal (per-agentId) or shared (global across agents) */
+  telegramTrainingScope: import("./controllers/telegram.ts").TrainingScope;
+  /** Cached chat/pair counts for the personal scope (set when that scope was last active). */
+  telegramTrainingPersonalStats: { chats: number; pairs: number } | null;
+  /** Cached chat/pair counts for the shared scope (set when that scope was last active). */
+  telegramTrainingSharedStats: { chats: number; pairs: number } | null;
+  /** Whether the inline training JSON editor is open. */
+  telegramTrainingEditorOpen: boolean;
+  /** Current text in the inline JSON editor. */
+  telegramTrainingEditorJson: string;
+  /** Validation error from the last editor save attempt. */
+  telegramTrainingEditorError: string | null;
   // Labels (success/fail/neutral) keyed by chatId
   telegramTrainingLabels: Record<string, import("./controllers/telegram.ts").TrainingLabel>;
   // Whole-dataset AI analysis (freeform text result)

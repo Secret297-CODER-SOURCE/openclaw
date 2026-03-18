@@ -292,6 +292,7 @@ export class OpenClawApp extends LitElement {
   // Scenario / Chat panel
   @state() telegramChatSubPanel: import("./views/telegram-scenario.ts").TelegramChatSubPanel =
     "chat";
+  @state() telegramNodesGraphMode: import("./views/telegram-scenario.ts").NodesGraphMode = "chats";
   @state() telegramChatNodes: import("./controllers/telegram.ts").ChatNode[] = [];
   @state() telegramChatNodesLoading = false;
   @state() telegramChatNodesError: string | null = null;
@@ -305,6 +306,12 @@ export class OpenClawApp extends LitElement {
   @state() telegramTrainingLoading = false;
   @state() telegramTrainingError: string | null = null;
   @state() telegramShowCreateNodesPrompt = false;
+  @state() telegramTrainingScope: import("./controllers/telegram.ts").TrainingScope = "personal";
+  @state() telegramTrainingPersonalStats: { chats: number; pairs: number } | null = null;
+  @state() telegramTrainingSharedStats: { chats: number; pairs: number } | null = null;
+  @state() telegramTrainingEditorOpen = false;
+  @state() telegramTrainingEditorJson = "";
+  @state() telegramTrainingEditorError: string | null = null;
   @state() telegramTrainingLabels: Record<
     string,
     import("./controllers/telegram.ts").TrainingLabel

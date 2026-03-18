@@ -156,6 +156,9 @@ export class AgentManager {
     if (tool === "analyze_dialogs_batch") {
       return this.runAnalyzeDialogsBatch(args);
     }
+    if (tool === "analyze_mega_batch") {
+      return this.runAnalyzeMegaBatch(args);
+    }
     if (tool === "check_batch_capability") {
       // Report whether direct (non-gateway) AI adapter is available.
       // Client uses this to decide batch size: large batches only help when
@@ -264,6 +267,76 @@ export class AgentManager {
     return {
       results: settled.map((r) => (r.status === "fulfilled" ? r.value : null)),
     };
+  }
+
+  /**
+   * Analyze a MEGA-BATCH of dialogs in a SINGLE AI call.
+   * All N dialogs are packed into one prompt; AI returns a JSON array.
+   * One gateway lane slot for N dialogs → up to N× faster than single-dialog mode.
+   *
+   * Expects args: { dialogs: Array<{ chatId: string; dialog: string }>; prompt?: string }
+   * Returns: { results: Array<{ chatId; status; score; reason } | null> }
+   */
+  private async runAnalyzeMegaBatch(args: Record<string, unknown>): Promise<{
+    results: Array<{
+      chatId: string;
+      status: "success" | "fail" | "neutral";
+      score: number;
+      reason: string;
+    } | null>;
+  }> {
+    const { dialogs, prompt } = args as {
+      dialogs: Array<{ chatId: string; dialog: string }>;
+      prompt?: string;
+    };
+    if (!Array.isArray(dialogs) || dialogs.length === 0) {
+      return { results: [] };
+    }
+
+    // Build one prompt with all dialogs clearly separated
+    const dialogsText = dialogs
+      .map((d, i) => `=== Диалог ${i + 1} (chatId: ${d.chatId}) ===\n${d.dialog}`)
+      .join("\n\n");
+
+    const megaPrompt = `${prompt ?? ""}
+
+Проанализируй каждый из ${dialogs.length} диалогов ниже.
+Верни ТОЛЬКО JSON-массив без лишнего текста:
+[{"chatId":"...","status":"success"|"fail"|"neutral","score":0-100,"reason":"кратко"},...]
+
+${dialogsText}`;
+
+    const text = await analyzeOnce(megaPrompt);
+
+    // Parse the JSON array from AI response
+    try {
+      const match = text.match(/\[[\s\S]*\]/);
+      if (match) {
+        const arr = JSON.parse(match[0]) as Array<Record<string, unknown>>;
+        return {
+          results: dialogs.map((d, i) => {
+            // Try chatId lookup first, fall back to positional index
+            const item = arr.find((r) => r["chatId"] === d.chatId) ?? arr[i];
+            if (!item) return null;
+            const rawStatus = item["status"];
+            const status = (
+              ["success", "fail", "neutral"].includes(rawStatus as string) ? rawStatus : "neutral"
+            ) as "success" | "fail" | "neutral";
+            const rawScore = item["score"];
+            const score = typeof rawScore === "number" ? Math.max(0, Math.min(100, rawScore)) : 50;
+            const reason = typeof item["reason"] === "string" ? (item["reason"] as string) : "";
+            return { chatId: d.chatId, status, score, reason };
+          }),
+        };
+      }
+    } catch {
+      // Fall through → return nulls, client marks as unanalyzed
+    }
+
+    this.logger.warn("[TG] analyze_mega_batch: failed to parse AI array response", {
+      snippet: text.slice(0, 200),
+    });
+    return { results: dialogs.map(() => null) };
   }
 
   // ─── Task sessions ────────────────────────────────────────────────────────

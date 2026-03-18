@@ -671,6 +671,36 @@ export class TelegramPlugin implements GatewayPlugin {
           break;
         }
 
+        case "telegram.scenario.saveTrainingSnapshot": {
+          // Persist full training UI state (groups + labels + analysisResults) to SQLite.
+          // scope: "personal" (per-agent) or "shared" (all agents share one record).
+          const agentId = String(p.agentId ?? "");
+          const scope = String(p.scope ?? "personal");
+          if (!agentId) {
+            fail("agentId is required");
+            break;
+          }
+          if (!p.snapshot || typeof p.snapshot !== "object") {
+            fail("snapshot object is required");
+            break;
+          }
+          this.storage.saveTrainingSnapshot(agentId, scope, p.snapshot as Record<string, unknown>);
+          respond({ ok: true });
+          break;
+        }
+
+        case "telegram.scenario.getTrainingSnapshot": {
+          // Retrieve a previously saved training snapshot. Returns null if not found.
+          const agentId = String(p.agentId ?? "");
+          const scope = String(p.scope ?? "personal");
+          if (!agentId) {
+            fail("agentId is required");
+            break;
+          }
+          respond(this.storage.getTrainingSnapshot(agentId, scope));
+          break;
+        }
+
         case "telegram.scenario.createNodesFromPairs": {
           // Convert saved training pairs into ChatNodes and FlowNodes
           if (!p.agentId) {

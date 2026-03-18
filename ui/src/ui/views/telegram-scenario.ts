@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import type { TelegramAgentRecord } from "../controllers/telegram.ts";
+import type { TelegramAgentRecord, TrainingScope } from "../controllers/telegram.ts";
 import type {
   ChatNode,
   FlowNode,
@@ -14,6 +14,7 @@ import type { WebchatProps } from "./telegram-webchat.ts";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type TelegramChatSubPanel = "chat" | "nodes" | "training" | "analysis";
+export type NodesGraphMode = "chats" | "training";
 
 export type ScenarioProps = {
   chatSubPanel: TelegramChatSubPanel;
@@ -37,6 +38,21 @@ export type ScenarioProps = {
   analysisLoading: boolean;
   analysisError: string | null;
   onSelectChatSubPanel: (sub: TelegramChatSubPanel) => void;
+  trainingScope: TrainingScope;
+  /** Cached stats for each scope (active scope is live-computed, inactive is cached). */
+  trainingPersonalStats: { chats: number; pairs: number } | null;
+  trainingSharedStats: { chats: number; pairs: number } | null;
+  onTrainingScopeChange: (agentId: string, scope: TrainingScope) => void;
+  onTrainingDeletePair: (chatId: string, pairIdx: number) => void;
+  onTrainingDeleteGroup: (chatId: string) => void;
+  // Inline JSON editor
+  trainingEditorOpen: boolean;
+  trainingEditorJson: string;
+  trainingEditorError: string | null;
+  onTrainingEditorOpen: () => void;
+  onTrainingEditorChange: (json: string) => void;
+  onTrainingEditorSave: (json: string) => void;
+  onTrainingEditorClose: () => void;
   onTrainingFileLoad: (agentId: string, json: string, fileName: string) => void;
   onTrainingSelectChat: (id: string | null) => void;
   onTrainingSearchChange: (q: string) => void;
@@ -44,6 +60,8 @@ export type ScenarioProps = {
   onTrainingDismiss: () => void;
   onTrainingShowMore: () => void;
   onTrainingSetLabel: (chatId: string, label: TrainingLabel) => void;
+  nodesGraphMode: NodesGraphMode;
+  onNodesGraphModeChange: (mode: NodesGraphMode) => void;
   onAddChatNode: (agentId: string, role: "manager" | "client") => void;
   onDeleteChatNode: (agentId: string, nodeId: string) => void;
   onLoadChatNodes: (agentId: string) => void;
@@ -139,24 +157,360 @@ function renderChatView(props: ScenarioProps, _agent: TelegramAgentRecord) {
   `;
 }
 
-// ─── Nodes view (node graph / list) ───────────────────────────────────────────
+// ─── Nodes view (animated dot graph) ─────────────────────────────────────────
 
-function renderNodesView(props: ScenarioProps, agent: TelegramAgentRecord) {
+// Graph viewport dimensions (used for both layout math and SVG lines overlay)
+const GRAPH_W = 720;
+const GRAPH_H = 440;
+
+/** Max nodes shown in the graph to avoid overwhelming the renderer. */
+const MAX_GRAPH_NODES = 40;
+
+const LABEL_COLOR: Record<string, string> = {
+  success: "#4caf50",
+  fail: "#ef5350",
+  neutral: "#888888",
+};
+
+/** Multi-ring circular layout — nodes in concentric rings. */
+function circularPack(count: number): Array<{ x: number; y: number }> {
+  const cx = GRAPH_W / 2;
+  const cy = GRAPH_H / 2;
+  if (count === 0) {
+    return [];
+  }
+  if (count === 1) {
+    return [{ x: cx, y: cy }];
+  }
+  const rings: Array<{ cap: number; r: number }> = [
+    { cap: 1, r: 0 }, // center slot
+    { cap: 6, r: 90 },
+    { cap: 12, r: 170 },
+    { cap: 20, r: 210 },
+  ];
+  const positions: Array<{ x: number; y: number }> = [];
+  let remaining = count;
+  for (const ring of rings) {
+    if (remaining <= 0) {
+      break;
+    }
+    const n = Math.min(ring.cap, remaining);
+    for (let i = 0; i < n; i++) {
+      if (ring.r === 0) {
+        positions.push({ x: cx, y: cy });
+      } else {
+        const angle = (2 * Math.PI * i) / ring.cap - Math.PI / 2;
+        positions.push({ x: cx + ring.r * Math.cos(angle), y: cy + ring.r * Math.sin(angle) });
+      }
+    }
+    remaining -= n;
+  }
+  return positions;
+}
+
+/**
+ * Layered left-to-right layout for a DAG of ChatNodes.
+ * Assigns each node a column via BFS, distributes rows within columns.
+ */
+function layeredLayout(nodes: ChatNode[]): Array<{ x: number; y: number }> {
+  if (nodes.length === 0) {
+    return [];
+  }
+
+  const idxById = new Map(nodes.map((n, i) => [n.id, i]));
+  const hasPredecessor = new Set<string>();
+  for (const n of nodes) {
+    if (n.nextNodeId) {
+      hasPredecessor.add(n.nextNodeId);
+    }
+    for (const b of n.branches ?? []) {
+      hasPredecessor.add(b.nextNodeId);
+    }
+  }
+
+  const col = new Map<string, number>();
+  const queue: Array<{ id: string; c: number }> = nodes
+    .filter((n) => !hasPredecessor.has(n.id))
+    .map((n) => ({ id: n.id, c: 0 }));
+  if (queue.length === 0) {
+    nodes.forEach((n) => queue.push({ id: n.id, c: 0 }));
+  }
+
+  while (queue.length > 0) {
+    const { id, c } = queue.shift()!;
+    if (col.has(id) && col.get(id)! >= c) {
+      continue;
+    }
+    col.set(id, c);
+    const node = nodes[idxById.get(id)!];
+    if (!node) {
+      continue;
+    }
+    if (node.nextNodeId && idxById.has(node.nextNodeId)) {
+      queue.push({ id: node.nextNodeId, c: c + 1 });
+    }
+    for (const b of node.branches ?? []) {
+      if (idxById.has(b.nextNodeId)) {
+        queue.push({ id: b.nextNodeId, c: c + 1 });
+      }
+    }
+  }
+  nodes.forEach((n) => {
+    if (!col.has(n.id)) {
+      col.set(n.id, 0);
+    }
+  });
+
+  const byCols = new Map<number, string[]>();
+  for (const [id, c] of col.entries()) {
+    if (!byCols.has(c)) {
+      byCols.set(c, []);
+    }
+    byCols.get(c)!.push(id);
+  }
+  const totalCols = Math.max(...col.values()) + 1;
+  const xStep = Math.min(150, (GRAPH_W - 80) / Math.max(totalCols - 1, 1));
+  const posById = new Map<string, { x: number; y: number }>();
+  for (const [c, ids] of byCols.entries()) {
+    const x = 50 + c * xStep;
+    const yStep = GRAPH_H / (ids.length + 1);
+    ids.forEach((id, i) => posById.set(id, { x, y: yStep * (i + 1) }));
+  }
+  return nodes.map((n) => posById.get(n.id) ?? { x: GRAPH_W / 2, y: GRAPH_H / 2 });
+}
+
+type GraphDotItem = {
+  initials: string;
+  name: string;
+  sublabel: string;
+  color: string;
+  animDelay: string;
+};
+
+/**
+ * Render graph using HTML div dots + thin SVG lines overlay.
+ * HTML divs are immune to Lit's SVG namespace quirks; lines use only <line> elements.
+ */
+function renderDivGraph(
+  dots: GraphDotItem[],
+  positions: Array<{ x: number; y: number }>,
+  edges: Array<[number, number]>,
+  overflowCount: number,
+  onDblClick: (idx: number) => void,
+) {
+  if (dots.length === 0) {
+    return nothing;
+  }
+
+  // Convert SVG-space positions to % of container for CSS positioning
+  const pct = (v: number, total: number) => ((v / total) * 100).toFixed(2);
+
+  return html`
+    <div style="position:relative; width:100%; height:${GRAPH_H}px; overflow:hidden;">
+
+      <!-- SVG overlay — only <line> elements, no defs/markers -->
+      <svg
+        style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;"
+        viewBox="0 0 ${GRAPH_W} ${GRAPH_H}"
+        preserveAspectRatio="xMidYMid meet"
+        aria-hidden="true"
+      >
+        ${edges.map(([fi, ti]) => {
+          const f = positions[fi];
+          const t = positions[ti];
+          if (!f || !t) {
+            return nothing;
+          }
+          return html`<line
+            x1="${f.x}" y1="${f.y}"
+            x2="${t.x}" y2="${t.y}"
+            stroke="rgba(150,150,150,0.45)" stroke-width="1.5"
+          />`;
+        })}
+      </svg>
+
+      <!-- HTML div nodes — absolutely positioned circles -->
+      ${dots.map((dot, idx) => {
+        const pos = positions[idx];
+        if (!pos) {
+          return nothing;
+        }
+        return html`
+          <div
+            class="tg-graph-dot"
+            style="left:${pct(pos.x, GRAPH_W)}%;top:${pct(pos.y, GRAPH_H)}%;background:${dot.color};animation-delay:${dot.animDelay}s;"
+            title="${dot.name}"
+            @dblclick=${() => onDblClick(idx)}
+          >
+            <span class="tg-dot-init">${dot.initials}</span>
+            <span class="tg-dot-name">${dot.name}</span>
+            <span class="tg-dot-sub">${dot.sublabel}</span>
+          </div>
+        `;
+      })}
+
+      ${
+        overflowCount > 0
+          ? html`<div class="tg-graph-overflow">+${overflowCount} ещё</div>`
+          : nothing
+      }
+    </div>
+  `;
+}
+
+/** Graph for "Чаты" mode — shows webchat dialogs (userbot) or chatNodes (bot). */
+function renderChatsGraph(props: ScenarioProps, _agent: TelegramAgentRecord) {
+  // For userbot agents, use live Telegram dialogs from the Чат sub-tab
+  if (props.webchat) {
+    const dialogs = props.webchat.dialogs;
+    if (props.webchat.dialogsLoading) {
+      return html`
+        <div class="tg-graph-empty muted">Загрузка диалогов…</div>
+      `;
+    }
+    if (dialogs.length === 0) {
+      return html`
+        <div class="tg-graph-empty muted">Нет диалогов — откройте вкладку «Чат» для загрузки.</div>
+      `;
+    }
+    const visible = dialogs.slice(0, MAX_GRAPH_NODES);
+    const positions = circularPack(visible.length);
+    const dots: GraphDotItem[] = visible.map((d, idx) => ({
+      initials: avatarInitials(d.name),
+      name: d.name.length > 12 ? d.name.slice(0, 12) + "…" : d.name,
+      sublabel: d.type === "group" ? "группа" : d.type === "channel" ? "канал" : "личный",
+      color: d.unreadCount > 0 ? "#5b8fff" : "#5a7fc4",
+      animDelay: (((idx * 37) % 30) / 10).toFixed(1),
+    }));
+    const graph = renderDivGraph(dots, positions, [], dialogs.length - visible.length, (i) => {
+      const d = visible[i];
+      if (d) {
+        props.webchat!.onSelectDialog(d.id, d.name);
+      }
+      props.onSelectChatSubPanel("chat");
+    });
+    return graph === nothing
+      ? html`
+          <div class="tg-graph-empty muted">Нет диалогов</div>
+        `
+      : graph;
+  }
+
+  // For bot agents, use chatNodes
   const nodes = props.chatNodes;
-
   if (props.chatNodesLoading) {
     return html`
-      <div class="muted" style="padding: 16px">Загрузка…</div>
+      <div class="tg-graph-empty muted">Загрузка нод…</div>
+    `;
+  }
+  if (nodes.length === 0) {
+    return html`
+      <div class="tg-graph-empty muted">Нет нод — добавьте «+ Менеджер» или «+ Клиент».</div>
     `;
   }
 
+  const visible = nodes.slice(0, MAX_GRAPH_NODES);
+  const positions = layeredLayout(visible);
+  const idxById = new Map(visible.map((n, i) => [n.id, i]));
+  const edges: Array<[number, number]> = [];
+  for (let i = 0; i < visible.length; i++) {
+    const n = visible[i];
+    if (n.nextNodeId) {
+      const ti = idxById.get(n.nextNodeId);
+      if (ti !== undefined) {
+        edges.push([i, ti]);
+      }
+    }
+    for (const b of n.branches ?? []) {
+      const ti = idxById.get(b.nextNodeId);
+      if (ti !== undefined) {
+        edges.push([i, ti]);
+      }
+    }
+  }
+  const dots: GraphDotItem[] = visible.map((node, idx) => ({
+    initials: node.role === "manager" ? "МН" : "КЛ",
+    name: node.text.length > 12 ? node.text.slice(0, 12) + "…" : node.text,
+    sublabel: node.role === "manager" ? "менеджер" : "клиент",
+    color: node.role === "manager" ? "#5b8fff" : "#888",
+    animDelay: (((idx * 43) % 30) / 10).toFixed(1),
+  }));
+  const graph = renderDivGraph(dots, positions, edges, nodes.length - visible.length, () => {
+    props.onSelectChatSubPanel("chat");
+  });
+  return graph === nothing
+    ? html`
+        <div class="tg-graph-empty muted">Нет нод</div>
+      `
+    : graph;
+}
+
+/** Graph for "Обучение" mode — shows training chats as circular nodes. */
+function renderTrainingGraph(props: ScenarioProps, _agent: TelegramAgentRecord) {
+  const allGroups = props.trainingGroups;
+  if (props.trainingLoading) {
+    return html`
+      <div class="tg-graph-empty muted">Загрузка обучения…</div>
+    `;
+  }
+  if (allGroups.length === 0) {
+    return html`
+      <div class="tg-graph-empty muted">Нет данных — загрузите JSON во вкладке «Обучение».</div>
+    `;
+  }
+
+  const visible = allGroups.slice(0, MAX_GRAPH_NODES);
+  const maxPairs = Math.max(...visible.map((g) => g.pairs.length), 1);
+  const positions = circularPack(visible.length);
+
+  const dots: GraphDotItem[] = visible.map((group, idx) => {
+    const label = props.trainingLabels[group.chatId];
+    const color = label ? (LABEL_COLOR[label] ?? "#5b8fff") : "#5b8fff";
+    // Scale size via opacity hint in sublabel (actual size is CSS-fixed, but color shifts)
+    const pairsNorm = Math.round((group.pairs.length / maxPairs) * 100);
+    return {
+      initials: avatarInitials(group.participantName),
+      name:
+        group.participantName.length > 12
+          ? group.participantName.slice(0, 12) + "…"
+          : group.participantName,
+      sublabel: `${group.pairs.length} пар · ${pairsNorm}%`,
+      color,
+      animDelay: (((idx * 37) % 30) / 10).toFixed(1),
+    };
+  });
+
+  const graph = renderDivGraph(dots, positions, [], allGroups.length - visible.length, (i) => {
+    const g = visible[i];
+    if (g) {
+      props.onTrainingSelectChat(g.chatId);
+    }
+    props.onSelectChatSubPanel("training");
+  });
+  return graph === nothing
+    ? html`
+        <div class="tg-graph-empty muted">Нет данных</div>
+      `
+    : graph;
+}
+
+// ─── Nodes view ───────────────────────────────────────────────────────────────
+
+function renderNodesView(props: ScenarioProps, agent: TelegramAgentRecord) {
+  const mode = props.nodesGraphMode;
+
+  // "Чаты" count: webchat dialogs for userbot agents, chatNodes for bot agents
+  const chatsCount = props.webchat ? props.webchat.dialogs.length : props.chatNodes.length;
+  const trainingCount = props.trainingGroups.length;
+
+  const hint =
+    mode === "chats" ? "двойной клик — перейти в чат" : "двойной клик — открыть в обучении";
+
   return html`
     <section class="card">
-      <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <div>
-          <div class="card-title">Ноды</div>
-          <div class="card-sub">${nodes.length} нод · Сценарий общения</div>
-        </div>
+      <!-- Toolbar -->
+      <div class="row" style="justify-content: space-between; align-items: center; margin-bottom: 12px;">
+        <div class="card-title">Ноды</div>
         <div class="row" style="gap: 8px;">
           <button class="btn btn--sm" @click=${() => props.onLoadChatNodes(agent.id)}>
             Обновить
@@ -170,73 +524,34 @@ function renderNodesView(props: ScenarioProps, agent: TelegramAgentRecord) {
         </div>
       </div>
 
-      ${
-        props.chatNodesError
-          ? html`<div class="callout danger" style="margin-bottom: 12px;">${props.chatNodesError}</div>`
-          : nothing
-      }
+      <!-- Mode switch -->
+      <div class="tg-graph-switch">
+        <button
+          class="tg-graph-switch-btn ${mode === "chats" ? "active" : ""}"
+          @click=${() => props.onNodesGraphModeChange("chats")}
+        >
+          💬 Чаты
+          <span class="tg-graph-switch-count">${chatsCount}</span>
+        </button>
+        <button
+          class="tg-graph-switch-btn ${mode === "training" ? "active" : ""}"
+          @click=${() => props.onNodesGraphModeChange("training")}
+        >
+          🧠 Обучение
+          <span class="tg-graph-switch-count">${trainingCount}</span>
+        </button>
+      </div>
+
+      <!-- Graph container -->
+      <div class="tg-graph-container">
+        ${mode === "chats" ? renderChatsGraph(props, agent) : renderTrainingGraph(props, agent)}
+        <div class="tg-graph-hint">${hint}</div>
+      </div>
 
       ${
-        nodes.length === 0
-          ? html`
-              <div class="muted">Нет нод. Нажмите «+ Менеджер» или «+ Клиент» чтобы добавить.</div>
-            `
-          : html`
-              <div class="tg-nodes-list">
-                ${nodes.map(
-                  (node, idx) => html`
-                    <div class="tg-node tg-node--${node.role}">
-                      <div class="tg-node-header">
-                        <span class="chip ${node.role === "manager" ? "chip-ok" : ""}">
-                          ${node.role === "manager" ? "Менеджер" : "Клиент"}
-                        </span>
-                        <span class="muted" style="font-size: 0.75em;">
-                          ${idx + 1} / ${nodes.length}
-                        </span>
-                        <button
-                          class="btn btn--sm danger"
-                          style="margin-left: auto;"
-                          @click=${() => props.onDeleteChatNode(agent.id, node.id)}
-                        >
-                          ✕
-                        </button>
-                      </div>
-                      <div class="tg-node-text">${node.text}</div>
-                      ${
-                        node.nextNodeId
-                          ? html`<div class="tg-node-next muted" style="font-size: 0.75em; margin-top: 4px;">
-                              → ${node.nextNodeId.slice(0, 8)}…
-                            </div>`
-                          : nothing
-                      }
-                      ${
-                        node.branches && node.branches.length > 0
-                          ? html`
-                              <div style="margin-top: 6px;">
-                                ${node.branches.map(
-                                  (b) => html`
-                                    <div class="tg-node-branch">
-                                      <span class="chip">${b.keyword}</span>
-                                      <span class="muted">→ ${b.nextNodeId.slice(0, 8)}…</span>
-                                    </div>
-                                  `,
-                                )}
-                              </div>
-                            `
-                          : nothing
-                      }
-                    </div>
-                    ${
-                      idx < nodes.length - 1
-                        ? html`
-                            <div class="tg-node-connector" aria-hidden="true">↓</div>
-                          `
-                        : nothing
-                    }
-                  `,
-                )}
-              </div>
-            `
+        props.chatNodesError
+          ? html`<div class="callout danger" style="margin-top: 10px;">${props.chatNodesError}</div>`
+          : nothing
       }
     </section>
   `;
@@ -376,6 +691,44 @@ function renderTrainingView(props: ScenarioProps, agent: TelegramAgentRecord) {
     ? (allGroups.find((g) => g.chatId === props.trainingSelectedChatId) ?? null)
     : null;
 
+  // ── Database switcher (personal vs shared) ──────────────────────────────
+  const personalStats = props.trainingPersonalStats;
+  const sharedStats = props.trainingSharedStats;
+
+  const scopeToggle = html`
+    <div class="tg-scope-row">
+      <span class="tg-scope-row__label">База знаний:</span>
+      <div class="tg-scope-switcher">
+        <button
+          type="button"
+          class="tg-scope-btn ${props.trainingScope === "personal" ? "active" : ""}"
+          @click=${() => props.onTrainingScopeChange?.(agent.id, "personal")}
+          aria-pressed=${props.trainingScope === "personal"}
+        >
+          👤 Личная
+          ${
+            personalStats
+              ? html`<span class="tg-scope-count">${personalStats.chats}&thinsp;чат${personalStats.chats !== 1 ? "а" : ""}</span>`
+              : nothing
+          }
+        </button>
+        <button
+          type="button"
+          class="tg-scope-btn ${props.trainingScope === "shared" ? "active" : ""}"
+          @click=${() => props.onTrainingScopeChange?.(agent.id, "shared")}
+          aria-pressed=${props.trainingScope === "shared"}
+        >
+          🌐 Общая
+          ${
+            sharedStats
+              ? html`<span class="tg-scope-count">${sharedStats.chats}&thinsp;чат${sharedStats.chats !== 1 ? "а" : ""}</span>`
+              : nothing
+          }
+        </button>
+      </div>
+    </div>
+  `;
+
   // ── Top toolbar (always visible) ──────────────────────────────────────────
   const analyzedCount = Object.keys(props.analysisResults).length;
   const batchPct =
@@ -386,7 +739,7 @@ function renderTrainingView(props: ScenarioProps, agent: TelegramAgentRecord) {
       <label
         class="btn primary btn--sm"
         style="cursor: pointer;"
-        title="Загрузить файл JSON"
+        title="Загрузить файл JSON (${props.trainingScope === "personal" ? "личная" : "общая"} база)"
       >
         ${props.trainingLoading ? "Обработка…" : "Загрузить JSON"}
         <input
@@ -408,6 +761,24 @@ function renderTrainingView(props: ScenarioProps, agent: TelegramAgentRecord) {
           }}
         />
       </label>
+      ${
+        allGroups.length > 0
+          ? html`
+              <button
+                type="button"
+                class="btn btn--sm ${props.trainingEditorOpen ? "active" : ""}"
+                title="Редактировать данные обучения в формате JSON"
+                @click=${() => {
+                  if (props.trainingEditorOpen) {
+                    props.onTrainingEditorClose();
+                  } else {
+                    props.onTrainingEditorOpen();
+                  }
+                }}
+              >✏️ Правка</button>
+            `
+          : nothing
+      }
       ${
         allGroups.length > 0
           ? html`<span class="tg-msng-stats">${allGroups.length} чатов · ${totalPairs} пар</span>`
@@ -490,7 +861,8 @@ function renderTrainingView(props: ScenarioProps, agent: TelegramAgentRecord) {
   if (allGroups.length === 0) {
     return html`
       <section class="card" style="padding: 0; overflow: hidden;">
-        <div style="padding: 20px;">
+        ${scopeToggle}
+        <div style="padding: 16px 18px;">
           <div class="card-title">Обучение</div>
           <div class="card-sub" style="margin-bottom: 16px;">
             Загрузите экспорт переписки из Telegram (JSON Desktop Export). Пары «клиент → менеджер»
@@ -502,12 +874,50 @@ function renderTrainingView(props: ScenarioProps, agent: TelegramAgentRecord) {
     `;
   }
 
+  // ── Inline JSON editor (shown instead of the messenger layout) ──────────────
+  const editorPanel = props.trainingEditorOpen
+    ? html`
+        <div class="tg-training-editor">
+          <div class="tg-training-editor-hint">
+            Редактирование базы знаний (${props.trainingScope === "personal" ? "личная" : "общая"}).
+            Формат: <code>{"groups":[…], "labels":{…}, "analysisResults":{…}}</code>
+          </div>
+          <textarea
+            class="tg-training-editor-textarea"
+            spellcheck="false"
+            autocomplete="off"
+            .value=${props.trainingEditorJson}
+            @input=${(e: Event) => props.onTrainingEditorChange((e.target as HTMLTextAreaElement).value)}
+          ></textarea>
+          ${
+            props.trainingEditorError
+              ? html`<div class="tg-training-editor-error">⚠️ ${props.trainingEditorError}</div>`
+              : nothing
+          }
+          <div class="tg-training-editor-actions">
+            <button
+              type="button"
+              class="btn btn--sm primary"
+              @click=${() => props.onTrainingEditorSave(props.trainingEditorJson)}
+            >💾 Сохранить</button>
+            <button
+              type="button"
+              class="btn btn--sm"
+              @click=${() => props.onTrainingEditorClose()}
+            >✕ Отмена</button>
+          </div>
+        </div>
+      `
+    : nothing;
+
   // ── Messenger layout ───────────────────────────────────────────────────────
   return html`
     <section class="card tg-msng-card">
-      ${toolbar}
+      ${scopeToggle} ${toolbar}
 
-      <div class="tg-msng-layout">
+      ${props.trainingEditorOpen ? editorPanel : nothing}
+
+      <div class="tg-msng-layout" style="${props.trainingEditorOpen ? "display: none;" : ""}">
         <!-- ── Sidebar (chat list) ── -->
         <div class="tg-msng-sidebar">
           <div class="tg-msng-search">
@@ -544,6 +954,14 @@ function renderTrainingView(props: ScenarioProps, agent: TelegramAgentRecord) {
                     ${renderLabelBadge(props.trainingLabels[group.chatId])}
                   </div>
                 </div>
+                <button
+                  class="tg-group-delete-btn"
+                  title="Удалить чат из базы"
+                  @click=${(e: Event) => {
+                    e.stopPropagation();
+                    props.onTrainingDeleteGroup(group.chatId);
+                  }}
+                >×</button>
               </div>
             `,
             )}
@@ -596,7 +1014,7 @@ function renderTrainingView(props: ScenarioProps, agent: TelegramAgentRecord) {
                   class="btn btn--sm primary"
                   @click=${() => props.onTrainingCreateNodes(agent.id, selectedGroup)}
                 >
-                  + Создать ноды
+                  + Ноды
                 </button>
               </div>
 
@@ -607,15 +1025,17 @@ function renderTrainingView(props: ScenarioProps, agent: TelegramAgentRecord) {
               <div class="tg-msng-bubbles">
                 ${selectedGroup.pairs.map(
                   (pair) => html`
-                  <div class="tg-msng-bubble tg-msng-bubble--client">
-                    <div class="tg-msng-bubble-label">Клиент</div>
-                    <div class="tg-msng-bubble-text">${pair.input}</div>
-                  </div>
-                  <div class="tg-msng-bubble tg-msng-bubble--manager">
-                    <div class="tg-msng-bubble-label">Менеджер</div>
-                    <div class="tg-msng-bubble-text">${pair.response}</div>
-                  </div>
-                `,
+                    <div class="tg-pair-block">
+                      <div class="tg-msng-bubble tg-msng-bubble--client">
+                        <div class="tg-msng-bubble-label">Клиент</div>
+                        <div class="tg-msng-bubble-text">${pair.input}</div>
+                      </div>
+                      <div class="tg-msng-bubble tg-msng-bubble--manager">
+                        <div class="tg-msng-bubble-label">Менеджер</div>
+                        <div class="tg-msng-bubble-text">${pair.response}</div>
+                      </div>
+                    </div>
+                  `,
                 )}
               </div>
             `

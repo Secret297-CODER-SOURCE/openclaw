@@ -135,6 +135,15 @@ export class TelegramStorage {
         created_at  TEXT NOT NULL
       );
 
+      -- Full training snapshot (groups + labels + analysisResults) keyed by agent+scope
+      CREATE TABLE IF NOT EXISTS tg_training_snapshots (
+        agent_id    TEXT NOT NULL,
+        scope       TEXT NOT NULL DEFAULT 'personal',
+        data_json   TEXT NOT NULL DEFAULT '{}',
+        updated_at  TEXT NOT NULL,
+        PRIMARY KEY (agent_id, scope)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_tg_events_agent ON tg_events(agent_id);
       CREATE INDEX IF NOT EXISTS idx_tg_parsed_agent ON tg_parsed(agent_id);
       CREATE INDEX IF NOT EXISTS idx_agent_missions_master ON agent_missions(master_agent_id);
@@ -477,6 +486,31 @@ export class TelegramStorage {
 
   clearTrainingPairs(agentId: string): void {
     this.db.prepare("DELETE FROM tg_training_pairs WHERE agent_id = ?").run(agentId);
+  }
+
+  // ─── Training Snapshots ───────────────────────────────────────────────────
+
+  /** Persist the full training UI state (groups, labels, analysisResults) as a JSON blob. */
+  saveTrainingSnapshot(agentId: string, scope: string, data: Record<string, unknown>): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO tg_training_snapshots (agent_id, scope, data_json, updated_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(agentId, scope, JSON.stringify(data), new Date().toISOString());
+  }
+
+  /** Retrieve a previously saved training snapshot, or null if not found. */
+  getTrainingSnapshot(agentId: string, scope: string): Record<string, unknown> | null {
+    const row = this.db
+      .prepare("SELECT data_json FROM tg_training_snapshots WHERE agent_id = ? AND scope = ?")
+      .get(agentId, scope) as any;
+    if (!row) return null;
+    try {
+      return JSON.parse(row.data_json) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
   }
 
   // ─── Agent workspace ─────────────────────────────────────────────────────

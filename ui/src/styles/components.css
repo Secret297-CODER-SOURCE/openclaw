@@ -2605,7 +2605,390 @@
   flex-direction: column;
 }
 
-/* Toolbar strip at top */
+/* ── Training scope row — segmented control ───────────────── */
+
+.tg-scope-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--secondary);
+  flex-shrink: 0;
+}
+
+.tg-scope-row__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Segmented control wrapper — pill-shaped container with inset track */
+.tg-scope-switcher {
+  display: inline-flex;
+  background: color-mix(in srgb, var(--bg) 70%, var(--border));
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 3px;
+  gap: 2px;
+}
+
+/* Each option button */
+.tg-scope-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  border-radius: calc(var(--radius-full) - 1px);
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+  user-select: none;
+}
+
+.tg-scope-btn:not(.active):hover {
+  background: color-mix(in srgb, var(--border) 80%, transparent);
+  color: var(--text);
+}
+
+/* Active scope: solid accent pill — impossible to miss */
+.tg-scope-btn.active {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+/* ── Scope pill count badge ───────────────────────────────── */
+
+.tg-scope-count {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 5px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  color: inherit;
+  opacity: 0.8;
+  vertical-align: middle;
+}
+
+.tg-scope-btn.active .tg-scope-count {
+  background: rgba(255, 255, 255, 0.22);
+  opacity: 1;
+}
+
+/* ── Inline JSON editor ───────────────────────────────────── */
+
+.tg-training-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.tg-training-editor-hint {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.tg-training-editor-hint code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  background: color-mix(in srgb, var(--border) 60%, transparent);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.tg-training-editor-textarea {
+  width: 100%;
+  min-height: 300px;
+  max-height: 520px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--secondary);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  resize: vertical;
+  box-sizing: border-box;
+  transition: border-color var(--duration-fast) ease;
+}
+
+.tg-training-editor-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.tg-training-editor-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.tg-training-editor-error {
+  font-size: 12px;
+  color: var(--danger);
+  line-height: 1.4;
+}
+
+/* ── Sidebar delete button (always visible, subtle until hover) ─ */
+
+.tg-group-delete-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.35;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    opacity var(--duration-fast) ease;
+}
+.tg-msng-chat-item:hover .tg-group-delete-btn {
+  opacity: 1;
+}
+.tg-group-delete-btn:hover {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+  opacity: 1;
+}
+
+/* ── Pair block with hover delete ─────────────────────────── */
+
+.tg-pair-block {
+  position: relative;
+  margin-bottom: 2px;
+  border-radius: var(--radius-sm);
+  transition: background var(--duration-fast) ease;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tg-pair-block:hover {
+  background: color-mix(in srgb, var(--border) 30%, transparent);
+}
+
+.tg-pair-delete-btn {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition:
+    opacity var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+.tg-pair-block:hover .tg-pair-delete-btn {
+  opacity: 1;
+}
+.tg-pair-delete-btn:hover {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+}
+
+/* ─── Nodes graph ──────────────────────────────────────────────────────────── */
+
+.tg-graph-switch {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.tg-graph-switch-btn {
+  flex: 1;
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition:
+    border-color var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.tg-graph-switch-btn:hover:not(.active) {
+  border-color: var(--text-muted);
+  color: var(--text);
+}
+
+.tg-graph-switch-btn.active {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.tg-graph-switch-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: currentColor;
+  color: var(--bg, #1a1d23);
+  border-radius: 99px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  opacity: 0.85;
+  min-width: 18px;
+}
+
+.tg-graph-container {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--bg, #1a1d23) 70%, transparent);
+  min-height: 440px;
+}
+
+.tg-graph-svg {
+  width: 100%;
+  height: 440px;
+  display: block;
+}
+
+/* HTML div nodes for the animated graph */
+.tg-graph-dot {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  animation: tg-graph-float 4s ease-in-out infinite;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  /* override centering offset with animation */
+  will-change: transform;
+}
+
+.tg-graph-dot:hover {
+  box-shadow: 0 4px 18px rgba(0,0,0,0.38);
+  z-index: 2;
+}
+
+/* Labels inside the dot */
+.tg-dot-init {
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+
+.tg-dot-name {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  color: var(--text-muted, #aaa);
+  white-space: nowrap;
+  pointer-events: none;
+  text-align: center;
+}
+
+.tg-dot-sub {
+  position: absolute;
+  top: calc(100% + 17px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 8px;
+  color: var(--text-muted, #888);
+  opacity: 0.65;
+  white-space: nowrap;
+  pointer-events: none;
+  text-align: center;
+}
+
+.tg-graph-overflow {
+  position: absolute;
+  bottom: 8px;
+  right: 10px;
+  font-size: 10px;
+  color: var(--text-muted, #888);
+  opacity: 0.6;
+}
+
+@keyframes tg-graph-float {
+  0%, 100% { transform: translate(-50%, -50%) translateY(0px);  }
+  50%       { transform: translate(-50%, -50%) translateY(-7px); }
+}
+
+.tg-graph-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  padding: 40px 20px;
+  text-align: center;
+  min-height: 200px;
+  color: var(--text-muted, #888);
+}
+
+.tg-graph-hint {
+  position: absolute;
+  bottom: 7px;
+  right: 10px;
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.45;
+  pointer-events: none;
+  user-select: none;
+}
+
 .tg-msng-toolbar {
   display: flex;
   align-items: center;
@@ -2626,46 +3009,48 @@
   color: var(--danger);
 }
 
-/* Two-column messenger layout */
+/* Two-column messenger layout — matches webchat (.tg-wc-shell) */
 .tg-msng-layout {
   display: flex;
-  flex: 1;
-  min-height: 520px;
+  height: 600px;
+  max-height: 80vh;
   overflow: hidden;
+  border-top: 1px solid var(--border);
 }
 
-/* ── Sidebar ── */
+/* ── Sidebar — matches .tg-wc-list ── */
 .tg-msng-sidebar {
   width: 280px;
+  min-width: 220px;
   flex-shrink: 0;
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  background: var(--bg-accent);
   overflow: hidden;
 }
 
 .tg-msng-search {
-  padding: 10px 12px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 
+/* matches .tg-wc-search */
 .tg-msng-search-input {
   width: 100%;
-  background: var(--bg-elevated);
+  background: #1e2229;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-full);
   color: var(--text);
   font-size: 13px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   outline: none;
   box-sizing: border-box;
   transition: border-color var(--duration-fast) var(--ease-out);
 }
 
 .tg-msng-search-input:focus {
-  border-color: var(--border-strong);
+  border-color: var(--primary);
 }
 
 .tg-msng-chat-list {
@@ -2674,45 +3059,50 @@
   overscroll-behavior: contain;
 }
 
+/* matches .tg-wc-dialog */
 .tg-msng-chat-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 14px;
+  padding: 10px 12px;
   cursor: pointer;
   border-bottom: 1px solid var(--border);
   transition: background var(--duration-fast) var(--ease-out);
 }
 
 .tg-msng-chat-item:hover {
-  background: var(--bg-hover);
+  background: var(--bg-soft, #f5f7fa);
 }
 
 .tg-msng-chat-item.active {
-  background: var(--accent-subtle);
-  border-left: 3px solid var(--accent);
-  padding-left: 11px;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
 }
 
+.tg-msng-chat-item.active:hover {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+/* matches .tg-wc-avatar */
 .tg-msng-avatar {
-  width: 40px;
-  height: 40px;
+  width: 42px;
+  height: 42px;
   border-radius: 50%;
-  background: var(--accent-subtle);
-  color: var(--accent);
-  font-size: 13px;
+  background: color-mix(in srgb, var(--primary) 18%, var(--secondary));
+  color: var(--primary);
+  font-size: 14px;
   font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   letter-spacing: -0.02em;
+  user-select: none;
 }
 
 .tg-msng-avatar--sm {
-  width: 32px;
-  height: 32px;
-  font-size: 11px;
+  width: 34px;
+  height: 34px;
+  font-size: 12px;
 }
 
 .tg-msng-chat-info {
@@ -2720,10 +3110,10 @@
   min-width: 0;
 }
 
+/* matches .tg-wc-dialog-name */
 .tg-msng-chat-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-strong);
+  font-size: 0.87rem;
+  font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2736,17 +3126,22 @@
   align-items: center;
 }
 
+/* matches .tg-wc-dialog-time */
 .tg-msng-chat-date {
-  font-size: 11px;
-  color: var(--muted);
+  font-size: 0.72rem;
+  opacity: 0.5;
 }
 
+/* matches .tg-wc-unread */
 .tg-msng-chat-count {
   font-size: 11px;
-  background: var(--bg-elevated);
-  color: var(--muted);
+  background: var(--primary);
+  color: #fff;
   border-radius: 10px;
   padding: 1px 6px;
+  font-weight: 600;
+  min-width: 18px;
+  text-align: center;
 }
 
 .tg-msng-load-more {
@@ -2761,23 +3156,23 @@
   font-size: 13px;
 }
 
-/* ── Conversation panel ── */
+/* ── Conversation panel — matches .tg-wc-main ── */
 .tg-msng-convo {
   flex: 1;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--bg);
 }
 
+/* matches .tg-wc-header */
 .tg-msng-convo-header {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 16px;
+  padding: 10px 14px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
-  background: var(--card);
+  background: var(--secondary);
 }
 
 .tg-msng-convo-title {
@@ -2785,67 +3180,79 @@
   min-width: 0;
 }
 
+/* matches .tg-wc-header-name */
 .tg-msng-convo-name {
-  font-size: 14px;
+  font-size: 0.92rem;
   font-weight: 600;
-  color: var(--text-strong);
 }
 
+/* matches .tg-wc-header-sub */
 .tg-msng-convo-sub {
-  font-size: 11px;
-  color: var(--muted);
+  font-size: 0.75rem;
+  opacity: 0.55;
   margin-top: 1px;
 }
 
+/* matches .tg-wc-messages */
 .tg-msng-bubbles {
   flex: 1;
   overflow-y: auto;
-  padding: 16px;
+  padding: 12px 16px;
   display: flex;
   flex-direction: column;
   gap: 6px;
   overscroll-behavior: contain;
 }
 
+/* Outer msg wrapper — matches .tg-wc-msg */
 .tg-msng-bubble {
-  max-width: 68%;
-  padding: 8px 12px;
-  border-radius: 14px;
-  font-size: 13px;
-  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  align-self: flex-start;
+  max-width: 70%;
 }
 
+/* Client = incoming — matches .tg-wc-bubble */
 .tg-msng-bubble--client {
   align-self: flex-start;
-  background: var(--bg-elevated);
-  border-bottom-left-radius: 4px;
+  align-items: flex-start;
 }
 
+/* Manager = outgoing — matches .tg-wc-msg--out */
 .tg-msng-bubble--manager {
   align-self: flex-end;
-  background: var(--accent-subtle);
-  border-bottom-right-radius: 4px;
+  align-items: flex-end;
 }
 
+/* Sender label above bubble */
 .tg-msng-bubble-label {
-  font-size: 10px;
+  font-size: 0.68rem;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-  margin-bottom: 3px;
+  opacity: 0.45;
+  padding: 0 2px;
+  margin-bottom: 2px;
 }
 
-.tg-msng-bubble--manager .tg-msng-bubble-label {
-  color: var(--accent);
-  text-align: right;
-}
-
+/* Inner bubble text — matches .tg-wc-bubble */
 .tg-msng-bubble-text {
+  background: #1e2229;
   color: var(--text);
+  border-radius: 12px 12px 12px 2px;
+  padding: 7px 11px;
+  font-size: 0.87rem;
   word-break: break-word;
+  white-space: pre-wrap;
+  line-height: 1.45;
 }
 
+/* Manager bubble — matches .tg-wc-msg--out .tg-wc-bubble */
+.tg-msng-bubble--manager .tg-msng-bubble-text {
+  background: var(--primary);
+  color: #fff;
+  border-radius: 12px 12px 2px 12px;
+}
+
+/* matches .tg-wc-empty */
 .tg-msng-convo-placeholder {
   flex: 1;
   display: flex;
@@ -2937,12 +3344,13 @@
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  background: var(--color-bg-alt, rgba(0, 0, 0, 0.04));
-  border: 1px solid var(--color-border, #e2e8f0);
+  background: #1e2229;
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 16px;
   min-width: 90px;
   text-align: center;
+  color: var(--text);
 }
 
 .tg-stat-icon {
@@ -2951,13 +3359,13 @@
 }
 
 .tg-stat-chip--success {
-  border-color: #bbf7d0;
-  background: #f0fdf4;
+  border-color: #1a3d2b;
+  background: #162a1f;
 }
 
 .tg-stat-chip--fail {
-  border-color: #fecaca;
-  background: #fef2f2;
+  border-color: #3d1a1a;
+  background: #2a1515;
 }
 
 .tg-stat-value {
@@ -2981,7 +3389,7 @@
 .tg-analysis-table th,
 .tg-analysis-table td {
   padding: 6px 10px;
-  border-bottom: 1px solid var(--color-border, #e2e8f0);
+  border-bottom: 1px solid var(--border);
   text-align: left;
 }
 
@@ -2994,8 +3402,8 @@
 }
 
 .tg-analysis-result {
-  background: var(--color-bg-alt, rgba(0, 0, 0, 0.04));
-  border: 1px solid var(--color-border, #e2e8f0);
+  background: #1e2229;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 16px;
   font-size: 0.82em;
@@ -3021,25 +3429,26 @@
 .tg-ai-result-card {
   margin: 0 16px 12px;
   border-radius: 8px;
-  border: 1px solid var(--color-border, #e2e8f0);
+  border: 1px solid var(--border);
   overflow: hidden;
   font-size: 0.82em;
-  background: var(--color-bg-alt, rgba(0, 0, 0, 0.03));
+  background: #1e2229;
+  color: var(--text);
 }
 
 .tg-ai-result-card--success {
-  border-color: #bbf7d0;
-  background: #f0fdf4;
+  border-color: #1a3d2b;
+  background: #162a1f;
 }
 
 .tg-ai-result-card--fail {
-  border-color: #fecaca;
-  background: #fef2f2;
+  border-color: #3d1a1a;
+  background: #2a1515;
 }
 
 .tg-ai-result-card--neutral {
-  border-color: #e2e8f0;
-  background: #f8fafc;
+  border-color: var(--border);
+  background: #1e2229;
 }
 
 .tg-ai-result-header {
@@ -3073,7 +3482,7 @@
 /* Score progress bar inside the AI card */
 .tg-score-bar {
   height: 3px;
-  background: var(--color-border, #e2e8f0);
+  background: var(--border);
   margin: 0 12px;
 }
 
@@ -3213,8 +3622,9 @@
 
 .tg-wc-search {
   width: 100%;
-  background: var(--bg-soft, #f8f9fa);
-  border: 1px solid transparent;
+  background: #1e2229;
+  color: var(--text);
+  border: 1px solid var(--border);
   border-radius: 18px;
   padding: 5px 12px;
   font-size: 0.82rem;
@@ -3401,7 +3811,8 @@
 }
 
 .tg-wc-bubble {
-  background: var(--bg-soft, #f0f2f5);
+  background: #1e2229;
+  color: var(--text);
   border-radius: 12px 12px 12px 2px;
   padding: 7px 11px;
   font-size: 0.87rem;
@@ -3441,8 +3852,9 @@
 
 .tg-wc-input {
   flex: 1;
-  background: var(--bg-soft, #f0f2f5);
-  border: 1px solid transparent;
+  background: #1e2229;
+  color: var(--text);
+  border: 1px solid var(--border);
   border-radius: 18px;
   padding: 8px 14px;
   font-size: 0.88rem;

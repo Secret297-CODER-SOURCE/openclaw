@@ -781,6 +781,8 @@ type TelegramScenarioState = TelegramState & {
   telegramBatchError: string | null;
   /** Non-reactive abort ref — set by runBatchAnalysis, read by cancelBatchAnalysis */
   _telegramBatchAbort?: { cancelled: boolean };
+  /** Training scope: personal (per-agentId) or shared (global across agents) */
+  telegramTrainingScope: "personal" | "shared";
 };
 
 export async function loadTelegramChatNodes(
@@ -1020,39 +1022,42 @@ export async function processTelegramTrainingFile(
   state.telegramTrainingLoading = true;
   state.telegramTrainingError = null;
   state.telegramShowCreateNodesPrompt = false;
-  state.telegramTrainingPairs = [];
-  state.telegramTrainingGroups = [];
   try {
     // Yield to the event loop so "Обработка…" renders before the blocking parse
     await new Promise<void>((r) => setTimeout(r, 32));
-    const groups = extractGroupedPairs(json);
+    const newGroups = extractGroupedPairs(json);
 
-    if (groups.length === 0) {
+    if (newGroups.length === 0) {
       state.telegramTrainingError = "Пары диалога не найдены в файле.";
       return;
     }
 
-    // Store groups + flat pairs in state — no gateway round-trip needed
-    state.telegramTrainingGroups = groups;
+    // Merge with existing groups: deduplicate by chatId.
+    // New file wins on conflict (fresh data), existing groups not in new file are kept.
+    const newChatIds = new Set(newGroups.map((g) => g.chatId));
+    const merged = [
+      ...state.telegramTrainingGroups.filter((g) => !newChatIds.has(g.chatId)),
+      ...newGroups,
+    ];
+
+    state.telegramTrainingGroups = merged;
+
+    // Rebuild flat pairs list from merged groups
     const now = new Date().toISOString();
     let idx = 0;
-    state.telegramTrainingPairs = groups.flatMap((g) =>
+    state.telegramTrainingPairs = merged.flatMap((g) =>
       g.pairs.map((p) => ({
         id: String(idx++),
         agentId,
         input: p.input,
         response: p.response,
-        sourceFile: fileName,
+        sourceFile: newChatIds.has(g.chatId) ? fileName : "(кэш)",
         createdAt: now,
       })),
     );
-    // Persist parsed groups immediately; labels/results will be saved separately
-    saveTelegramTraining(
-      agentId,
-      groups,
-      state.telegramTrainingLabels,
-      state.telegramAnalysisResults,
-    );
+
+    // Persist merged groups to gateway + localStorage cache (reads current state)
+    await saveTrainingToGateway(state, agentId, state.telegramTrainingScope);
   } catch (err) {
     state.telegramTrainingError = String(err);
   } finally {
@@ -1155,19 +1160,25 @@ function isEmptyOrTrivial(text: string): boolean {
   return stripped.length === 0;
 }
 
+/** Truncate a single message to keep prompts short and AI responses fast */
+const MAX_MSG_CHARS = 200;
+
 /**
  * Convert a TrainingGroup's pairs into a formatted dialog string for the AI.
- * Uses the last 30 pairs; skips blank / emoji-only turns.
+ * Uses the last 10 pairs (enough signal for classification); skips blank /
+ * emoji-only turns and truncates long messages to reduce token count.
  */
 function formatDialogForAnalysis(group: TrainingGroup): string {
-  const pairs = group.pairs.slice(-30);
+  const pairs = group.pairs.slice(-10);
   const lines: string[] = [];
   for (const pair of pairs) {
     if (!isEmptyOrTrivial(pair.input)) {
-      lines.push(`Клиент: ${pair.input.trim()}`);
+      const t = pair.input.trim();
+      lines.push(`Клиент: ${t.length > MAX_MSG_CHARS ? t.slice(0, MAX_MSG_CHARS) + "…" : t}`);
     }
     if (!isEmptyOrTrivial(pair.response)) {
-      lines.push(`Менеджер: ${pair.response.trim()}`);
+      const t = pair.response.trim();
+      lines.push(`Менеджер: ${t.length > MAX_MSG_CHARS ? t.slice(0, MAX_MSG_CHARS) + "…" : t}`);
     }
   }
   return lines.join("\n");
@@ -1243,7 +1254,9 @@ export async function analyzeDialogChat(
       tool: "analyze_dialog",
       args: { dialog, chatId: group.chatId, prompt: DIALOG_ANALYSIS_PROMPT },
     });
-    return parseAnalysisResponse(res);
+    // Plugin wraps results as { ok: true, data: actualResult }; unwrap before use
+    const inner = (res?.data ?? res) as Record<string, unknown>;
+    return parseAnalysisResponse(inner);
   } catch {
     return null;
   }
@@ -1277,9 +1290,44 @@ async function checkBatchCapability(
       tool: "check_batch_capability",
       args: {},
     });
-    return res.directAdapter;
+    // Plugin wraps results as { ok: true, data: actualResult }; unwrap before use
+    const inner: { directAdapter?: boolean } = ((res as Record<string, unknown>)?.data ?? res) as {
+      directAdapter?: boolean;
+    };
+    return inner.directAdapter ?? false;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Send N dialogs in ONE AI call (mega-batch).
+ * The server packs all dialogs into a single prompt and parses a JSON array response.
+ * Works in gateway mode (no direct API key needed) — 1 lane slot for N dialogs → N× faster.
+ */
+async function analyzeMegaBatch(
+  state: TelegramScenarioState,
+  agentId: string,
+  groups: TrainingGroup[],
+): Promise<BatchResultItem[]> {
+  if (!isReady(state) || groups.length === 0) {
+    return [];
+  }
+  const dialogs = groups.map((g) => ({
+    chatId: g.chatId,
+    dialog: formatDialogForAnalysis(g),
+  }));
+  try {
+    const res = await state.client!.request<{ results: BatchResultItem[] }>("telegram.tool.call", {
+      agentId,
+      tool: "analyze_mega_batch",
+      args: { dialogs, prompt: DIALOG_ANALYSIS_PROMPT },
+    });
+    const inner: { results?: BatchResultItem[] } = ((res as Record<string, unknown>)?.data ??
+      res) as { results?: BatchResultItem[] };
+    return inner.results ?? [];
+  } catch {
+    return groups.map(() => null);
   }
 }
 
@@ -1305,7 +1353,10 @@ async function analyzeDialogsBatch(
       tool: "analyze_dialogs_batch",
       args: { dialogs, prompt: DIALOG_ANALYSIS_PROMPT },
     });
-    return res.results ?? [];
+    // Plugin wraps results as { ok: true, data: actualResult }; unwrap before use
+    const inner: { results?: BatchResultItem[] } = ((res as Record<string, unknown>)?.data ??
+      res) as { results?: BatchResultItem[] };
+    return inner.results ?? [];
   } catch {
     return groups.map(() => null);
   }
@@ -1327,10 +1378,10 @@ async function analyzeDialogsBatch(
  * @param force — when true, re-analyzes even already-analyzed chats
  */
 // Strategy constants: chosen based on server capability
-// Direct adapter (ANTHROPIC_API_KEY etc.) → high concurrency, batch mode
-// Gateway adapter only → low concurrency, single-dialog mode (safe)
-const STRATEGY_DIRECT = { concurrency: 3, innerBatch: 6, flushEvery: 12 }; // 18 parallel AI calls
-const STRATEGY_GATEWAY = { concurrency: 2, innerBatch: 1, flushEvery: 4 }; // 2 parallel, no lane flood
+// Direct adapter (ANTHROPIC_API_KEY etc.) → parallel AI calls per dialog
+// Gateway adapter → mega-batch: N dialogs in ONE AI call = N× speedup
+const STRATEGY_DIRECT = { concurrency: 5, innerBatch: 8, mega: false, flushEvery: 40 };
+const STRATEGY_GATEWAY = { concurrency: 4, innerBatch: 15, mega: true, flushEvery: 60 };
 
 export async function runBatchAnalysis(
   state: TelegramScenarioState,
@@ -1342,7 +1393,25 @@ export async function runBatchAnalysis(
   }
 
   const groups = state.telegramTrainingGroups;
-  const toAnalyze = force ? groups : groups.filter((g) => !state.telegramAnalysisResults[g.chatId]);
+  const candidates = force
+    ? groups
+    : groups.filter((g) => !state.telegramAnalysisResults[g.chatId]);
+
+  // Fast-path: auto-mark single-pair dialogs as neutral (not enough signal for AI analysis)
+  const trivialNow = new Date().toISOString();
+  const trivial = candidates.filter((g) => g.pairs.length < 2);
+  const toAnalyze = candidates.filter((g) => g.pairs.length >= 2);
+  for (const g of trivial) {
+    state.telegramAnalysisResults = {
+      ...state.telegramAnalysisResults,
+      [g.chatId]: {
+        status: "neutral",
+        score: 0,
+        reason: "Слишком мало сообщений",
+        analyzedAt: trivialNow,
+      },
+    };
+  }
 
   if (toAnalyze.length === 0) {
     return;
@@ -1357,7 +1426,9 @@ export async function runBatchAnalysis(
 
   // Auto-detect strategy: one round-trip to ask the server if direct API is available
   const hasDirect = await checkBatchCapability(state, agentId);
-  const { concurrency, innerBatch, flushEvery } = hasDirect ? STRATEGY_DIRECT : STRATEGY_GATEWAY;
+  const { concurrency, innerBatch, mega, flushEvery } = hasDirect
+    ? STRATEGY_DIRECT
+    : STRATEGY_GATEWAY;
 
   // Mutable accumulators — avoid O(n²) spread on every single result
   const accumulated: Record<string, DialogAnalysisResult> = {
@@ -1379,8 +1450,8 @@ export async function runBatchAnalysis(
   const flush = async () => {
     state.telegramAnalysisResults = { ...accumulated };
     state.telegramTrainingLabels = { ...accumulatedLabels };
-    // Persist incremental results so progress survives a page reload
-    saveTelegramTraining(agentId, state.telegramTrainingGroups, accumulatedLabels, accumulated);
+    // Persist incremental results so progress survives a page reload (reads current state)
+    void saveTrainingToGateway(state, agentId, state.telegramTrainingScope);
     await new Promise<void>((r) => setTimeout(r, 0));
   };
 
@@ -1395,6 +1466,18 @@ export async function runBatchAnalysis(
     state.telegramBatchProgress = completedCount;
   };
 
+  // Helper: process a batch of results (shared between mega and direct batch paths)
+  const processBatchResults = (chunk: TrainingGroup[], batchResults: BatchResultItem[]) => {
+    const now = new Date().toISOString();
+    for (let j = 0; j < chunk.length; j++) {
+      const item = batchResults[j] ?? null;
+      const result: DialogAnalysisResult | null = item
+        ? { status: item.status, score: item.score, reason: item.reason, analyzedAt: now }
+        : null;
+      processResult(chunk[j], result);
+    }
+  };
+
   // Worker: pulls chunks from the shared queue (JS single-thread → chunkIdx++ is atomic)
   const worker = async () => {
     while (nextChunkIdx < chunks.length && !abortRef.cancelled) {
@@ -1404,21 +1487,18 @@ export async function runBatchAnalysis(
       }
       const chunk = chunks[ci];
 
-      if (innerBatch === 1) {
-        // Single-dialog mode (gateway adapter): one analyzeDialogChat per worker slot
+      if (mega) {
+        // Mega-batch: all N dialogs in ONE AI call → N× fewer lane slots used
+        const batchResults = await analyzeMegaBatch(state, agentId, chunk);
+        processBatchResults(chunk, batchResults);
+      } else if (innerBatch > 1) {
+        // Direct: parallel AI calls per dialog (bypasses gateway lane)
+        const batchResults = await analyzeDialogsBatch(state, agentId, chunk);
+        processBatchResults(chunk, batchResults);
+      } else {
+        // Single-dialog fallback
         const result = await analyzeDialogChat(state, agentId, chunk[0]);
         processResult(chunk[0], result);
-      } else {
-        // Batch mode (direct adapter): server runs chunk in parallel, no lane flooding
-        const batchResults = await analyzeDialogsBatch(state, agentId, chunk);
-        const now = new Date().toISOString();
-        for (let j = 0; j < chunk.length; j++) {
-          const item = batchResults[j] ?? null;
-          const result: DialogAnalysisResult | null = item
-            ? { status: item.status, score: item.score, reason: item.reason, analyzedAt: now }
-            : null;
-          processResult(chunk[j], result);
-        }
       }
 
       if (completedCount % flushEvery === 0) {
@@ -1523,13 +1603,15 @@ export async function analyzeTrainingData(
       },
     );
 
+    // Plugin wraps results as { ok: true, data: actualResult }; unwrap before use
+    const inner = (res as Record<string, unknown>)?.data ?? res;
     // Accept result from various response shapes
-    const text = res?.result ?? res?.text ?? res?.content ?? null;
+    const text = inner?.result ?? inner?.text ?? inner?.content ?? null;
     if (typeof text === "string") {
       state.telegramAnalysisResult = text;
     } else {
       // Gateway handler may not exist yet — show raw response for debugging
-      state.telegramAnalysisResult = JSON.stringify(res, null, 2);
+      state.telegramAnalysisResult = JSON.stringify(inner, null, 2);
     }
   } catch (err) {
     state.telegramAnalysisError = String(err);
@@ -1587,7 +1669,9 @@ export async function loadWebchatDialogs(state: WebchatState, agentId: string): 
       tool: "get_dialogs",
       args: { limit: 30 },
     });
-    state.telegramWebchatDialogs = Array.isArray(res) ? res : [];
+    // Plugin wraps results as { ok: true, data: actualResult }; unwrap before use
+    const dialogs = (res as Record<string, unknown>)?.data ?? res;
+    state.telegramWebchatDialogs = Array.isArray(dialogs) ? dialogs : [];
   } catch (err) {
     state.telegramWebchatDialogsError = String(err);
   } finally {
@@ -1614,9 +1698,11 @@ export async function loadWebchatMessages(
       tool: "getMessages",
       args: { target: dialogId, limit: 50 },
     });
-    if (Array.isArray(res)) {
+    // Plugin wraps results as { ok: true, data: actualResult }; unwrap before use
+    const msgs = (res as Record<string, unknown>)?.data ?? res;
+    if (Array.isArray(msgs)) {
       // GramJS returns newest-first; reverse so oldest is on top
-      state.telegramWebchatMessages = [...res].toReversed();
+      state.telegramWebchatMessages = [...msgs].toReversed();
     }
   } catch {
     // Silent fail during polling
@@ -1653,77 +1739,156 @@ export async function sendWebchatMessage(
   }
 }
 
-// ─── Training persistence (localStorage) ──────────────────────────────────────
+// ─── Training persistence (gateway + localStorage fallback) ───────────────────
 
 const LS_TRAINING_PREFIX = "openclaw_tg_training_";
 
-type TrainingSnapshot = {
+/** Training data scope — personal keeps data per-agent; shared is readable by all agents. */
+export type TrainingScope = "personal" | "shared";
+
+export type TrainingSnapshot = {
   groups: TrainingGroup[];
   labels: Record<string, TrainingLabel>;
   analysisResults: Record<string, DialogAnalysisResult>;
   savedAt: string;
 };
 
+/** Derive the localStorage key for a given scope (shared uses a single well-known key). */
+function trainingLsKey(scope: TrainingScope, agentId: string): string {
+  return scope === "shared" ? "shared" : agentId;
+}
+
 /**
- * Persist training groups, labels, and analysis results to localStorage.
- * Keyed by agentId so each agent has its own training data.
- * Silent on quota / storage errors — non-critical.
+ * Build the flat TrainingPair list from groups.
+ * The flat list is used for aggregate counts; individual display uses groups directly.
  */
-export function saveTelegramTraining(
+export function buildFlatPairs(groups: TrainingGroup[], agentId: string): TrainingPair[] {
+  const now = new Date().toISOString();
+  let idx = 0;
+  return groups.flatMap((g) =>
+    g.pairs.map((p) => ({
+      id: String(idx++),
+      agentId,
+      input: p.input,
+      response: p.response,
+      sourceFile: "(кэш)",
+      createdAt: now,
+    })),
+  );
+}
+
+/** Apply a deserialized snapshot into reactive state and rebuild the flat pairs list. */
+export function applyTrainingSnapshot(
+  state: TelegramScenarioState,
   agentId: string,
-  groups: TrainingGroup[],
-  labels: Record<string, TrainingLabel>,
-  analysisResults: Record<string, DialogAnalysisResult>,
+  saved: TrainingSnapshot,
 ): void {
+  state.telegramTrainingGroups = saved.groups;
+  state.telegramTrainingLabels = saved.labels ?? {};
+  state.telegramAnalysisResults = saved.analysisResults ?? {};
+  state.telegramTrainingPairs = buildFlatPairs(saved.groups, agentId);
+}
+
+/**
+ * Save the current training state to the gateway (primary) and localStorage (fast local cache).
+ * Reads groups/labels/results directly from state — callers must update state first.
+ * The gateway is the source of truth when connected; localStorage provides instant reads offline.
+ */
+export async function saveTrainingToGateway(
+  state: TelegramScenarioState,
+  agentId: string,
+  scope: TrainingScope,
+): Promise<void> {
+  const snapshot: TrainingSnapshot = {
+    groups: state.telegramTrainingGroups,
+    labels: state.telegramTrainingLabels,
+    analysisResults: state.telegramAnalysisResults,
+    savedAt: new Date().toISOString(),
+  };
+  // Write to localStorage immediately as a fast local cache (non-critical)
   try {
-    const snapshot: TrainingSnapshot = {
-      groups,
-      labels,
-      analysisResults,
-      savedAt: new Date().toISOString(),
-    };
-    localStorage.setItem(`${LS_TRAINING_PREFIX}${agentId}`, JSON.stringify(snapshot));
+    localStorage.setItem(
+      `${LS_TRAINING_PREFIX}${trainingLsKey(scope, agentId)}`,
+      JSON.stringify(snapshot),
+    );
   } catch {
-    // Quota exceeded or storage unavailable — silently skip
+    // Quota exceeded or unavailable — skip silently
+  }
+  // Persist to gateway if connected
+  if (!isReady(state)) {
+    return;
+  }
+  try {
+    await state.client!.request("telegram.scenario.saveTrainingSnapshot", {
+      agentId,
+      scope,
+      snapshot: snapshot as unknown as Record<string, unknown>,
+    });
+  } catch {
+    // Non-fatal — localStorage cache is still available
   }
 }
 
 /**
- * Restore previously persisted training data into state.
- * Rebuilds the flat training pairs list from stored groups.
- * Returns true if data was found and restored, false otherwise.
+ * Parse a raw JSON string, apply it as a training snapshot, and persist to gateway + localStorage.
+ * Used by the inline JSON editor — throws on invalid JSON or missing groups array.
  */
-export function restoreTelegramTraining(state: TelegramScenarioState, agentId: string): boolean {
+export async function applyTrainingEditorSave(
+  state: TelegramScenarioState,
+  agentId: string,
+  scope: TrainingScope,
+  json: string,
+): Promise<void> {
+  const parsed = JSON.parse(json) as TrainingSnapshot;
+  if (!Array.isArray(parsed.groups)) {
+    throw new Error("Неверный формат: ожидается объект с массивом groups");
+  }
+  applyTrainingSnapshot(state, agentId, parsed);
+  await saveTrainingToGateway(state, agentId, scope);
+}
+
+/**
+ * Load training snapshot: tries the gateway first (authoritative), falls back to
+ * localStorage so data is always shown even when offline.
+ */
+export async function loadTrainingFromGateway(
+  state: TelegramScenarioState,
+  agentId: string,
+  scope: TrainingScope,
+): Promise<void> {
+  // Try gateway first when connected
+  if (isReady(state)) {
+    try {
+      const raw = await state.client!.request<TrainingSnapshot | null>(
+        "telegram.scenario.getTrainingSnapshot",
+        { agentId, scope },
+      );
+      if (raw && Array.isArray(raw.groups) && raw.groups.length > 0) {
+        applyTrainingSnapshot(state, agentId, raw);
+        return;
+      }
+    } catch {
+      // Gateway unavailable — fall through to localStorage
+    }
+  }
+  // Fallback: localStorage cache
   try {
-    const raw = localStorage.getItem(`${LS_TRAINING_PREFIX}${agentId}`);
+    const raw = localStorage.getItem(`${LS_TRAINING_PREFIX}${trainingLsKey(scope, agentId)}`);
     if (!raw) {
-      return false;
+      return;
     }
     const saved = JSON.parse(raw) as TrainingSnapshot;
     if (!Array.isArray(saved.groups) || saved.groups.length === 0) {
-      return false;
+      return;
     }
-
-    state.telegramTrainingGroups = saved.groups;
-    state.telegramTrainingLabels = saved.labels ?? {};
-    state.telegramAnalysisResults = saved.analysisResults ?? {};
-
-    // Rebuild flat pairs list (same logic as processTelegramTrainingFile)
-    const now = new Date().toISOString();
-    let idx = 0;
-    state.telegramTrainingPairs = saved.groups.flatMap((g) =>
-      g.pairs.map((p) => ({
-        id: String(idx++),
-        agentId,
-        input: p.input,
-        response: p.response,
-        sourceFile: "(кэш)",
-        createdAt: now,
-      })),
-    );
-    return true;
+    applyTrainingSnapshot(state, agentId, saved);
+    // Write-back: sync localStorage data into gateway SQLite so subsequent
+    // restarts find the data in the authoritative store (not just the local cache).
+    if (isReady(state)) {
+      void saveTrainingToGateway(state, agentId, scope);
+    }
   } catch {
-    return false;
+    // Corrupt data — silently ignore
   }
 }
 

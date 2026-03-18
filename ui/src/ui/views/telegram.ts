@@ -10,6 +10,7 @@ import type {
   TrainingGroup,
   TrainingLabel,
   DialogAnalysisResult,
+  TrainingScope,
 } from "../controllers/telegram.ts";
 import {
   formatCronPayload,
@@ -20,7 +21,7 @@ import {
 import type { AgentsFilesListResult, CronJob, CronStatus } from "../types.ts";
 import { renderAgentFiles } from "./agents-panels-status-files.ts";
 import { renderChatPanel, renderSchemaPanel } from "./telegram-scenario.ts";
-import type { TelegramChatSubPanel, ScenarioProps } from "./telegram-scenario.ts";
+import type { TelegramChatSubPanel, NodesGraphMode, ScenarioProps } from "./telegram-scenario.ts";
 import type { WebchatProps } from "./telegram-webchat.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -150,6 +151,8 @@ export type TelegramProps = {
   onTaskComplete: (agentId: string, sessionId: string) => void;
   // Scenario / Chat panel
   chatSubPanel: TelegramChatSubPanel;
+  nodesGraphMode: NodesGraphMode;
+  onNodesGraphModeChange: (mode: NodesGraphMode) => void;
   chatNodes: ChatNode[];
   chatNodesLoading: boolean;
   chatNodesError: string | null;
@@ -170,6 +173,21 @@ export type TelegramProps = {
   onTrainingCreateNodes: (agentId: string, group: TrainingGroup) => void;
   onTrainingDismiss: () => void;
   onTrainingShowMore: () => void;
+  // Training scope + delete
+  trainingScope: TrainingScope;
+  trainingPersonalStats: { chats: number; pairs: number } | null;
+  trainingSharedStats: { chats: number; pairs: number } | null;
+  onTrainingScopeChange: (agentId: string, scope: TrainingScope) => void;
+  onTrainingDeletePair: (chatId: string, pairIdx: number) => void;
+  onTrainingDeleteGroup: (chatId: string) => void;
+  // Inline JSON editor
+  trainingEditorOpen: boolean;
+  trainingEditorJson: string;
+  trainingEditorError: string | null;
+  onTrainingEditorOpen: () => void;
+  onTrainingEditorChange: (json: string) => void;
+  onTrainingEditorSave: (json: string) => void;
+  onTrainingEditorClose: () => void;
   onAddChatNode: (agentId: string, role: "manager" | "client") => void;
   onDeleteChatNode: (agentId: string, nodeId: string) => void;
   onLoadChatNodes: (agentId: string) => void;
@@ -959,6 +977,8 @@ function renderDetail(props: TelegramProps) {
 
   const scenarioProps: ScenarioProps = {
     chatSubPanel: props.chatSubPanel,
+    nodesGraphMode: props.nodesGraphMode,
+    onNodesGraphModeChange: props.onNodesGraphModeChange,
     chatNodes: props.chatNodes,
     chatNodesLoading: props.chatNodesLoading,
     chatNodesError: props.chatNodesError,
@@ -979,6 +999,19 @@ function renderDetail(props: TelegramProps) {
     onTrainingCreateNodes: props.onTrainingCreateNodes,
     onTrainingDismiss: props.onTrainingDismiss,
     onTrainingShowMore: props.onTrainingShowMore,
+    trainingScope: props.trainingScope,
+    trainingPersonalStats: props.trainingPersonalStats,
+    trainingSharedStats: props.trainingSharedStats,
+    onTrainingScopeChange: props.onTrainingScopeChange,
+    onTrainingDeletePair: props.onTrainingDeletePair,
+    onTrainingDeleteGroup: props.onTrainingDeleteGroup,
+    trainingEditorOpen: props.trainingEditorOpen,
+    trainingEditorJson: props.trainingEditorJson,
+    trainingEditorError: props.trainingEditorError,
+    onTrainingEditorOpen: props.onTrainingEditorOpen,
+    onTrainingEditorChange: props.onTrainingEditorChange,
+    onTrainingEditorSave: props.onTrainingEditorSave,
+    onTrainingEditorClose: props.onTrainingEditorClose,
     onAddChatNode: props.onAddChatNode,
     onDeleteChatNode: props.onDeleteChatNode,
     onLoadChatNodes: props.onLoadChatNodes,

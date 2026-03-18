@@ -80,6 +80,20 @@ const TELEGRAM_METHODS = [
   "telegram.mission.get",
   "telegram.mission.complete",
   "telegram.mission.messages",
+  // Scenario / Training
+  "telegram.scenario.getChatNodes",
+  "telegram.scenario.saveChatNode",
+  "telegram.scenario.deleteChatNode",
+  "telegram.scenario.clearChatNodes",
+  "telegram.scenario.getFlowNodes",
+  "telegram.scenario.saveFlowNode",
+  "telegram.scenario.deleteFlowNode",
+  "telegram.scenario.processTraining",
+  "telegram.scenario.saveTrainingPairs",
+  "telegram.scenario.getTrainingPairs",
+  "telegram.scenario.saveTrainingSnapshot",
+  "telegram.scenario.getTrainingSnapshot",
+  "telegram.scenario.createNodesFromPairs",
 ] as const;
 
 const plugin = {
