@@ -66,6 +66,8 @@ const TELEGRAM_METHODS = [
   "telegram.agent.stop",
   "telegram.agent.restart",
   "telegram.agent.setBehaviors",
+  "telegram.agent.getSettings",
+  "telegram.agent.setSettings",
   "telegram.agent.authStart",
   "telegram.agent.authSubmit",
   "telegram.tool.call",

@@ -3533,7 +3533,10 @@
   color: var(--text-muted);
   font-size: 0.84em;
   cursor: pointer;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  transition:
+    border-color 0.15s,
+    color 0.15s,
+    background 0.15s;
   width: calc(100% - 32px);
   text-align: left;
 }
@@ -3561,8 +3564,13 @@
   animation: pulse 1.4s ease-in-out infinite;
 }
 @keyframes pulse {
-  0%, 100% { opacity: 0.5; }
-  50% { opacity: 1; }
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .tg-coaching-card--collapsed {
@@ -3604,7 +3612,9 @@
   border-radius: 4px;
   transition: color 0.12s;
 }
-.tg-coaching-refresh:hover { color: #f59e0b; }
+.tg-coaching-refresh:hover {
+  color: #f59e0b;
+}
 
 .tg-coaching-body {
   display: flex;
@@ -4012,4 +4022,52 @@
 .tg-wc-send-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+}
+
+/* ── Work-mode settings in the overview panel ─────────────────────────────── */
+
+.tg-workmode-options {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.tg-workmode-option {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  min-width: 150px;
+  max-width: 200px;
+  flex: 1;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+  background: var(--card);
+  user-select: none;
+}
+
+.tg-workmode-option:hover {
+  border-color: var(--accent, #4a9eff);
+}
+
+.tg-workmode-option--active {
+  border-color: var(--accent, #4a9eff);
+  background: color-mix(in srgb, var(--accent, #4a9eff) 10%, transparent);
+}
+
+.tg-workmode-label {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.tg-workmode-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.4;
 }

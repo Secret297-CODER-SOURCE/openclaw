@@ -192,6 +192,27 @@ export type BehaviorConfig =
   | CommunicationBehavior
   | MasterControlBehavior;
 
+// ─── Agent settings (work mode, schedule, active diagram) ────────────────────
+
+/**
+ * Persistent per-agent settings controlling when and how the agent replies.
+ * Stored in tg_agent_settings table.
+ */
+export interface AgentSettings {
+  /** ID of the diagram the agent follows for conversation guidance. */
+  activeDiagramId?: string;
+  /**
+   * "always"   — reply to every message (default)
+   * "schedule" — reply only within scheduleFrom..scheduleTo window (local time)
+   * "schema"   — reply always, but use the selected diagram as strict guide
+   */
+  workMode: "always" | "schedule" | "schema";
+  /** HH:MM — start of the reply window (schedule mode) */
+  scheduleFrom?: string;
+  /** HH:MM — end of the reply window (schedule mode) */
+  scheduleTo?: string;
+}
+
 // ─── Agent manager interface (used by master_control to avoid circular imports) ─
 
 export interface IAgentManager {

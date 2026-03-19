@@ -2,10 +2,16 @@ import EventEmitter from "events";
 // plugins/telegram/src/agents/BaseAgent.ts
 import fs from "fs";
 import path from "path";
+import { aiReply } from "../behaviors/AiReplyEngine";
 import { TelegramStorage } from "../storage/TelegramStorage";
+import { createWorkspaceTools } from "../tools/TelegramTools";
 import {
   AgentRecord,
+  AgentSettings,
   BehaviorConfig,
+  DiagramEdge,
+  DiagramNode,
+  FlowDiagram,
   TelegramEvent,
   AgentStatus,
   AutoReplyBehavior,
@@ -76,6 +82,37 @@ export abstract class BaseAgent extends EventEmitter {
 
   getBehavior<T extends BehaviorConfig>(type: T["type"]): T | undefined {
     return this.record.behaviors.find((b) => b.type === type) as T | undefined;
+  }
+
+  /**
+   * Load the persisted agent settings (work mode, schedule, active diagram).
+   * Returns defaults when no settings have been saved yet.
+   */
+  protected getAgentSettings(): AgentSettings {
+    return this.storage.getAgentSettings(this.id);
+  }
+
+  /**
+   * Returns true if the agent is allowed to reply right now according to its
+   * work-mode settings.  Always returns true for modes other than "schedule".
+   */
+  protected isWithinSchedule(settings: AgentSettings): boolean {
+    if (settings.workMode !== "schedule") return true;
+    const from = settings.scheduleFrom;
+    const to = settings.scheduleTo;
+    if (!from || !to) return true;
+
+    const now = new Date();
+    const hhmm =
+      String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
+
+    // Compare as strings — works for same-day windows (e.g. "09:00" – "18:00").
+    // For overnight windows (e.g. "22:00" – "06:00") use OR logic.
+    if (from <= to) {
+      return hhmm >= from && hhmm <= to;
+    } else {
+      return hhmm >= from || hhmm <= to;
+    }
   }
 
   // ─── Task session management ───────────────────────────────────────────────
@@ -256,61 +293,80 @@ export abstract class BaseAgent extends EventEmitter {
    * Returns an empty string when no diagram or knowledge base is configured.
    */
   private async buildKnowledgeBaseSection(): Promise<string> {
+    // When the operator has pinned a specific diagram via agent settings, load
+    // that diagram directly instead of scanning by scope.
+    const agentSettings = this.getAgentSettings();
+    if (agentSettings.activeDiagramId) {
+      const pinned = this.storage.getDiagramById(agentSettings.activeDiagramId);
+      if (pinned && pinned.nodes.length > 0) {
+        return this._buildKBFromDiagram(pinned);
+      }
+    }
+
     // Try personal scope first, then shared
     for (const scope of ["personal", "shared"] as const) {
       const diagram = this.storage.getDiagram(this.id, scope);
       if (!diagram || diagram.nodes.length === 0) continue;
-
-      const raw = this.storage.getKnowledgeBase(this.id, scope);
-      if (!raw) continue;
-
-      const entries = raw.entries as
-        | Array<{
-            nodeId: string;
-            nodeText: string;
-            pairs: Array<{ input: string; response: string; score: number; label?: string }>;
-          }>
-        | undefined;
-      if (!entries || entries.length === 0) continue;
-
-      // Build a readable flow description from the diagram
-      const scoreLabel = (s: number) => (s === 3 ? "★★★" : s === 2 ? "★★" : "★");
-      const nodeLines: string[] = [];
-
-      for (const node of diagram.nodes) {
-        nodeLines.push(`• [${node.type.toUpperCase()}] ${node.text}`);
-      }
-      const edgeLines = diagram.edges
-        .map((e) => {
-          const src = diagram.nodes.find((n) => n.id === e.sourceId)?.text ?? e.sourceId;
-          const tgt = diagram.nodes.find((n) => n.id === e.targetId)?.text ?? e.targetId;
-          return `  ${src} → ${tgt}${e.label ? ` (${e.label})` : ""}`;
-        })
-        .join("\n");
-
-      const kbParts: string[] = [];
-      for (const entry of entries) {
-        if (!entry.pairs || entry.pairs.length === 0) continue;
-        const pairLines = entry.pairs
-          .slice(0, 5) // top-5 examples per node to keep prompt compact
-          .map((pr) => `  Q: ${pr.input}\n  A: ${pr.response} ${scoreLabel(pr.score)}`)
-          .join("\n");
-        kbParts.push(`### ${entry.nodeText}\n${pairLines}`);
-      }
-
-      if (kbParts.length === 0) continue;
-
-      return (
-        `## Conversation Flow (${scope === "shared" ? "Shared" : "Personal"})\n` +
-        `Follow this flow strictly during the conversation:\n` +
-        nodeLines.join("\n") +
-        (edgeLines ? `\nTransitions:\n${edgeLines}` : "") +
-        `\n\n## Knowledge Base — Example Dialogues by Step\n` +
-        `Use these verified examples as a guide for your responses. Higher ★ = better outcome.\n\n` +
-        kbParts.join("\n\n")
-      );
+      const section = this._buildKBFromDiagram(diagram);
+      if (section) return section;
     }
     return "";
+  }
+
+  /**
+   * Convert a FlowDiagram + its associated knowledge base into a system-prompt
+   * section string. Returns "" when the KB is empty or missing.
+   */
+  private _buildKBFromDiagram(diagram: FlowDiagram): string {
+    const raw = this.storage.getKnowledgeBase(
+      diagram.agentId,
+      diagram.scope as "personal" | "shared",
+    );
+    if (!raw) return "";
+
+    const entries = raw.entries as
+      | Array<{
+          nodeId: string;
+          nodeText: string;
+          pairs: Array<{ input: string; response: string; score: number; label?: string }>;
+        }>
+      | undefined;
+    if (!entries || entries.length === 0) return "";
+
+    const scoreLabel = (s: number) => (s === 3 ? "★★★" : s === 2 ? "★★" : "★");
+    const nodeLines: string[] = [];
+    for (const node of diagram.nodes) {
+      nodeLines.push(`• [${node.type.toUpperCase()}] ${node.text}`);
+    }
+    const edgeLines = diagram.edges
+      .map((e) => {
+        const src = diagram.nodes.find((n) => n.id === e.sourceId)?.text ?? e.sourceId;
+        const tgt = diagram.nodes.find((n) => n.id === e.targetId)?.text ?? e.targetId;
+        return `  ${src} → ${tgt}${e.label ? ` (${e.label})` : ""}`;
+      })
+      .join("\n");
+
+    const kbParts: string[] = [];
+    for (const entry of entries) {
+      if (!entry.pairs || entry.pairs.length === 0) continue;
+      const pairLines = entry.pairs
+        .slice(0, 5)
+        .map((pr) => `  Q: ${pr.input}\n  A: ${pr.response} ${scoreLabel(pr.score)}`)
+        .join("\n");
+      kbParts.push(`### ${entry.nodeText}\n${pairLines}`);
+    }
+    if (kbParts.length === 0) return "";
+
+    const scopeLabel = diagram.scope === "shared" ? "Shared" : "Personal";
+    return (
+      `## Conversation Flow (${scopeLabel})\n` +
+      `Follow this flow strictly during the conversation:\n` +
+      nodeLines.join("\n") +
+      (edgeLines ? `\nTransitions:\n${edgeLines}` : "") +
+      `\n\n## Knowledge Base — Example Dialogues by Step\n` +
+      `Use these verified examples as a guide for your responses. Higher ★ = better outcome.\n\n` +
+      kbParts.join("\n\n")
+    );
   }
 
   /** Read a file from the agent workspace directory, returning "" when absent. */
@@ -362,5 +418,179 @@ export abstract class BaseAgent extends EventEmitter {
 
   protected delay(ms: number) {
     return new Promise((r) => setTimeout(r, ms));
+  }
+
+  // ─── Schema work-mode: strict script execution ───────────────────────────
+
+  /**
+   * Execute the current step of the active conversation script (schema mode).
+   *
+   * Called on every incoming message when workMode === "schema". Looks up (or
+   * initialises) the per-chat position in the active diagram, builds a strict
+   * step-execution prompt, generates the AI reply, then advances the state
+   * machine to the next node.
+   *
+   * Returns the reply string, or null if schema mode is not active / no
+   * diagram is configured.
+   */
+  protected async runScriptStep(
+    chatId: string,
+    userText: string,
+    chatKey: string,
+  ): Promise<string | null> {
+    const settings = this.getAgentSettings();
+    if (settings.workMode !== "schema" || !settings.activeDiagramId) return null;
+
+    const diagram = this.storage.getDiagramById(settings.activeDiagramId);
+    if (!diagram || diagram.nodes.length === 0) return null;
+
+    // Entry point: find the start node
+    const startNode = diagram.nodes.find((n) => n.type === "start");
+    if (!startNode) return null;
+
+    // Resolve current position (null → first message → start node)
+    const savedNodeId = this.storage.getConversationNodeId(this.id, chatId);
+    const currentNode: DiagramNode =
+      (savedNodeId ? diagram.nodes.find((n) => n.id === savedNodeId) : null) ?? startNode;
+
+    // Outgoing edges and their target nodes
+    const outEdges = diagram.edges.filter((e) => e.sourceId === currentNode.id);
+    const nextNodes = outEdges
+      .map((e) => ({ edge: e, node: diagram.nodes.find((n) => n.id === e.targetId) }))
+      .filter((x): x is { edge: DiagramEdge; node: DiagramNode } => x.node !== undefined);
+
+    // Build a step-focused system prompt
+    const isDecision = currentNode.type === "decision";
+    const isEnd = currentNode.type === "end";
+
+    let systemPrompt =
+      `Ты ведёшь разговор строго по заданному скрипту. Не отклоняйся от него.\n\n` +
+      `## ТЕКУЩИЙ ШАГ\n` +
+      `[${currentNode.type.toUpperCase()}] "${currentNode.text}"\n\n`;
+
+    if (isEnd) {
+      systemPrompt += `Инструкция: Это последний шаг — завершай разговор согласно скрипту.\n`;
+    } else if (isDecision) {
+      systemPrompt +=
+        `Инструкция: Это точка выбора. Задай вопрос или сделай предложение, ` +
+        `чтобы определить дальнейший путь.\n`;
+    } else {
+      systemPrompt += `Инструкция: Выполни этот шаг — ответь согласно инструкции.\n`;
+    }
+
+    if (nextNodes.length > 0) {
+      systemPrompt += `\n## СЛЕДУЮЩИЕ ШАГИ\n`;
+      for (const x of nextNodes) {
+        systemPrompt += `- ${x.edge.label ? `[${x.edge.label}] ` : ""}${x.node.text}\n`;
+      }
+    }
+
+    // For decision nodes with multiple branches, embed a BRANCH: tag instruction
+    // so the AI signals which path to take without a second round-trip.
+    if (nextNodes.length > 1) {
+      const labels = nextNodes.map((x) => x.edge.label ?? x.node.text).join(" | ");
+      systemPrompt +=
+        `\nПосле своего ответа добавь ОТДЕЛЬНОЙ новой строкой: BRANCH:<вариант>\n` +
+        `Где <вариант> — ТОЧНО одно из: ${labels}\n` +
+        `(Эта строка будет удалена перед отправкой пользователю.)\n`;
+    }
+
+    systemPrompt +=
+      `\n${this.buildScriptContext(diagram)}\n\n` +
+      `ВАЖНО: Отвечай ТОЛЬКО по текущему шагу. Не перескакивай вперёд и не возвращайся назад.`;
+
+    const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
+    const rawReply = await aiReply(userText, chatKey, systemPrompt, this.storage, workspaceTools);
+
+    // Strip the BRANCH: decision tag from the visible reply
+    let reply = rawReply;
+    let chosenNextNodeId: string | undefined;
+
+    if (nextNodes.length > 1) {
+      const branchMatch = rawReply.match(/\nBRANCH:\s*(.+)$/im);
+      if (branchMatch) {
+        reply = rawReply.replace(/\nBRANCH:\s*.+$/im, "").trim();
+        const chosenLabel = branchMatch[1].trim().toLowerCase();
+        // Case-insensitive partial match on edge label or target node text
+        const matched = nextNodes.find(
+          (x) =>
+            x.edge.label?.toLowerCase().includes(chosenLabel) ||
+            chosenLabel.includes((x.edge.label ?? "").toLowerCase()) ||
+            x.node.text.toLowerCase().includes(chosenLabel) ||
+            chosenLabel.includes(x.node.text.toLowerCase()),
+        );
+        chosenNextNodeId = matched?.node.id ?? nextNodes[0].node.id;
+      } else {
+        // AI didn't include a tag — fall back to the first branch
+        chosenNextNodeId = nextNodes[0].node.id;
+      }
+    }
+
+    // Advance the state machine
+    if (nextNodes.length === 0 || isEnd) {
+      // Script complete — clear state so the next message restarts from the top
+      this.storage.deleteConversationState(this.id, chatId);
+    } else if (nextNodes.length === 1) {
+      this.storage.setConversationNodeId(this.id, chatId, nextNodes[0].node.id);
+    } else {
+      this.storage.setConversationNodeId(this.id, chatId, chosenNextNodeId!);
+    }
+
+    return reply || null;
+  }
+
+  /**
+   * Render the full diagram as a numbered plain-text script for use in the
+   * system prompt. BFS-traversal from the start node preserves the natural
+   * reading order. Decision branches are shown inline with their edge labels.
+   */
+  private buildScriptContext(diagram: FlowDiagram): string {
+    if (diagram.nodes.length === 0) return "";
+    const lines: string[] = ["## ПОЛНЫЙ СКРИПТ (для справки)"];
+
+    const startNode = diagram.nodes.find((n) => n.type === "start");
+    if (!startNode) {
+      // Fallback: flat list
+      for (const n of diagram.nodes) lines.push(`• [${n.type.toUpperCase()}] ${n.text}`);
+      return lines.join("\n");
+    }
+
+    // BFS through nodes, building numbered steps with branch annotations
+    const visited = new Set<string>();
+    const queue: string[] = [startNode.id];
+    let step = 1;
+
+    while (queue.length > 0) {
+      const nodeId = queue.shift()!;
+      if (visited.has(nodeId)) continue;
+      visited.add(nodeId);
+
+      const node = diagram.nodes.find((n) => n.id === nodeId);
+      if (!node) continue;
+
+      const outs = diagram.edges.filter((e) => e.sourceId === nodeId);
+      const branchStr = outs
+        .map((e) => {
+          const target = diagram.nodes.find((n) => n.id === e.targetId);
+          return `→ ${e.label ? `[${e.label}] ` : ""}${target?.text ?? "?"}`;
+        })
+        .join("  ");
+
+      lines.push(
+        `${step}. [${node.type.toUpperCase()}] ${node.text}${branchStr ? `  ${branchStr}` : ""}`,
+      );
+      step++;
+
+      for (const e of outs) {
+        if (!visited.has(e.targetId)) queue.push(e.targetId);
+      }
+    }
+
+    // Append any nodes disconnected from the start (shouldn't happen in a well-formed diagram)
+    for (const n of diagram.nodes) {
+      if (!visited.has(n.id)) lines.push(`${step++}. [${n.type.toUpperCase()}] ${n.text}`);
+    }
+
+    return lines.join("\n");
   }
 }

@@ -260,6 +260,14 @@ export type TelegramProps = {
   onWebchatInputChange: (v: string) => void;
   onWebchatSend: (agentId: string) => void;
   onWebchatSearchChange: (q: string) => void;
+  // Agent work-mode settings
+  agentSettings: import("../controllers/telegram.ts").AgentSettings | null;
+  agentSettingsLoading: boolean;
+  agentSettingsSaving: boolean;
+  onSaveAgentSettings: (
+    agentId: string,
+    settings: import("../controllers/telegram.ts").AgentSettings,
+  ) => void;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -458,6 +466,15 @@ function renderPanelTabs(props: TelegramProps, agent: TelegramAgentRecord) {
 
 function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
   const busy = isBusy(props, agent.id);
+  const settings = props.agentSettings ?? { workMode: "always" as const };
+  const settingsSaving = props.agentSettingsSaving;
+  const settingsLoading = props.agentSettingsLoading;
+  const diagramList = props.diagramList ?? [];
+
+  /** Emit updated settings to the backend. */
+  const saveSettings = (patch: Partial<typeof settings>) => {
+    props.onSaveAgentSettings(agent.id, { ...settings, ...patch });
+  };
 
   return html`
     <section class="card">
@@ -540,6 +557,133 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
           ${t("ui.delete")}
         </button>
       </div>
+    </section>
+
+    <!-- ── Work mode settings ─────────────────────────────────────────── -->
+    <section class="card" style="margin-top: 16px;">
+      <div class="card-title">⚙️ Режим работы</div>
+      <div class="card-sub">Настройте когда и как агент отвечает на сообщения.</div>
+
+      ${
+        settingsLoading
+          ? html`
+              <div style="color: var(--text-muted); margin-top: 12px">Загрузка…</div>
+            `
+          : nothing
+      }
+
+      <!-- Diagram selector -->
+      <div style="margin-top: 16px;">
+        <div class="label" style="margin-bottom: 6px;">🗺 Активная схема</div>
+        ${
+          diagramList.length === 0
+            ? html`
+                <div style="color: var(--text-muted); font-size: 13px">
+                  Нет сохранённых схем. Создайте схему в разделе «Схема».
+                </div>
+              `
+            : html`
+              <select
+                class="input"
+                style="max-width: 320px;"
+                .value=${settings.activeDiagramId ?? ""}
+                @change=${(e: Event) => {
+                  const v = (e.target as HTMLSelectElement).value;
+                  saveSettings({ activeDiagramId: v || undefined });
+                }}
+              >
+                <option value="">— Не выбрана —</option>
+                ${diagramList.map(
+                  (d) => html`<option value=${d.id} ?selected=${d.id === settings.activeDiagramId}>
+                    ${d.title} (${d.nodeCount} узл.)
+                  </option>`,
+                )}
+              </select>
+            `
+        }
+      </div>
+
+      <!-- Work mode -->
+      <div style="margin-top: 16px;">
+        <div class="label" style="margin-bottom: 8px;">📋 Режим ответов</div>
+        <div class="tg-workmode-options">
+          ${(
+            [
+              {
+                value: "always",
+                label: "Всегда",
+                desc: "Агент отвечает на все входящие сообщения",
+              },
+              {
+                value: "schedule",
+                label: "По расписанию",
+                desc: "Агент отвечает только в указанный временной промежуток",
+              },
+              {
+                value: "schema",
+                label: "По схеме",
+                desc: "Агент следует выбранной схеме разговора при каждом ответе",
+              },
+            ] as const
+          ).map(
+            (opt) => html`
+              <label
+                class="tg-workmode-option ${settings.workMode === opt.value ? "tg-workmode-option--active" : ""}"
+              >
+                <input
+                  type="radio"
+                  name="workMode-${agent.id}"
+                  value=${opt.value}
+                  ?checked=${settings.workMode === opt.value}
+                  @change=${() => saveSettings({ workMode: opt.value })}
+                  style="display: none;"
+                />
+                <div class="tg-workmode-label">${opt.label}</div>
+                <div class="tg-workmode-desc">${opt.desc}</div>
+              </label>
+            `,
+          )}
+        </div>
+      </div>
+
+      <!-- Schedule time range (visible only in "schedule" mode) -->
+      ${
+        settings.workMode === "schedule"
+          ? html`
+            <div style="margin-top: 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <div class="label">С</div>
+              <input
+                type="time"
+                class="input"
+                style="width: 120px;"
+                .value=${settings.scheduleFrom ?? "09:00"}
+                @change=${(e: Event) =>
+                  saveSettings({ scheduleFrom: (e.target as HTMLInputElement).value })}
+              />
+              <div class="label">до</div>
+              <input
+                type="time"
+                class="input"
+                style="width: 120px;"
+                .value=${settings.scheduleTo ?? "18:00"}
+                @change=${(e: Event) =>
+                  saveSettings({ scheduleTo: (e.target as HTMLInputElement).value })}
+              />
+              <div style="color: var(--text-muted); font-size: 12px;">
+                (по локальному времени сервера)
+              </div>
+            </div>
+          `
+          : nothing
+      }
+
+      ${
+        settingsSaving
+          ? html`
+              <div style="color: var(--text-muted); font-size: 12px; margin-top: 8px">Сохранение…</div>
+            `
+          : nothing
+      }
     </section>
   `;
 }

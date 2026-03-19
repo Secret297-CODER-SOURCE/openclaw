@@ -84,6 +84,7 @@ import {
   loadTelegramFlowNodes,
   loadTelegramDiagram,
   loadTelegramDiagramList,
+  loadDiagramListAllScopes,
   saveTelegramDiagram,
   selectTelegramDiagramById,
   deleteTelegramDiagramById,
@@ -106,6 +107,8 @@ import {
   generateDiagramFromText,
   getCoachingTips,
   loadCoachingTips,
+  loadAgentSettings,
+  saveAgentSettings,
   buildFlatPairs,
   applyTrainingEditorSave,
   loadWebchatDialogs,
@@ -276,7 +279,7 @@ export function renderApp(state: AppViewState) {
               <img src="/favicon.svg" alt="OpenClaw" />
             </div>
             <div class="brand-text">
-              <div class="brand-title">OPENCLAW</div>
+              <div class="brand-title">T-SPACE</div>
               <div class="brand-sub">Gateway Dashboard</div>
             </div>
           </div>
@@ -625,9 +628,13 @@ export function renderApp(state: AppViewState) {
                   // Labels and analysis results reset before restore (in case nothing saved)
                   state.telegramTrainingLabels = {};
                   state.telegramAnalysisResults = {};
-                  // Reset coaching tips when switching agents
+                  // Reset coaching tips and agent settings when switching agents
                   state.telegramCoachingTips = {};
                   state.telegramCoachingCollapsed = new Set();
+                  state.telegramAgentSettings = null;
+                  // Reset diagram list so the overview panel never shows stale data
+                  // from the previous agent before the fresh load completes.
+                  state.telegramDiagramList = [];
                   // Restore last-used scope for this agent (persisted in localStorage).
                   // Must happen before loading data so the correct scope is active.
                   if (id) {
@@ -641,6 +648,12 @@ export function renderApp(state: AppViewState) {
                     void loadTrainingFromGateway(state, id, state.telegramTrainingScope);
                     // Load persisted coaching tips from DB (non-blocking)
                     void loadCoachingTips(state, id);
+                    // Load agent work-mode settings (non-blocking)
+                    void loadAgentSettings(state, id);
+                    // Load all diagrams (personal + shared) so the overview panel's
+                    // active-diagram dropdown is populated immediately without requiring
+                    // the user to visit the Schema tab first.
+                    void loadDiagramListAllScopes(state, id);
                   }
                   // Reset webchat state for the new agent
                   if (state._telegramWebchatPollTimer !== null) {
@@ -962,6 +975,12 @@ export function renderApp(state: AppViewState) {
                 coachingTips: state.telegramCoachingTips,
                 coachingLoading: state.telegramCoachingLoading,
                 coachingCollapsed: state.telegramCoachingCollapsed,
+                agentSettings: state.telegramAgentSettings,
+                agentSettingsLoading: state.telegramAgentSettingsLoading,
+                agentSettingsSaving: state.telegramAgentSettingsSaving,
+                onSaveAgentSettings: (agentId, settings) => {
+                  void saveAgentSettings(state, agentId, settings);
+                },
                 trainingPairs: state.telegramTrainingPairs,
                 trainingGroups: state.telegramTrainingGroups,
                 trainingGroupsLimit: state.telegramTrainingGroupsLimit,

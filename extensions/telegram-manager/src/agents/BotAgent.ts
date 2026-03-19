@@ -305,6 +305,27 @@ export class BotAgent extends BaseAgent {
       return;
     }
 
+    // Respect work-mode settings: skip reply outside scheduled window.
+    const agentSettings = this.getAgentSettings();
+    if (!this.isWithinSchedule(agentSettings)) return;
+
+    // Schema work mode: follow the active diagram as a strict step-by-step script.
+    // Bypasses keyword/trigger auto_reply requirements so every message in a
+    // schema-mode conversation advances through the script regardless of content.
+    if (agentSettings.workMode === "schema" && agentSettings.activeDiagramId) {
+      await ctx.replyWithChatAction("typing");
+      try {
+        const scriptReply = await this.runScriptStep(chatId, text, chatKey);
+        if (scriptReply) {
+          await ctx.reply(scriptReply);
+          this.trackMessage("out", scriptReply, chatId);
+          return;
+        }
+      } catch (e) {
+        this.logger.warn(`[TG:${this.name}] script step failed: ${String(e)}`);
+      }
+    }
+
     const cfg = this.getBehavior<any>("auto_reply");
     if (!cfg?.enabled || !this.shouldAutoReply(cfg, text, chatId)) return;
 

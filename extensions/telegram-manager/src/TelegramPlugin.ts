@@ -15,6 +15,10 @@ import { analyzeImageOnce, callAdapterOnce } from "./behaviors/AiReplyEngine";
 import { TelegramStorage } from "./storage/TelegramStorage";
 import type { ProxyConfig } from "./storage/TelegramStorage";
 import {
+  AgentSettings,
+  DiagramEdge,
+  DiagramGroup,
+  DiagramNode,
   GatewayPlugin,
   IGatewayContext,
   GatewayMessage,
@@ -140,6 +144,46 @@ export class TelegramPlugin implements GatewayPlugin {
           await this.manager.setBehaviors(p.agentId, p.behaviors);
           respond({ ok: true });
           break;
+
+        // ── Agent settings (work mode, schedule, active diagram) ───────────
+
+        case "telegram.agent.getSettings": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          const settings = this.storage.getAgentSettings(String(p.agentId));
+          respond(settings);
+          break;
+        }
+
+        case "telegram.agent.setSettings": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          const incoming = (p.settings ?? {}) as Record<string, unknown>;
+          const mode = incoming.workMode;
+          if (mode !== "always" && mode !== "schedule" && mode !== "schema") {
+            fail("invalid workMode");
+            break;
+          }
+          const settings: AgentSettings = {
+            workMode: mode as AgentSettings["workMode"],
+            ...(incoming.activeDiagramId !== undefined
+              ? { activeDiagramId: String(incoming.activeDiagramId) }
+              : {}),
+            ...(incoming.scheduleFrom !== undefined
+              ? { scheduleFrom: String(incoming.scheduleFrom) }
+              : {}),
+            ...(incoming.scheduleTo !== undefined
+              ? { scheduleTo: String(incoming.scheduleTo) }
+              : {}),
+          };
+          this.storage.saveAgentSettings(String(p.agentId), settings);
+          respond({ ok: true, settings });
+          break;
+        }
 
         // ── Auth (userbot) ─────────────────────────────────────────────────
 
@@ -765,9 +809,9 @@ Rules:
             agentId: String(p.agentId),
             scope: diagramScope,
             title: typeof parsed.title === "string" ? parsed.title : "Схема из изображения",
-            nodes: Array.isArray(parsed.nodes) ? parsed.nodes : [],
-            edges: Array.isArray(parsed.edges) ? parsed.edges : [],
-            groups: Array.isArray(parsed.groups) ? parsed.groups : [],
+            nodes: (Array.isArray(parsed.nodes) ? parsed.nodes : []) as DiagramNode[],
+            edges: (Array.isArray(parsed.edges) ? parsed.edges : []) as DiagramEdge[],
+            groups: (Array.isArray(parsed.groups) ? parsed.groups : []) as DiagramGroup[],
             createdAt: now,
             updatedAt: now,
           };
@@ -858,9 +902,9 @@ Rules:
             agentId: String(p.agentId),
             scope: dftScope,
             title: typeof parsed.title === "string" ? parsed.title : "Схема",
-            nodes: Array.isArray(parsed.nodes) ? parsed.nodes : [],
-            edges: Array.isArray(parsed.edges) ? parsed.edges : [],
-            groups: Array.isArray(parsed.groups) ? parsed.groups : [],
+            nodes: (Array.isArray(parsed.nodes) ? parsed.nodes : []) as DiagramNode[],
+            edges: (Array.isArray(parsed.edges) ? parsed.edges : []) as DiagramEdge[],
+            groups: (Array.isArray(parsed.groups) ? parsed.groups : []) as DiagramGroup[],
             createdAt: now,
             updatedAt: now,
           };

@@ -784,6 +784,17 @@ export type DiagramSummary = {
   updatedAt: string;
 };
 
+// ─── Agent settings ───────────────────────────────────────────────────────────
+
+/** Mirrors AgentSettings from the extension's types.ts. */
+export type AgentSettings = {
+  activeDiagramId?: string;
+  /** "always" | "schedule" | "schema" */
+  workMode: "always" | "schedule" | "schema";
+  scheduleFrom?: string; // HH:MM
+  scheduleTo?: string; // HH:MM
+};
+
 // ─── Scenario controller ──────────────────────────────────────────────────────
 
 /** One conversation (personal chat) extracted from a Telegram export */
@@ -849,6 +860,13 @@ type TelegramScenarioState = TelegramState & {
   telegramCoachingLoading: Set<string>;
   /** Set of chatIds whose coaching card is currently collapsed. */
   telegramCoachingCollapsed: Set<string>;
+  /** Agent work-mode settings (loaded on agent select). */
+  telegramAgentSettings: AgentSettings | null;
+  telegramAgentSettingsLoading: boolean;
+  telegramAgentSettingsSaving: boolean;
+  /** Knowledge base distributed from training data to diagram nodes. */
+  telegramKnowledgeBase: DiagramKnowledgeBase | null;
+  telegramKnowledgeBaseLoading: boolean;
 };
 
 export async function loadTelegramChatNodes(
@@ -973,6 +991,50 @@ export async function loadTelegramDiagramList(
     state.telegramDiagramList = (list ?? []).map((d) => ({
       id: d.id,
       title: d.title,
+      nodeCount: d.nodes.length,
+      updatedAt: d.updatedAt,
+    }));
+  } catch {
+    // non-fatal
+  } finally {
+    state.telegramDiagramListLoading = false;
+  }
+}
+
+/**
+ * Load diagrams from BOTH personal and shared scopes and merge them into one
+ * flat list for display in the overview settings panel. Shared diagrams are
+ * tagged "(общ.)" so the user can distinguish them.
+ * Used on agent-select so the active-diagram dropdown is always populated.
+ */
+export async function loadDiagramListAllScopes(
+  state: TelegramScenarioState,
+  agentId: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  state.telegramDiagramListLoading = true;
+  try {
+    const [personal, shared] = await Promise.all([
+      state
+        .client!.request<FlowDiagram[]>("telegram.scenario.listDiagrams", {
+          agentId,
+          scope: "personal",
+        })
+        .catch(() => [] as FlowDiagram[]),
+      state
+        .client!.request<FlowDiagram[]>("telegram.scenario.listDiagrams", {
+          agentId,
+          scope: "shared",
+        })
+        .catch(() => [] as FlowDiagram[]),
+    ]);
+    const sharedIds = new Set((shared ?? []).map((d) => d.id));
+    const all = [...(personal ?? []), ...(shared ?? [])];
+    state.telegramDiagramList = all.map((d) => ({
+      id: d.id,
+      title: sharedIds.has(d.id) ? `${d.title} (общ.)` : d.title,
       nodeCount: d.nodes.length,
       updatedAt: d.updatedAt,
     }));
@@ -2008,9 +2070,9 @@ export async function analyzeTrainingData(
     );
 
     // Plugin wraps results as { ok: true, data: actualResult }; unwrap before use
-    const inner = (res as Record<string, unknown>)?.data ?? res;
+    const inner = ((res as Record<string, unknown>)?.data ?? res) as Record<string, unknown> | null;
     // Accept result from various response shapes
-    const text = inner?.result ?? inner?.text ?? inner?.content ?? null;
+    const text = inner?.["result"] ?? inner?.["text"] ?? inner?.["content"] ?? null;
     if (typeof text === "string") {
       state.telegramAnalysisResult = text;
     } else {
@@ -2074,8 +2136,8 @@ export async function loadWebchatDialogs(state: WebchatState, agentId: string): 
       args: { limit: 30 },
     });
     // Plugin wraps results as { ok: true, data: actualResult }; unwrap before use
-    const dialogs = (res as Record<string, unknown>)?.data ?? res;
-    state.telegramWebchatDialogs = Array.isArray(dialogs) ? dialogs : [];
+    const dialogs = ((res as unknown as Record<string, unknown>)?.data ?? res) as unknown;
+    state.telegramWebchatDialogs = Array.isArray(dialogs) ? (dialogs as TelegramDialog[]) : [];
   } catch (err) {
     state.telegramWebchatDialogsError = String(err);
   } finally {
@@ -2103,10 +2165,10 @@ export async function loadWebchatMessages(
       args: { target: dialogId, limit: 50 },
     });
     // Plugin wraps results as { ok: true, data: actualResult }; unwrap before use
-    const msgs = (res as Record<string, unknown>)?.data ?? res;
+    const msgs = ((res as unknown as Record<string, unknown>)?.data ?? res) as unknown;
     if (Array.isArray(msgs)) {
       // GramJS returns newest-first; reverse so oldest is on top
-      state.telegramWebchatMessages = [...msgs].toReversed();
+      state.telegramWebchatMessages = ([...msgs] as TelegramWebMessage[]).toReversed();
     }
   } catch {
     // Silent fail during polling
@@ -2495,5 +2557,51 @@ export async function distributeTrainingToNodes(
     return result ?? null;
   } finally {
     state.telegramKnowledgeBaseLoading = false;
+  }
+}
+
+// ─── Agent settings ───────────────────────────────────────────────────────────
+
+/** Load agent work-mode settings from the gateway. */
+export async function loadAgentSettings(
+  state: TelegramScenarioState,
+  agentId: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  state.telegramAgentSettingsLoading = true;
+  try {
+    const res = await state.client!.request<AgentSettings>("telegram.agent.getSettings", {
+      agentId,
+    });
+    state.telegramAgentSettings = res ?? { workMode: "always" };
+  } catch {
+    state.telegramAgentSettings = { workMode: "always" };
+  } finally {
+    state.telegramAgentSettingsLoading = false;
+  }
+}
+
+/** Persist agent work-mode settings to the gateway. */
+export async function saveAgentSettings(
+  state: TelegramScenarioState,
+  agentId: string,
+  settings: AgentSettings,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  state.telegramAgentSettingsSaving = true;
+  try {
+    await state.client!.request<{ ok: boolean; settings: AgentSettings }>(
+      "telegram.agent.setSettings",
+      { agentId, settings },
+    );
+    state.telegramAgentSettings = settings;
+  } catch {
+    // non-fatal
+  } finally {
+    state.telegramAgentSettingsSaving = false;
   }
 }

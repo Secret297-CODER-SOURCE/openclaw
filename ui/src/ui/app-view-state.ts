@@ -228,6 +228,10 @@ export type AppViewState = {
   telegramCoachingLoading: Set<string>;
   /** Set of chatIds whose coaching card is currently collapsed. */
   telegramCoachingCollapsed: Set<string>;
+  /** Agent work-mode settings (active diagram, schedule, mode). */
+  telegramAgentSettings: import("./controllers/telegram.ts").AgentSettings | null;
+  telegramAgentSettingsLoading: boolean;
+  telegramAgentSettingsSaving: boolean;
   telegramTrainingPairs: import("./controllers/telegram.ts").TrainingPair[];
   telegramTrainingGroups: import("./controllers/telegram.ts").TrainingGroup[];
   telegramTrainingGroupsLimit: number;

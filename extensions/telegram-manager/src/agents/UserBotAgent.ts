@@ -343,13 +343,23 @@ export class UserBotAgent extends BaseAgent {
         const chatId = String(msg.chatId || "");
         if (!mc.allowedChatIds.includes(chatId)) return;
 
+        // Capture the resolved InputPeer synchronously before any async gap.
+        // GramJS populates inputChat during event dispatch (includes access_hash),
+        // so sendMessage can target the peer without hitting the entity cache.
+        let msgPeer: EntityLike | undefined;
+        try {
+          msgPeer = msg.inputChat as EntityLike;
+        } catch {
+          /* fallback to BigInt */
+        }
+
         const text = msg.message || "";
         this.trackMessage("in", text, chatId);
         try {
           const handler = new MasterControlHandler(mgr, this.logger);
           const reply = await handler.handle(text, mc.systemPrompt);
           if (reply) {
-            await this.sendWithFloodGuard(chatId, reply, msg.id);
+            await this.sendWithFloodGuard(chatId, reply, msg.id, msgPeer);
             this.trackMessage("out", reply, chatId);
           }
         } catch (e) {
@@ -381,6 +391,16 @@ export class UserBotAgent extends BaseAgent {
         const taskSession = this.getTaskSession(chatId);
         if (!taskSession) return;
 
+        // Capture the resolved InputPeer synchronously before any async gap.
+        // GramJS populates inputChat during event dispatch (includes access_hash),
+        // so sendMessage can target the peer without hitting the entity cache.
+        let msgPeer: EntityLike | undefined;
+        try {
+          msgPeer = msg.inputChat as EntityLike;
+        } catch {
+          /* fallback to BigInt */
+        }
+
         const text = msg.message || "";
         this.trackMessage("in", text, chatId);
         // Use a stable per-chat key so history is shared with auto_reply —
@@ -399,7 +419,7 @@ export class UserBotAgent extends BaseAgent {
         try {
           const reply = await aiReply(text, chatKey, systemPrompt, this.storage, workspaceTools);
           if (reply) {
-            await this.sendWithFloodGuard(chatId, reply, msg.id);
+            await this.sendWithFloodGuard(chatId, reply, msg.id, msgPeer);
             this.trackMessage("out", reply, chatId);
           }
         } catch (e) {
@@ -433,6 +453,38 @@ export class UserBotAgent extends BaseAgent {
         const cd = (cfg.cooldownSeconds ?? 5) * 1000;
 
         if (cooldowns.has(key) && now - cooldowns.get(key)! < cd) return;
+        // Respect work-mode settings: skip reply outside scheduled window.
+        const agentSettings = this.getAgentSettings();
+        if (!this.isWithinSchedule(agentSettings)) return;
+
+        // Capture the resolved InputPeer synchronously before any async gap.
+        // GramJS populates inputChat during event dispatch (includes access_hash),
+        // so sendMessage can target the peer without hitting the entity cache.
+        let msgPeer: EntityLike | undefined;
+        try {
+          msgPeer = msg.inputChat as EntityLike;
+        } catch {
+          /* fallback to BigInt */
+        }
+
+        // Schema work mode: follow the active diagram as a strict script.
+        // Bypasses keyword/trigger requirements so every message in the
+        // conversation advances through the script steps.
+        if (agentSettings.workMode === "schema" && agentSettings.activeDiagramId) {
+          this.trackMessage("in", text, chatId);
+          try {
+            const scriptReply = await this.runScriptStep(chatId, text, key);
+            if (scriptReply) {
+              await this.sendWithFloodGuard(chatId, scriptReply, msg.id, msgPeer);
+              cooldowns.set(key, Date.now());
+              this.trackMessage("out", scriptReply, chatId);
+              return;
+            }
+          } catch (e) {
+            this.logger.warn(`[TG:${this.name}] script step failed: ${String(e)}`);
+          }
+        }
+
         if (!this.shouldAutoReply(cfg, text, chatId)) return;
 
         this.trackMessage("in", text, chatId);
@@ -463,7 +515,7 @@ export class UserBotAgent extends BaseAgent {
         }
 
         if (reply) {
-          await this.sendWithFloodGuard(chatId, reply, msg.id);
+          await this.sendWithFloodGuard(chatId, reply, msg.id, msgPeer);
           cooldowns.set(key, Date.now());
           this.trackMessage("out", reply, chatId);
         }
@@ -621,14 +673,19 @@ export class UserBotAgent extends BaseAgent {
    * Send a reply message to a chat, enforcing a minimum inter-send delay and
    * retrying once on PEER_FLOOD (Telegram's userbot rate-limit per peer).
    *
-   * @param chatId  Numeric string chat/peer ID.
-   * @param message Text to send.
+   * @param chatId        Numeric string chat/peer ID (used only for flood-guard key).
+   * @param message       Text to send.
    * @param replyToMsgId  Optional message to thread-reply to.
+   * @param resolvedPeer  Pre-resolved InputPeer from the incoming event. When present
+   *                      it is used directly (it embeds the access_hash, so no entity
+   *                      cache lookup is needed). Falls back to BigInt reconstruction
+   *                      when absent (e.g. proactive sends not triggered by an event).
    */
   private async sendWithFloodGuard(
     chatId: string,
     message: string,
     replyToMsgId?: number,
+    resolvedPeer?: EntityLike,
   ): Promise<void> {
     // Enforce minimum inter-send delay to the same peer.
     const sendKey = `${this.id}:${chatId}`;
@@ -637,10 +694,12 @@ export class UserBotAgent extends BaseAgent {
     const wait = MIN_SEND_INTERVAL_MS - (now - last);
     if (wait > 0) await this.delay(wait);
 
-    // Pass numeric chat IDs as BigInt so gramjs uses the cached peer directly
-    // instead of trying to resolve the string as a username.
-    // Cast to EntityLike: gramjs accepts native bigint at runtime despite the TS types.
-    const peer = (/^-?\d+$/.test(chatId) ? BigInt(chatId) : chatId) as EntityLike;
+    // Prefer the InputPeer captured from the incoming event — it contains the
+    // access_hash inline, so GramJS does not need to look it up in the session
+    // entity cache (which may not have the peer if the user is new).
+    // Fall back to BigInt for numeric IDs when no pre-resolved peer is given.
+    const peer: EntityLike =
+      resolvedPeer ?? ((/^-?\d+$/.test(chatId) ? BigInt(chatId) : chatId) as EntityLike);
     const doSend = () =>
       this.client!.sendMessage(peer, {
         message,

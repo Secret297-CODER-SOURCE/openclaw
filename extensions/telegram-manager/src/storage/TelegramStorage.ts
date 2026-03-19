@@ -6,6 +6,7 @@ import {
   AgentRecord,
   AgentMission,
   AgentCommunicationMessage,
+  AgentSettings,
   BehaviorConfig,
   TelegramEvent,
   ChatNode,
@@ -174,6 +175,23 @@ export class TelegramStorage {
         chat_id      TEXT NOT NULL,
         content      TEXT NOT NULL,
         generated_at TEXT NOT NULL,
+        PRIMARY KEY (agent_id, chat_id)
+      );
+
+      -- Per-agent settings: active diagram, work mode, schedule.
+      CREATE TABLE IF NOT EXISTS tg_agent_settings (
+        agent_id      TEXT PRIMARY KEY,
+        settings_json TEXT NOT NULL DEFAULT '{}',
+        updated_at    TEXT NOT NULL
+      );
+
+      -- Tracks which diagram node each conversation is currently at (schema work mode).
+      -- Keyed by (agent_id, chat_id); deleted when the script reaches an end node.
+      CREATE TABLE IF NOT EXISTS tg_conversation_state (
+        agent_id   TEXT NOT NULL,
+        chat_id    TEXT NOT NULL,
+        node_id    TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
         PRIMARY KEY (agent_id, chat_id)
       );
 
@@ -627,6 +645,62 @@ export class TelegramStorage {
       .run(agentId, chatId, content, generatedAt);
   }
 
+  // ─── Agent settings (work mode, schedule, active diagram) ────────────────
+
+  /** Load settings for an agent. Returns defaults when no row exists yet. */
+  getAgentSettings(agentId: string): AgentSettings {
+    const row = this.db
+      .prepare("SELECT settings_json FROM tg_agent_settings WHERE agent_id = ?")
+      .get(agentId) as { settings_json: string } | undefined;
+    if (!row) return { workMode: "always" };
+    try {
+      const parsed = JSON.parse(row.settings_json) as AgentSettings;
+      return { workMode: "always", ...parsed };
+    } catch {
+      return { workMode: "always" };
+    }
+  }
+
+  /** Persist settings for an agent. */
+  saveAgentSettings(agentId: string, settings: AgentSettings): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO tg_agent_settings (agent_id, settings_json, updated_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run(agentId, JSON.stringify(settings), new Date().toISOString());
+  }
+
+  // ─── Conversation script state (schema work mode) ─────────────────────────
+
+  /**
+   * Return the diagram node ID where this conversation is currently at.
+   * Returns null if the conversation has no tracked state (new or completed).
+   */
+  getConversationNodeId(agentId: string, chatId: string): string | null {
+    const row = this.db
+      .prepare("SELECT node_id FROM tg_conversation_state WHERE agent_id = ? AND chat_id = ?")
+      .get(agentId, chatId) as { node_id: string } | undefined;
+    return row?.node_id ?? null;
+  }
+
+  /** Upsert the current diagram node position for this conversation. */
+  setConversationNodeId(agentId: string, chatId: string, nodeId: string): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO tg_conversation_state (agent_id, chat_id, node_id, updated_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(agentId, chatId, nodeId, new Date().toISOString());
+  }
+
+  /** Remove the conversation state (called when the script reaches an end node). */
+  deleteConversationState(agentId: string, chatId: string): void {
+    this.db
+      .prepare("DELETE FROM tg_conversation_state WHERE agent_id = ? AND chat_id = ?")
+      .run(agentId, chatId);
+  }
+
   // ─── Agent workspace ─────────────────────────────────────────────────────
 
   /** Returns the workspace directory path for a given agent (may not exist yet). */
@@ -778,6 +852,14 @@ export class TelegramStorage {
         "SELECT * FROM tg_flow_diagrams WHERE agent_id = ? AND scope = ? ORDER BY updated_at DESC LIMIT 1",
       )
       .get(agentId, scope) as Record<string, unknown> | undefined;
+    return row ? this.toFlowDiagram(row) : null;
+  }
+
+  /** Fetch a single diagram by its primary-key ID (any agent/scope). */
+  getDiagramById(id: string): FlowDiagram | null {
+    const row = this.db.prepare("SELECT * FROM tg_flow_diagrams WHERE id = ?").get(id) as
+      | Record<string, unknown>
+      | undefined;
     return row ? this.toFlowDiagram(row) : null;
   }
 
