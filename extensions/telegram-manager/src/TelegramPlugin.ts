@@ -11,6 +11,7 @@ import { randomUUID } from "crypto";
 import fs from "fs";
 import path from "path";
 import { AgentManager } from "./agents/AgentManager";
+import { analyzeImageOnce } from "./behaviors/AiReplyEngine";
 import { TelegramStorage } from "./storage/TelegramStorage";
 import type { ProxyConfig } from "./storage/TelegramStorage";
 import {
@@ -620,6 +621,124 @@ export class TelegramPlugin implements GatewayPlugin {
           }
           this.storage.deleteFlowNode(String(p.nodeId));
           respond({ ok: true });
+          break;
+        }
+
+        // ── Scenario: Visual Diagrams ──────────────────────────────────────
+
+        case "telegram.scenario.getDiagram": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          const gdScope = p.scope === "shared" ? "shared" : "personal";
+          respond(this.storage.getDiagram(String(p.agentId), gdScope));
+          break;
+        }
+
+        case "telegram.scenario.saveDiagram": {
+          if (!p.diagram || typeof p.diagram !== "object") {
+            fail("diagram object is required");
+            break;
+          }
+          const d = p.diagram as Record<string, unknown>;
+          if (!d.agentId) {
+            fail("diagram.agentId is required");
+            break;
+          }
+          const sdScope: "personal" | "shared" = d.scope === "shared" ? "shared" : "personal";
+          const now = new Date().toISOString();
+          const diagram = {
+            id: typeof d.id === "string" && d.id ? d.id : randomUUID(),
+            agentId: String(d.agentId),
+            scope: sdScope,
+            title: typeof d.title === "string" ? d.title : "Схема",
+            nodes: Array.isArray(d.nodes) ? d.nodes : [],
+            edges: Array.isArray(d.edges) ? d.edges : [],
+            groups: Array.isArray(d.groups) ? d.groups : [],
+            createdAt: typeof d.createdAt === "string" ? d.createdAt : now,
+            updatedAt: now,
+          };
+          this.storage.saveDiagram(diagram);
+          respond(diagram);
+          break;
+        }
+
+        case "telegram.scenario.diagramFromImage": {
+          // Receive a base64-encoded image, analyze it with the configured AI provider (vision).
+          if (!p.imageBase64 || typeof p.imageBase64 !== "string") {
+            fail("imageBase64 is required");
+            break;
+          }
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          const mediaType = typeof p.mediaType === "string" ? p.mediaType : "image/jpeg";
+          const diagramScope: "personal" | "shared" = p.scope === "shared" ? "shared" : "personal";
+
+          const diagramSystemPrompt = `You are a diagram analysis assistant. The user will show you an image of a flowchart, business process, or diagram. Extract the structure and return it as a JSON object matching this TypeScript type:
+
+interface FlowDiagram {
+  title: string;
+  nodes: Array<{ id: string; type: "start"|"end"|"process"|"decision"; text: string; x: number; y: number; groupId?: string }>;
+  edges: Array<{ id: string; sourceId: string; targetId: string; label?: string }>;
+  groups: Array<{ id: string; label: string; color: "blue"|"green"|"orange"|"purple"; x: number; y: number; w: number; h: number }>;
+}
+
+Rules:
+- Use short unique IDs (8 random chars) for all id fields
+- Place nodes in a readable layout: x in 0-800, y in 0-800 range, spaced 120-160px apart
+- For groups, set x/y to enclose the contained nodes with 30px padding on each side
+- If the image has no clear start/end, infer them
+- Return ONLY the JSON object, no markdown, no explanation`;
+
+          let rawText: string;
+          try {
+            rawText = await analyzeImageOnce(
+              p.imageBase64 as string,
+              mediaType,
+              "Analyze this diagram image and return the FlowDiagram JSON.",
+              diagramSystemPrompt,
+            );
+          } catch (err) {
+            fail(err instanceof Error ? err.message : String(err));
+            break;
+          }
+
+          // Strip markdown code fences if present
+          const jsonStr = rawText
+            .replace(/^```(?:json)?\s*/i, "")
+            .replace(/\s*```$/i, "")
+            .trim();
+
+          let parsed: {
+            title?: string;
+            nodes?: unknown[];
+            edges?: unknown[];
+            groups?: unknown[];
+          };
+          try {
+            parsed = JSON.parse(jsonStr) as typeof parsed;
+          } catch {
+            fail(`AI returned invalid JSON: ${jsonStr.slice(0, 200)}`);
+            break;
+          }
+
+          const now = new Date().toISOString();
+          const diagramResult = {
+            id: randomUUID(),
+            agentId: String(p.agentId),
+            scope: diagramScope,
+            title: typeof parsed.title === "string" ? parsed.title : "Схема из изображения",
+            nodes: Array.isArray(parsed.nodes) ? parsed.nodes : [],
+            edges: Array.isArray(parsed.edges) ? parsed.edges : [],
+            groups: Array.isArray(parsed.groups) ? parsed.groups : [],
+            createdAt: now,
+            updatedAt: now,
+          };
+          this.storage.saveDiagram(diagramResult);
+          respond(diagramResult);
           break;
         }
 

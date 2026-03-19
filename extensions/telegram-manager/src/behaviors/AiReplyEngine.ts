@@ -31,6 +31,9 @@ let _cachedEnvAdapter: ModelAdapter | null = null;
 // Not cleared by setModelAdapter() so it survives gateway adapter registration.
 let _cachedDirectAdapter: ModelAdapter | null = null;
 
+// Gateway connection info stored separately so vision calls can use it directly.
+let _gatewayConfig: { baseUrl: string; token: string; model: string } | null = null;
+
 /**
  * Set the model adapter used by aiReply().
  * Called once from the plugin host during initialisation so the extension can
@@ -43,6 +46,15 @@ export function setModelAdapter(adapter: ModelAdapter): void {
   // NOTE: _cachedDirectAdapter is intentionally NOT cleared here so that
   // direct env-var adapters (for batch analysis) remain available even after
   // the gateway adapter is registered.
+}
+
+/**
+ * Store gateway connection details so analyzeImageOnce() can make vision calls
+ * through the gateway's OpenAI-compatible endpoint.
+ * Call this from the plugin host alongside setModelAdapter().
+ */
+export function setGatewayConfig(cfg: { baseUrl: string; token: string; model: string }): void {
+  _gatewayConfig = cfg;
 }
 
 /**
@@ -284,6 +296,113 @@ export async function analyzeOnceDirect(userMessage: string): Promise<string> {
   }
   // No direct key — use the gateway adapter (lane-limited, caller should limit concurrency)
   return analyzeOnce(userMessage);
+}
+
+// ─── Vision / image analysis ─────────────────────────────────────────────────
+
+/**
+ * Analyze an image using the best available AI provider:
+ *   1. ANTHROPIC_API_KEY  → Anthropic SDK vision (direct)
+ *   2. OPENAI_API_KEY / OPENAI_BASE_URL → OpenAI-compatible vision (direct)
+ *   3. Gateway (configured via setGatewayConfig) → OpenAI-compatible vision via local gateway
+ * Throws if no provider is configured.
+ */
+export async function analyzeImageOnce(
+  imageBase64: string,
+  mediaType: string,
+  textPrompt: string,
+  systemPrompt: string,
+): Promise<string> {
+  // 1. Direct Anthropic vision
+  const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim();
+  if (anthropicKey) {
+    const client = getAnthropicClient();
+    const model = process.env.TG_AI_MODEL?.trim() || "claude-3-5-sonnet-20241022";
+    const res = await client.messages.create({
+      model,
+      max_tokens: 4096,
+      system: systemPrompt,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: mediaType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+                data: imageBase64,
+              },
+            },
+            { type: "text", text: textPrompt },
+          ],
+        },
+      ],
+    });
+    return res.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("")
+      .trim();
+  }
+
+  // 2. OpenAI-compatible vision (env key or gateway)
+  const openaiKey = process.env.OPENAI_API_KEY?.trim();
+  const openaiBase = process.env.OPENAI_BASE_URL?.trim();
+  let visionBaseUrl: string;
+  let visionToken: string;
+  let visionModel: string;
+
+  if (openaiKey || openaiBase) {
+    visionBaseUrl = (openaiBase ?? "https://api.openai.com/v1").replace(/\/$/, "");
+    visionToken = openaiKey ?? "";
+    visionModel = process.env.TG_AI_MODEL?.trim() || "gpt-4o";
+  } else if (_gatewayConfig) {
+    // Fall back to the local OpenClaw gateway
+    visionBaseUrl = _gatewayConfig.baseUrl.replace(/\/$/, "");
+    visionToken = _gatewayConfig.token;
+    visionModel = _gatewayConfig.model;
+  } else {
+    throw new Error(
+      "No AI provider configured for image analysis. " +
+        "Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or ensure the OpenClaw gateway is running.",
+    );
+  }
+
+  const response = await fetch(`${visionBaseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(visionToken ? { Authorization: `Bearer ${visionToken}` } : {}),
+    },
+    body: JSON.stringify({
+      model: visionModel,
+      max_tokens: 4096,
+      messages: [
+        ...(systemPrompt ? [{ role: "system", content: systemPrompt }] : []),
+        {
+          role: "user",
+          content: [
+            {
+              type: "image_url",
+              image_url: { url: `data:${mediaType};base64,${imageBase64}` },
+            },
+            { type: "text", text: textPrompt },
+          ],
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Vision AI request failed (${response.status}): ${body.slice(0, 300)}`);
+  }
+
+  const data = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  return data.choices?.[0]?.message?.content?.trim() ?? "";
 }
 
 // ─── Conversation history ──────────────────────────────────────────────────────

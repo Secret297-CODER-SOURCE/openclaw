@@ -734,6 +734,48 @@ export type TrainingPair = {
   createdAt: string;
 };
 
+// ─── Visual Diagram types ─────────────────────────────────────────────────────
+
+export type DiagramNodeType = "start" | "end" | "process" | "decision";
+
+export type DiagramNode = {
+  id: string;
+  type: DiagramNodeType;
+  text: string;
+  x: number;
+  y: number;
+  groupId?: string;
+};
+
+export type DiagramEdge = {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  label?: string;
+};
+
+export type DiagramGroup = {
+  id: string;
+  label: string;
+  color: "blue" | "green" | "orange" | "purple";
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
+export type FlowDiagram = {
+  id: string;
+  agentId: string;
+  scope: TrainingScope;
+  title: string;
+  nodes: DiagramNode[];
+  edges: DiagramEdge[];
+  groups: DiagramGroup[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 // ─── Scenario controller ──────────────────────────────────────────────────────
 
 /** One conversation (personal chat) extracted from a Telegram export */
@@ -787,6 +829,9 @@ type TelegramScenarioState = TelegramState & {
   _telegramBatchAbort?: { cancelled: boolean };
   /** Training scope: personal (per-agentId) or shared (global across agents) */
   telegramTrainingScope: "personal" | "shared";
+  /** Visual flowchart diagram for the current agent+scope. */
+  telegramDiagram: FlowDiagram | null;
+  telegramDiagramLoading: boolean;
 };
 
 export async function loadTelegramChatNodes(
@@ -835,6 +880,73 @@ export async function loadTelegramFlowNodes(
   } finally {
     state.telegramFlowNodesLoading = false;
   }
+}
+
+export async function loadTelegramDiagram(
+  state: TelegramScenarioState,
+  agentId: string,
+  scope: TrainingScope = "personal",
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  state.telegramDiagramLoading = true;
+  try {
+    const res = await state.client!.request<FlowDiagram | null>("telegram.scenario.getDiagram", {
+      agentId,
+      scope,
+    });
+    state.telegramDiagram = res ?? null;
+  } catch {
+    // non-fatal — handler may not be deployed yet
+  } finally {
+    state.telegramDiagramLoading = false;
+  }
+}
+
+export async function saveTelegramDiagram(
+  state: TelegramScenarioState,
+  diagram: FlowDiagram,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  try {
+    const saved = await state.client!.request<FlowDiagram>("telegram.scenario.saveDiagram", {
+      diagram,
+    });
+    if (saved) {
+      state.telegramDiagram = saved;
+    }
+  } catch {
+    // non-fatal
+  }
+}
+
+/**
+ * Send a base64-encoded image to the plugin for AI-powered diagram generation.
+ * Returns the generated FlowDiagram on success, null on failure.
+ */
+export async function importTelegramDiagramFromImage(
+  state: TelegramScenarioState,
+  agentId: string,
+  scope: TrainingScope,
+  imageBase64: string,
+  mediaType: string,
+): Promise<FlowDiagram | null> {
+  if (!isReady(state)) {
+    throw new Error("Нет соединения с сервером");
+  }
+  const result = await state.client!.request<FlowDiagram>("telegram.scenario.diagramFromImage", {
+    agentId,
+    scope,
+    imageBase64,
+    mediaType,
+  });
+  if (result) {
+    state.telegramDiagram = result;
+  }
+  return result ?? null;
 }
 
 export async function addTelegramChatNode(

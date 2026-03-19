@@ -82,6 +82,9 @@ import {
   saveTelegramAgentFile,
   loadTelegramChatNodes,
   loadTelegramFlowNodes,
+  loadTelegramDiagram,
+  saveTelegramDiagram,
+  importTelegramDiagramFromImage,
   addTelegramChatNode,
   deleteTelegramChatNode,
   processTelegramTrainingFile,
@@ -670,6 +673,13 @@ export function renderApp(state: AppViewState) {
                       state._telegramWebchatPollTimer = null;
                     }
                   }
+                  if (panel === "schema" && state.telegramSelectedId) {
+                    void loadTelegramDiagram(
+                      state,
+                      state.telegramSelectedId,
+                      state.telegramSchemaScope,
+                    );
+                  }
                 },
                 onCreateNameChange: (v) => {
                   state.telegramCreateName = v;
@@ -915,6 +925,8 @@ export function renderApp(state: AppViewState) {
                 flowNodes: state.telegramFlowNodes,
                 flowNodesLoading: state.telegramFlowNodesLoading,
                 schemaScope: state.telegramSchemaScope,
+                diagram: state.telegramDiagram,
+                diagramLoading: state.telegramDiagramLoading,
                 trainingPairs: state.telegramTrainingPairs,
                 trainingGroups: state.telegramTrainingGroups,
                 trainingGroupsLimit: state.telegramTrainingGroupsLimit,
@@ -1021,10 +1033,25 @@ export function renderApp(state: AppViewState) {
                 onLoadChatNodes: (agentId) => void loadTelegramChatNodes(state, agentId),
                 onLoadFlowNodes: (agentId) =>
                   void loadTelegramFlowNodes(state, agentId, state.telegramSchemaScope),
+                onLoadDiagram: (agentId) =>
+                  void loadTelegramDiagram(state, agentId, state.telegramSchemaScope),
+                onSaveDiagram: (diagram) => void saveTelegramDiagram(state, diagram),
+                onImportDiagramFromImage: state.telegramSelectedId
+                  ? (base64, mime) =>
+                      importTelegramDiagramFromImage(
+                        state,
+                        state.telegramSelectedId!,
+                        state.telegramSchemaScope,
+                        base64,
+                        mime,
+                      )
+                  : null,
                 onSchemaScopeChange: (agentId, scope) => {
                   state.telegramSchemaScope = scope;
                   state.telegramFlowNodes = [];
+                  state.telegramDiagram = null;
                   void loadTelegramFlowNodes(state, agentId, scope);
+                  void loadTelegramDiagram(state, agentId, scope);
                 },
                 onAddChatNode: (agentId, role) => void addTelegramChatNode(state, agentId, role),
                 onDeleteChatNode: (agentId, nodeId) =>

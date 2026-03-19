@@ -163,6 +163,16 @@ export type TelegramProps = {
     agentId: string,
     scope: import("../controllers/telegram.ts").TrainingScope,
   ) => void;
+  diagram: import("../controllers/telegram.ts").FlowDiagram | null;
+  diagramLoading: boolean;
+  onLoadDiagram: (agentId: string) => void;
+  onSaveDiagram: (diagram: import("../controllers/telegram.ts").FlowDiagram) => void;
+  onImportDiagramFromImage:
+    | ((
+        base64: string,
+        mime: string,
+      ) => Promise<import("../controllers/telegram.ts").FlowDiagram | null>)
+    | null;
   trainingPairs: TrainingPair[];
   trainingGroups: TrainingGroup[];
   trainingGroupsLimit: number;
@@ -1023,6 +1033,11 @@ function renderDetail(props: TelegramProps) {
     onLoadFlowNodes: props.onLoadFlowNodes,
     schemaScope: props.schemaScope,
     onSchemaScopeChange: props.onSchemaScopeChange,
+    diagram: props.diagram,
+    diagramLoading: props.diagramLoading,
+    onLoadDiagram: props.onLoadDiagram,
+    onSaveDiagram: props.onSaveDiagram,
+    onImportDiagramFromImage: props.onImportDiagramFromImage,
     trainingLabels: props.trainingLabels,
     analysisResult: props.analysisResult,
     analysisLoading: props.analysisLoading,

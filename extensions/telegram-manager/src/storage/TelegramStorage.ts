@@ -10,6 +10,7 @@ import {
   TelegramEvent,
   ChatNode,
   FlowNode,
+  FlowDiagram,
   TrainingPair,
 } from "../types";
 
@@ -145,6 +146,18 @@ export class TelegramStorage {
         PRIMARY KEY (agent_id, scope)
       );
 
+      CREATE TABLE IF NOT EXISTS tg_flow_diagrams (
+        id          TEXT PRIMARY KEY,
+        agent_id    TEXT NOT NULL,
+        scope       TEXT NOT NULL DEFAULT 'personal',
+        title       TEXT NOT NULL,
+        nodes_json  TEXT NOT NULL DEFAULT '[]',
+        edges_json  TEXT NOT NULL DEFAULT '[]',
+        groups_json TEXT NOT NULL DEFAULT '[]',
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_tg_events_agent ON tg_events(agent_id);
       CREATE INDEX IF NOT EXISTS idx_tg_parsed_agent ON tg_parsed(agent_id);
       CREATE INDEX IF NOT EXISTS idx_agent_missions_master ON agent_missions(master_agent_id);
@@ -152,6 +165,7 @@ export class TelegramStorage {
       CREATE INDEX IF NOT EXISTS idx_chat_nodes_agent ON tg_chat_nodes(agent_id);
       CREATE INDEX IF NOT EXISTS idx_flow_nodes_agent ON tg_flow_nodes(agent_id);
       CREATE INDEX IF NOT EXISTS idx_training_pairs_agent ON tg_training_pairs(agent_id);
+      CREATE INDEX IF NOT EXISTS idx_flow_diagrams_agent ON tg_flow_diagrams(agent_id, scope);
     `);
 
     // Incremental migration: add scope column to tg_flow_nodes for existing DBs
@@ -672,6 +686,52 @@ export class TelegramStorage {
       missionId: row.mission_id,
       timestamp: row.timestamp,
       replyToId: row.reply_to_id ?? undefined,
+    };
+  }
+
+  // ─── Flow Diagrams ────────────────────────────────────────────────────────
+
+  getDiagram(agentId: string, scope: "personal" | "shared" = "personal"): FlowDiagram | null {
+    const row = this.db
+      .prepare(
+        "SELECT * FROM tg_flow_diagrams WHERE agent_id = ? AND scope = ? ORDER BY updated_at DESC LIMIT 1",
+      )
+      .get(agentId, scope) as Record<string, unknown> | undefined;
+    return row ? this.toFlowDiagram(row) : null;
+  }
+
+  saveDiagram(d: FlowDiagram): void {
+    this.db
+      .prepare(`
+        INSERT OR REPLACE INTO tg_flow_diagrams
+          (id, agent_id, scope, title, nodes_json, edges_json, groups_json, created_at, updated_at)
+        VALUES
+          (@id, @agentId, @scope, @title, @nodesJson, @edgesJson, @groupsJson, @createdAt, @updatedAt)
+      `)
+      .run({
+        id: d.id,
+        agentId: d.agentId,
+        scope: d.scope,
+        title: d.title,
+        nodesJson: JSON.stringify(d.nodes),
+        edgesJson: JSON.stringify(d.edges),
+        groupsJson: JSON.stringify(d.groups),
+        createdAt: d.createdAt,
+        updatedAt: d.updatedAt,
+      });
+  }
+
+  private toFlowDiagram(row: Record<string, unknown>): FlowDiagram {
+    return {
+      id: row.id as string,
+      agentId: row.agent_id as string,
+      scope: (row.scope as "personal" | "shared") ?? "personal",
+      title: row.title as string,
+      nodes: JSON.parse((row.nodes_json as string) || "[]"),
+      edges: JSON.parse((row.edges_json as string) || "[]"),
+      groups: JSON.parse((row.groups_json as string) || "[]"),
+      createdAt: row.created_at as string,
+      updatedAt: row.updated_at as string,
     };
   }
 }

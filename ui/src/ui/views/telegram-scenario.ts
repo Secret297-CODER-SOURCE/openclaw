@@ -3,11 +3,14 @@ import type { TelegramAgentRecord, TrainingScope } from "../controllers/telegram
 import type {
   ChatNode,
   FlowNode,
+  FlowDiagram,
   TrainingPair,
   TrainingGroup,
   TrainingLabel,
   DialogAnalysisResult,
 } from "../controllers/telegram.ts";
+import { makeDefaultDiagram } from "./telegram-diagram-editor.ts";
+import "./telegram-diagram-editor.ts";
 import { renderWebchat } from "./telegram-webchat.ts";
 import type { WebchatProps } from "./telegram-webchat.ts";
 
@@ -80,6 +83,13 @@ export type ScenarioProps = {
   onCancelBatchAnalysis: () => void;
   // Webchat (Telegram messenger) — provided for userbot agents only
   webchat?: WebchatProps;
+  /** Visual flowchart diagram for the current agent+scope. */
+  diagram: FlowDiagram | null;
+  diagramLoading: boolean;
+  onLoadDiagram: (agentId: string) => void;
+  onSaveDiagram: (diagram: FlowDiagram) => void;
+  /** Called when user selects an image to import; returns the AI-generated diagram. */
+  onImportDiagramFromImage: ((base64: string, mime: string) => Promise<FlowDiagram | null>) | null;
 };
 
 // ─── Sub-panel tabs ───────────────────────────────────────────────────────────
@@ -1321,92 +1331,41 @@ function renderAnalysisView(props: ScenarioProps, agent: TelegramAgentRecord) {
   `;
 }
 
-// ─── Schema view (Flow Nodes pipeline) ────────────────────────────────────────
+// ─── Schema view — visual flowchart editor ───────────────────────────────────
 
 export function renderSchemaPanel(props: ScenarioProps, agent: TelegramAgentRecord) {
-  const flowNodes = props.flowNodes;
-  const scope = props.schemaScope;
-
-  // ── Scope switcher (reuses training scope styling) ────────────────────────
-  const scopeToggle = html`
-    <div class="tg-scope-row">
-      <span class="tg-scope-row__label">Схема:</span>
-      <div class="tg-scope-switcher">
-        <button
-          type="button"
-          class="tg-scope-btn ${scope === "personal" ? "active" : ""}"
-          @click=${() => props.onSchemaScopeChange(agent.id, "personal")}
-          aria-pressed=${scope === "personal"}
-        >
-          👤 Личная
-        </button>
-        <button
-          type="button"
-          class="tg-scope-btn ${scope === "shared" ? "active" : ""}"
-          @click=${() => props.onSchemaScopeChange(agent.id, "shared")}
-          aria-pressed=${scope === "shared"}
-        >
-          🌐 Общая
-        </button>
-      </div>
-    </div>
-  `;
-
-  if (props.flowNodesLoading) {
+  if (props.diagramLoading) {
     return html`
-      <section class="card">
-        ${scopeToggle}
-        <div class="muted" style="padding: 8px 0;">Загрузка схемы…</div>
+      <section class="card" style="display: flex; flex-direction: column; height: 100%; padding: 0">
+        <div class="muted" style="padding: 16px">Загрузка схемы…</div>
       </section>
     `;
   }
 
-  if (flowNodes.length === 0) {
-    return html`
-      <section class="card">
-        ${scopeToggle}
-        <div class="card-title">Схема</div>
-        <div class="card-sub">
-          Структура общения (этапы диалога).
-          ${
-            scope === "shared"
-              ? "Нет общих этапов — создайте ноды в любом агенте и сохраните в «Общую» схему."
-              : "Создайте ноды через раздел «Чат» → «Обучение»."
-          }
-        </div>
-        <div class="muted" style="margin-top: 16px">
-          Нет этапов диалога. После создания нод они сгруппируются здесь.
-        </div>
-      </section>
-    `;
+  // If no diagram exists yet, create a default one and persist it immediately.
+  let diagram = props.diagram;
+  if (!diagram) {
+    diagram = makeDefaultDiagram(agent.id, props.schemaScope);
+    // Trigger save asynchronously — don't block render.
+    queueMicrotask(() => props.onSaveDiagram(diagram!));
   }
 
   return html`
-    <section class="card">
-      ${scopeToggle}
-      <div class="card-title" style="margin-top: 8px;">Схема</div>
-      <div class="card-sub">Этапы диалога — путь от старта до конверсии.</div>
-
-      <div class="tg-schema-pipeline" style="margin-top: 20px;">
-        ${flowNodes.map(
-          (fn, idx) => html`
-            <div class="tg-schema-node">
-              <div class="tg-schema-node-title">${fn.title}</div>
-              ${fn.description ? html`<div class="tg-schema-node-desc">${fn.description}</div>` : nothing}
-              <div class="tg-schema-node-count muted" style="font-size: 0.75em;">
-                ${fn.chatNodeIds.length} нод
-              </div>
-            </div>
-            ${
-              idx < flowNodes.length - 1
-                ? html`
-                    <div class="tg-schema-arrow" aria-hidden="true">→</div>
-                  `
-                : nothing
-            }
-          `,
-        )}
-      </div>
+    <section class="card" style="display:flex;flex-direction:column;height:100%;padding:0;overflow:hidden;">
+      <tg-diagram-editor
+        .agentId=${agent.id}
+        .scope=${props.schemaScope}
+        .diagram=${diagram}
+        .onSave=${(d: FlowDiagram) => props.onSaveDiagram(d)}
+        .onScopeChange=${(
+          agentId: string,
+          scope: import("../controllers/telegram.ts").TrainingScope,
+        ) => {
+          props.onSchemaScopeChange(agentId, scope);
+        }}
+        .onImportImage=${props.onImportDiagramFromImage}
+        style="flex:1;min-height:0;"
+      ></tg-diagram-editor>
     </section>
   `;
 }

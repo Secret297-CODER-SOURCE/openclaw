@@ -7,7 +7,11 @@ import type {
   GatewayRequestHandlerOptions,
 } from "openclaw/plugin-sdk";
 import { jsonResult } from "openclaw/plugin-sdk";
-import { makeOpenAiCompatAdapter, setModelAdapter } from "./src/behaviors/AiReplyEngine.js";
+import {
+  makeOpenAiCompatAdapter,
+  setModelAdapter,
+  setGatewayConfig,
+} from "./src/behaviors/AiReplyEngine.js";
 import { TelegramPlugin } from "./src/TelegramPlugin";
 import type { GatewayMessage, IGatewayContext } from "./src/types";
 
@@ -48,6 +52,8 @@ function configureGatewayAdapter(logger: IGatewayContext["logger"]): void {
   const baseUrl = `http://127.0.0.1:${port}/v1`;
 
   setModelAdapter(makeOpenAiCompatAdapter(baseUrl, token, model));
+  // Also store gateway config so analyzeImageOnce() can make vision calls through it.
+  setGatewayConfig({ baseUrl, token, model });
   logger.info(`[TelegramPlugin] AI adapter: via OpenClaw gateway (port=${port}, model=${model})`);
 }
 
@@ -94,6 +100,10 @@ const TELEGRAM_METHODS = [
   "telegram.scenario.saveTrainingSnapshot",
   "telegram.scenario.getTrainingSnapshot",
   "telegram.scenario.createNodesFromPairs",
+  // Scenario / Visual Diagrams
+  "telegram.scenario.getDiagram",
+  "telegram.scenario.saveDiagram",
+  "telegram.scenario.diagramFromImage",
 ] as const;
 
 const plugin = {

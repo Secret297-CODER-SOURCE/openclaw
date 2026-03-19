@@ -263,6 +263,54 @@ export interface ChatNode {
   createdAt: string;
 }
 
+// ─── Visual Flowchart Diagram ────────────────────────────────────────────────
+
+export type DiagramNodeType = "start" | "end" | "process" | "decision";
+
+/** A single node on the visual flowchart canvas. */
+export interface DiagramNode {
+  id: string;
+  type: DiagramNodeType;
+  text: string;
+  x: number;
+  y: number;
+  /** Optional group (block) this node belongs to. */
+  groupId?: string;
+}
+
+/** A directed connection between two diagram nodes. */
+export interface DiagramEdge {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  /** Optional short label displayed near the midpoint. */
+  label?: string;
+}
+
+/** A colored block container grouping related nodes. */
+export interface DiagramGroup {
+  id: string;
+  label: string;
+  color: "blue" | "green" | "orange" | "purple";
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** A full visual flowchart diagram stored per agent+scope. */
+export interface FlowDiagram {
+  id: string;
+  agentId: string;
+  scope: "personal" | "shared";
+  title: string;
+  nodes: DiagramNode[];
+  edges: DiagramEdge[];
+  groups: DiagramGroup[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** A named conversation stage that groups multiple ChatNodes */
 export interface FlowNode {
   id: string;
