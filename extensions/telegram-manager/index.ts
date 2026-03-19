@@ -102,8 +102,19 @@ const TELEGRAM_METHODS = [
   "telegram.scenario.createNodesFromPairs",
   // Scenario / Visual Diagrams
   "telegram.scenario.getDiagram",
+  "telegram.scenario.listDiagrams",
   "telegram.scenario.saveDiagram",
+  "telegram.scenario.deleteDiagram",
+  "telegram.scenario.renameDiagram",
   "telegram.scenario.diagramFromImage",
+  "telegram.scenario.diagramFromText",
+  // Coaching tips for training conversations
+  "telegram.scenario.getCoachingTips",
+  "telegram.scenario.loadCoachingTips",
+  // Knowledge base (diagram ↔ training)
+  "telegram.scenario.getKnowledgeBase",
+  "telegram.scenario.saveKnowledgeBase",
+  "telegram.scenario.distributeTrainingToNodes",
 ] as const;
 
 const plugin = {

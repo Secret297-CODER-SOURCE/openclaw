@@ -217,6 +217,17 @@ export type AppViewState = {
   telegramSchemaScope: import("./controllers/telegram.ts").TrainingScope;
   telegramDiagram: import("./controllers/telegram.ts").FlowDiagram | null;
   telegramDiagramLoading: boolean;
+  /** All saved diagrams for the current agent+scope (lightweight summaries). */
+  telegramDiagramList: import("./controllers/telegram.ts").DiagramSummary[];
+  telegramDiagramListLoading: boolean;
+  /** Knowledge base: training pairs distributed to diagram nodes. */
+  telegramKnowledgeBase: import("./controllers/telegram.ts").DiagramKnowledgeBase | null;
+  telegramKnowledgeBaseLoading: boolean;
+  /** AI coaching tips per chatId — fetched on demand, persisted to DB. */
+  telegramCoachingTips: Record<string, import("./controllers/telegram.ts").CoachingTips>;
+  telegramCoachingLoading: Set<string>;
+  /** Set of chatIds whose coaching card is currently collapsed. */
+  telegramCoachingCollapsed: Set<string>;
   telegramTrainingPairs: import("./controllers/telegram.ts").TrainingPair[];
   telegramTrainingGroups: import("./controllers/telegram.ts").TrainingGroup[];
   telegramTrainingGroupsLimit: number;

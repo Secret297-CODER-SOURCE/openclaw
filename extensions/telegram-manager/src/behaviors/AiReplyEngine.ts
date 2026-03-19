@@ -468,3 +468,14 @@ export function clearHistory(chatKey: string, storage?: ConversationStorage) {
   histories.delete(chatKey);
   if (storage) storage.saveConversationHistory(chatKey, []);
 }
+
+/**
+ * One-shot text completion using the configured model adapter.
+ * Does NOT maintain conversation history — use for single prompts such as AI-driven
+ * classification, distribution or summarisation tasks.
+ */
+export async function callAdapterOnce(userPrompt: string, systemPrompt: string): Promise<string> {
+  const adapter = resolveAdapter();
+  const msgs: ModelMessage[] = [{ role: "user", content: userPrompt }];
+  return adapter(msgs, systemPrompt);
+}

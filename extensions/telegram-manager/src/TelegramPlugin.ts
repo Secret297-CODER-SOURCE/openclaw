@@ -11,7 +11,7 @@ import { randomUUID } from "crypto";
 import fs from "fs";
 import path from "path";
 import { AgentManager } from "./agents/AgentManager";
-import { analyzeImageOnce } from "./behaviors/AiReplyEngine";
+import { analyzeImageOnce, callAdapterOnce } from "./behaviors/AiReplyEngine";
 import { TelegramStorage } from "./storage/TelegramStorage";
 import type { ProxyConfig } from "./storage/TelegramStorage";
 import {
@@ -664,6 +664,40 @@ export class TelegramPlugin implements GatewayPlugin {
           break;
         }
 
+        case "telegram.scenario.listDiagrams": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          const ldScope = p.scope === "shared" ? "shared" : "personal";
+          respond(this.storage.listDiagrams(String(p.agentId), ldScope));
+          break;
+        }
+
+        case "telegram.scenario.deleteDiagram": {
+          if (!p.id) {
+            fail("id is required");
+            break;
+          }
+          this.storage.deleteDiagram(String(p.id));
+          respond({ ok: true });
+          break;
+        }
+
+        case "telegram.scenario.renameDiagram": {
+          if (!p.id) {
+            fail("id is required");
+            break;
+          }
+          if (typeof p.title !== "string") {
+            fail("title is required");
+            break;
+          }
+          this.storage.renameDiagram(String(p.id), String(p.title));
+          respond({ ok: true });
+          break;
+        }
+
         case "telegram.scenario.diagramFromImage": {
           // Receive a base64-encoded image, analyze it with the configured AI provider (vision).
           if (!p.imageBase64 || typeof p.imageBase64 !== "string") {
@@ -739,6 +773,165 @@ Rules:
           };
           this.storage.saveDiagram(diagramResult);
           respond(diagramResult);
+          break;
+        }
+
+        case "telegram.scenario.diagramFromText": {
+          // Generate a new diagram from a text description, or modify the existing diagram.
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          if (!p.prompt || typeof p.prompt !== "string" || !p.prompt.trim()) {
+            fail("prompt is required");
+            break;
+          }
+          const dftScope: "personal" | "shared" = p.scope === "shared" ? "shared" : "personal";
+          const isModify =
+            p.currentDiagram &&
+            typeof p.currentDiagram === "object" &&
+            Array.isArray((p.currentDiagram as { nodes?: unknown[] }).nodes) &&
+            (p.currentDiagram as { nodes: unknown[] }).nodes.length > 0;
+
+          const diagramSchema = `interface FlowDiagram {
+  title: string;
+  nodes: Array<{ id: string; type: "start"|"end"|"process"|"decision"; text: string; x: number; y: number; groupId?: string }>;
+  edges: Array<{ id: string; sourceId: string; targetId: string; label?: string }>;
+  groups: Array<{ id: string; label: string; color: "blue"|"green"|"orange"|"purple"; x: number; y: number; w: number; h: number }>;
+}`;
+
+          const systemPrompt = isModify
+            ? `You are a flowchart editor assistant. The user will give you an existing FlowDiagram JSON and a modification request.
+Apply the requested changes and return the COMPLETE updated FlowDiagram JSON.
+
+${diagramSchema}
+
+Rules:
+- Keep all existing node IDs/positions unless the change explicitly requires moving or deleting them
+- Use short unique IDs (8 random chars) for any NEW nodes/edges/groups
+- Keep x in 0-900, y in 0-900 range; space nodes 130-160px apart
+- Return ONLY the JSON object, no markdown, no explanation`
+            : `You are a flowchart generation assistant. The user will describe a process or workflow.
+Generate a FlowDiagram JSON that visually represents it.
+
+${diagramSchema}
+
+Rules:
+- Use short unique IDs (8 random chars) for all id fields
+- Place nodes in a readable top-to-bottom or left-to-right layout, x in 0-900, y in 0-900, spaced 130-160px apart
+- Always include at least one "start" and one "end" node
+- For groups, set x/y to enclose the contained nodes with 30px padding on each side
+- Return ONLY the JSON object, no markdown, no explanation`;
+
+          const userPrompt = isModify
+            ? `Current diagram:\n${JSON.stringify(p.currentDiagram)}\n\nModification request:\n${String(p.prompt)}`
+            : String(p.prompt);
+
+          let rawText: string;
+          try {
+            rawText = await callAdapterOnce(userPrompt, systemPrompt);
+          } catch (err) {
+            fail(err instanceof Error ? err.message : String(err));
+            break;
+          }
+
+          const jsonStr = rawText
+            .replace(/^```(?:json)?\s*/i, "")
+            .replace(/\s*```$/i, "")
+            .trim();
+          let parsed: { title?: string; nodes?: unknown[]; edges?: unknown[]; groups?: unknown[] };
+          try {
+            parsed = JSON.parse(jsonStr) as typeof parsed;
+          } catch {
+            fail(`ИИ вернул некорректный JSON: ${jsonStr.slice(0, 200)}`);
+            break;
+          }
+
+          const now = new Date().toISOString();
+          // Preserve the original diagram id when modifying so it updates in-place
+          const existingId =
+            isModify && typeof (p.currentDiagram as { id?: unknown }).id === "string"
+              ? (p.currentDiagram as { id: string }).id
+              : randomUUID();
+          const dftResult = {
+            id: existingId,
+            agentId: String(p.agentId),
+            scope: dftScope,
+            title: typeof parsed.title === "string" ? parsed.title : "Схема",
+            nodes: Array.isArray(parsed.nodes) ? parsed.nodes : [],
+            edges: Array.isArray(parsed.edges) ? parsed.edges : [],
+            groups: Array.isArray(parsed.groups) ? parsed.groups : [],
+            createdAt: now,
+            updatedAt: now,
+          };
+          this.storage.saveDiagram(dftResult);
+          respond(dftResult);
+          break;
+        }
+
+        // ── Scenario: Coaching tips ───────────────────────────────────────
+
+        case "telegram.scenario.getCoachingTips": {
+          // Analyse a single dialogue and return manager coaching tips.
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          if (!Array.isArray(p.pairs) || p.pairs.length === 0) {
+            fail("pairs array is required");
+            break;
+          }
+          const ctPairs = p.pairs as Array<{ input: string; response: string }>;
+          const dialogText = ctPairs
+            .map((pair, i) => `[${i + 1}] Клиент: ${pair.input}\n    Менеджер: ${pair.response}`)
+            .join("\n\n");
+
+          const ctSystem = `Ты — опытный тренер по продажам B2C/B2B.
+Проанализируй переписку менеджера с клиентом и дай КОНКРЕТНЫЕ советы, как менеджер мог бы лучше дожать и закрыть этого лида.
+
+Формат ответа — ТОЛЬКО нумерованный список на русском языке, 4–6 пунктов.
+Каждый пункт: 1–2 предложения. Без вводных слов, без заголовков, без пояснений вне списка.
+
+Фокусируйся на:
+• Упущенные моменты для закрытия (конкретный номер реплики)
+• Формулировки, которые стоило использовать
+• Работа с возражениями
+• Как довести до конкретного следующего шага`;
+
+          const ctUser = `Диалог менеджера с клиентом:\n\n${dialogText}`;
+
+          let ctRaw: string;
+          try {
+            ctRaw = await callAdapterOnce(ctUser, ctSystem);
+          } catch (err) {
+            fail(err instanceof Error ? err.message : String(err));
+            break;
+          }
+
+          const ctResult = {
+            chatId: String(p.chatId ?? ""),
+            content: ctRaw.trim(),
+            generatedAt: new Date().toISOString(),
+          };
+          // Persist so tips survive page reloads / gateway restarts
+          this.storage.saveCoachingTip(
+            String(p.agentId),
+            ctResult.chatId,
+            ctResult.content,
+            ctResult.generatedAt,
+          );
+          respond(ctResult);
+          break;
+        }
+
+        case "telegram.scenario.loadCoachingTips": {
+          // Load all persisted coaching tips for an agent.
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          const allTips = this.storage.getCoachingTips(String(p.agentId));
+          respond(allTips);
           break;
         }
 
@@ -880,6 +1073,176 @@ Rules:
           };
           this.storage.saveFlowNode(flowNode);
           respond({ ok: true, created: chatNodes.length, flowNodeId: flowNode.id });
+          break;
+        }
+
+        // ── Knowledge base (diagram ↔ training) ──────────────────────────────
+
+        case "telegram.scenario.getKnowledgeBase": {
+          const agentId = String(p.agentId ?? "");
+          const kbScope: "personal" | "shared" = p.scope === "shared" ? "shared" : "personal";
+          if (!agentId) {
+            fail("agentId is required");
+            break;
+          }
+          const raw = this.storage.getKnowledgeBase(agentId, kbScope);
+          respond(
+            raw
+              ? {
+                  agentId,
+                  scope: kbScope,
+                  entries: raw.entries ?? [],
+                  updatedAt: raw.updatedAt ?? "",
+                }
+              : null,
+          );
+          break;
+        }
+
+        case "telegram.scenario.saveKnowledgeBase": {
+          const agentId = String(p.agentId ?? "");
+          const kbScope2: "personal" | "shared" = p.scope === "shared" ? "shared" : "personal";
+          if (!agentId) {
+            fail("agentId is required");
+            break;
+          }
+          if (!Array.isArray(p.entries)) {
+            fail("entries array is required");
+            break;
+          }
+          const now = new Date().toISOString();
+          this.storage.saveKnowledgeBase(agentId, kbScope2, { entries: p.entries, updatedAt: now });
+          respond({ ok: true });
+          break;
+        }
+
+        case "telegram.scenario.distributeTrainingToNodes": {
+          const agentId = String(p.agentId ?? "");
+          const distScope: "personal" | "shared" = p.scope === "shared" ? "shared" : "personal";
+          if (!agentId) {
+            fail("agentId is required");
+            break;
+          }
+
+          // Load diagram to get node list
+          const diagram = this.storage.getDiagram(agentId, distScope);
+          if (!diagram || diagram.nodes.length === 0) {
+            fail("Нет схемы или узлов для этого агента/области. Сначала создайте схему.");
+            break;
+          }
+
+          // Resolve training groups: prefer data sent directly by the UI (avoids needing a
+          // saved snapshot, handles the case where the gateway was just restarted),
+          // then fall back to the persisted snapshot.
+          type RawGroup = {
+            chatId: string;
+            pairs: Array<{ input: string; response: string }>;
+            label?: string;
+          };
+          let rawGroups: RawGroup[] = [];
+          let labelsMap: Record<string, string> = {};
+
+          if (Array.isArray(p.groups) && (p.groups as RawGroup[]).length > 0) {
+            // UI sent training groups directly — use them.
+            rawGroups = p.groups as RawGroup[];
+          } else {
+            // Fall back to persisted snapshot.
+            const snapshot = this.storage.getTrainingSnapshot(agentId, distScope);
+            if (snapshot) {
+              rawGroups = Array.isArray(snapshot.groups) ? (snapshot.groups as RawGroup[]) : [];
+              labelsMap = (snapshot.labels as Record<string, string> | undefined) ?? {};
+            }
+          }
+
+          const allPairs: Array<{
+            input: string;
+            response: string;
+            score: number;
+            label?: string;
+          }> = [];
+          for (const g of rawGroups) {
+            const label = labelsMap[g.chatId] ?? g.label ?? "neutral";
+            const score = label === "success" ? 3 : label === "fail" ? 1 : 2;
+            for (const pair of g.pairs ?? []) {
+              allPairs.push({
+                input: String(pair.input ?? ""),
+                response: String(pair.response ?? ""),
+                score,
+                label,
+              });
+            }
+          }
+          // Sort by score descending so we send the best examples first
+          allPairs.sort((a, b) => b.score - a.score);
+          const topPairs = allPairs.slice(0, 80);
+
+          if (topPairs.length === 0) {
+            fail(
+              "Нет пар вопрос/ответ в данных обучения. Убедитесь, что в разделе «Обучение» загружены диалоги для области «" +
+                (distScope === "shared" ? "Общая" : "Личная") +
+                "».",
+            );
+            break;
+          }
+
+          // Build AI prompt for distribution
+          const nodeList = diagram.nodes
+            .map((n) => `${n.id}: ${n.text.replace(/\n/g, " ")}`)
+            .join("\n");
+          const pairsText = topPairs
+            .map(
+              (pair, i) =>
+                `[${i}] Q: ${pair.input.slice(0, 120)}\nA: ${pair.response.slice(0, 120)}`,
+            )
+            .join("\n---\n");
+
+          const distSystem = `You are a helpful assistant that maps conversation Q&A pairs to the most relevant step/node in a sales flow diagram.
+Return ONLY a valid JSON object where keys are node IDs (from the provided list) and values are arrays of pair indexes (integers).
+Example: {"node_abc": [0, 2, 5], "node_xyz": [1, 3]}
+Rules:
+- Every pair must be assigned to exactly one node.
+- Assign each pair to the node whose topic most closely matches the conversation topic.
+- Use only node IDs from the provided list.`;
+          const distUser = `Flow diagram nodes:\n${nodeList}\n\nTraining pairs (index: Q&A):\n${pairsText}\n\nReturn the JSON mapping.`;
+
+          let rawText: string;
+          try {
+            rawText = await callAdapterOnce(distUser, distSystem);
+          } catch (err) {
+            fail(`Ошибка ИИ: ${err instanceof Error ? err.message : String(err)}`);
+            break;
+          }
+
+          // Parse AI mapping response (strip optional code fence)
+          const jsonStr = rawText
+            .replace(/^```(?:json)?\s*/i, "")
+            .replace(/\s*```$/i, "")
+            .trim();
+          let mapping: Record<string, number[]>;
+          try {
+            mapping = JSON.parse(jsonStr) as Record<string, number[]>;
+          } catch {
+            fail(`ИИ вернул некорректный JSON: ${jsonStr.slice(0, 200)}`);
+            break;
+          }
+
+          const nodeMap = new Map(diagram.nodes.map((n) => [n.id, n.text]));
+          const entries = Object.entries(mapping)
+            .filter(([nodeId]) => nodeMap.has(nodeId))
+            .map(([nodeId, idxs]) => ({
+              nodeId,
+              nodeText: nodeMap.get(nodeId) ?? "",
+              // Keep only valid indexes; sort by score desc within each node
+              pairs: (Array.isArray(idxs) ? idxs : [])
+                .filter((i): i is number => typeof i === "number" && topPairs[i] !== undefined)
+                .map((i) => topPairs[i])
+                .sort((a, b) => b.score - a.score),
+            }))
+            .filter((e) => e.pairs.length > 0);
+
+          const updatedAt = new Date().toISOString();
+          this.storage.saveKnowledgeBase(agentId, distScope, { entries, updatedAt });
+          respond({ agentId, scope: distScope, entries, updatedAt });
           break;
         }
 

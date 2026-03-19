@@ -776,6 +776,14 @@ export type FlowDiagram = {
   updatedAt: string;
 };
 
+/** Lightweight summary used in the collections panel list. */
+export type DiagramSummary = {
+  id: string;
+  title: string;
+  nodeCount: number;
+  updatedAt: string;
+};
+
 // ─── Scenario controller ──────────────────────────────────────────────────────
 
 /** One conversation (personal chat) extracted from a Telegram export */
@@ -832,6 +840,15 @@ type TelegramScenarioState = TelegramState & {
   /** Visual flowchart diagram for the current agent+scope. */
   telegramDiagram: FlowDiagram | null;
   telegramDiagramLoading: boolean;
+  /** All saved diagrams for the current agent+scope. */
+  telegramDiagramList: DiagramSummary[];
+  telegramDiagramListLoading: boolean;
+  /** Coaching tips per chatId (generated on demand, persisted to DB). */
+  telegramCoachingTips: Record<string, CoachingTips>;
+  /** Set of chatIds for which coaching tips are currently loading. */
+  telegramCoachingLoading: Set<string>;
+  /** Set of chatIds whose coaching card is currently collapsed. */
+  telegramCoachingCollapsed: Set<string>;
 };
 
 export async function loadTelegramChatNodes(
@@ -917,10 +934,153 @@ export async function saveTelegramDiagram(
     });
     if (saved) {
       state.telegramDiagram = saved;
+      // Update the matching entry in the list (or prepend if new)
+      const summary: DiagramSummary = {
+        id: saved.id,
+        title: saved.title,
+        nodeCount: saved.nodes.length,
+        updatedAt: saved.updatedAt,
+      };
+      const idx = state.telegramDiagramList.findIndex((s) => s.id === saved.id);
+      if (idx >= 0) {
+        const next = [...state.telegramDiagramList];
+        next[idx] = summary;
+        state.telegramDiagramList = next;
+      } else {
+        state.telegramDiagramList = [summary, ...state.telegramDiagramList];
+      }
     }
   } catch {
     // non-fatal
   }
+}
+
+/** Load the list of diagram summaries for the current agent+scope. */
+export async function loadTelegramDiagramList(
+  state: TelegramScenarioState,
+  agentId: string,
+  scope: TrainingScope,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  state.telegramDiagramListLoading = true;
+  try {
+    const list = await state.client!.request<FlowDiagram[]>("telegram.scenario.listDiagrams", {
+      agentId,
+      scope,
+    });
+    state.telegramDiagramList = (list ?? []).map((d) => ({
+      id: d.id,
+      title: d.title,
+      nodeCount: d.nodes.length,
+      updatedAt: d.updatedAt,
+    }));
+  } catch {
+    // non-fatal
+  } finally {
+    state.telegramDiagramListLoading = false;
+  }
+}
+
+/** Load a specific diagram by ID and set it as the active diagram. */
+export async function selectTelegramDiagramById(
+  state: TelegramScenarioState,
+  agentId: string,
+  id: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  // We can re-use saveDiagram with getDiagram or just load the full list and find by id.
+  // Simplest: request the full list and find the matching entry.
+  try {
+    const list = await state.client!.request<FlowDiagram[]>("telegram.scenario.listDiagrams", {
+      agentId,
+      scope: state.telegramSchemaScope,
+    });
+    const found = (list ?? []).find((d) => d.id === id) ?? null;
+    if (found) {
+      state.telegramDiagram = found;
+    }
+  } catch {
+    // non-fatal
+  }
+}
+
+/** Delete a diagram by ID; also updates the in-memory list and resets active if needed. */
+export async function deleteTelegramDiagramById(
+  state: TelegramScenarioState,
+  id: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  try {
+    await state.client!.request("telegram.scenario.deleteDiagram", { id });
+    state.telegramDiagramList = state.telegramDiagramList.filter((s) => s.id !== id);
+    // If the deleted diagram was active, activate the next one (or clear)
+    if (state.telegramDiagram?.id === id) {
+      const next = state.telegramDiagramList[0];
+      if (next) {
+        // Load the full diagram from the server
+        await selectTelegramDiagramById(state, state.telegramDiagram.agentId, next.id);
+      } else {
+        state.telegramDiagram = null;
+      }
+    }
+  } catch {
+    // non-fatal
+  }
+}
+
+/** Rename a diagram title in DB and update in-memory list + active diagram. */
+export async function renameTelegramDiagram(
+  state: TelegramScenarioState,
+  id: string,
+  title: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  try {
+    await state.client!.request("telegram.scenario.renameDiagram", { id, title });
+    // Update list entry
+    state.telegramDiagramList = state.telegramDiagramList.map((s) =>
+      s.id === id ? { ...s, title } : s,
+    );
+    // Update active diagram if it's the renamed one
+    if (state.telegramDiagram?.id === id) {
+      state.telegramDiagram = { ...state.telegramDiagram, title };
+    }
+  } catch {
+    // non-fatal
+  }
+}
+
+/** Create a new blank diagram, save it to DB, add to list, and activate it. */
+export async function createNewTelegramDiagram(
+  state: TelegramScenarioState,
+  agentId: string,
+  scope: TrainingScope,
+  title = "Новая схема",
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  const now = new Date().toISOString();
+  const blank: FlowDiagram = {
+    id: crypto.randomUUID(),
+    agentId,
+    scope,
+    title,
+    nodes: [],
+    edges: [],
+    groups: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  await saveTelegramDiagram(state, blank);
 }
 
 /**
@@ -947,6 +1107,99 @@ export async function importTelegramDiagramFromImage(
     state.telegramDiagram = result;
   }
   return result ?? null;
+}
+
+/**
+ * Generate a new diagram from a text description, or modify the current diagram
+ * based on user instructions. The gateway uses the same AI adapter as the bot.
+ *
+ * @param prompt   Natural-language description or correction request.
+ * @param current  Existing diagram to modify; omit / pass null to generate fresh.
+ */
+export async function generateDiagramFromText(
+  state: TelegramScenarioState,
+  agentId: string,
+  scope: TrainingScope,
+  prompt: string,
+  current: FlowDiagram | null,
+): Promise<FlowDiagram | null> {
+  if (!isReady(state)) {
+    throw new Error("Нет соединения с сервером");
+  }
+  const result = await state.client!.request<FlowDiagram>("telegram.scenario.diagramFromText", {
+    agentId,
+    scope,
+    prompt,
+    ...(current && current.nodes.length > 0 ? { currentDiagram: current } : {}),
+  });
+  if (result) {
+    state.telegramDiagram = result;
+  }
+  return result ?? null;
+}
+
+/**
+ * Request AI coaching tips for a specific training conversation.
+ * Tips are cached in state by chatId so repeated requests are instant.
+ */
+export async function getCoachingTips(
+  state: TelegramScenarioState,
+  agentId: string,
+  chatId: string,
+  pairs: Array<{ input: string; response: string }>,
+): Promise<CoachingTips | null> {
+  if (!isReady(state)) {
+    throw new Error("Нет соединения с сервером");
+  }
+  if (pairs.length === 0) {
+    return null;
+  }
+
+  // Mark as loading (use a new Set to trigger reactivity)
+  const loadingSet = new Set(state.telegramCoachingLoading);
+  loadingSet.add(chatId);
+  state.telegramCoachingLoading = loadingSet;
+
+  try {
+    const result = await state.client!.request<CoachingTips>("telegram.scenario.getCoachingTips", {
+      agentId,
+      chatId,
+      pairs,
+    });
+    if (result) {
+      state.telegramCoachingTips = { ...state.telegramCoachingTips, [chatId]: result };
+    }
+    return result ?? null;
+  } finally {
+    const done = new Set(state.telegramCoachingLoading);
+    done.delete(chatId);
+    state.telegramCoachingLoading = done;
+  }
+}
+
+/**
+ * Load all persisted coaching tips for an agent from the gateway DB.
+ * Merges with any already-in-memory tips so nothing is lost.
+ */
+export async function loadCoachingTips(
+  state: TelegramScenarioState,
+  agentId: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  try {
+    const result = await state.client!.request<Record<string, CoachingTips>>(
+      "telegram.scenario.loadCoachingTips",
+      { agentId },
+    );
+    if (result && typeof result === "object") {
+      // Merge: in-memory tips are more recent; DB fills in missing ones
+      state.telegramCoachingTips = { ...result, ...state.telegramCoachingTips };
+    }
+  } catch {
+    // Non-fatal — tips are optional
+  }
 }
 
 export async function addTelegramChatNode(
@@ -1374,7 +1627,12 @@ export async function analyzeDialogChat(
     });
     // Plugin wraps results as { ok: true, data: actualResult }; unwrap before use
     const inner = (res?.data ?? res) as Record<string, unknown>;
-    return parseAnalysisResponse(inner);
+    const result = parseAnalysisResponse(inner);
+    // Fire-and-forget: generate coaching tips alongside the analysis result
+    if (result && group.pairs.length >= 2) {
+      void getCoachingTips(state, agentId, group.chatId, group.pairs);
+    }
+    return result;
   } catch {
     return null;
   }
@@ -1633,6 +1891,34 @@ export async function runBatchAnalysis(
     await flush();
     state.telegramBatchRunning = false;
   }
+
+  // Background: generate coaching tips for dialogs that were just analyzed (concurrency=2)
+  // Runs after batch so it doesn't compete with the analysis lane.
+  if (!abortRef.cancelled && isReady(state)) {
+    const tipsNeeded = toAnalyze.filter(
+      (g) => accumulated[g.chatId] && !state.telegramCoachingTips[g.chatId] && g.pairs.length >= 2,
+    );
+    if (tipsNeeded.length > 0) {
+      const TIPS_CONCURRENCY = 2;
+      let tipIdx = 0;
+      const tipsWorker = async () => {
+        while (tipIdx < tipsNeeded.length && !abortRef.cancelled) {
+          const ci = tipIdx++;
+          if (ci >= tipsNeeded.length) {
+            break;
+          }
+          const g = tipsNeeded[ci];
+          try {
+            await getCoachingTips(state, agentId, g.chatId, g.pairs);
+          } catch {
+            // Non-fatal — keep generating for others
+          }
+        }
+      };
+      // Fire-and-forget so the function returns immediately
+      void Promise.allSettled(Array.from({ length: TIPS_CONCURRENCY }, tipsWorker));
+    }
+  }
 }
 
 /** Cancel a running batch analysis. Safe to call even when not running. */
@@ -1860,9 +2146,81 @@ export async function sendWebchatMessage(
 // ─── Training persistence (gateway + localStorage fallback) ───────────────────
 
 const LS_TRAINING_PREFIX = "openclaw_tg_training_";
+const LS_SCOPE_PREFIX = "openclaw_tg_scope_";
 
 /** Training data scope — personal keeps data per-agent; shared is readable by all agents. */
 export type TrainingScope = "personal" | "shared";
+
+// ─── Coaching tips ────────────────────────────────────────────────────────────
+
+/** AI-generated coaching tips for a single training conversation. */
+export type CoachingTips = {
+  chatId: string;
+  /** Formatted text with numbered tips from the AI (already in Russian). */
+  content: string;
+  generatedAt: string;
+};
+
+// ─── Diagram knowledge base types ────────────────────────────────────────────
+
+/** A single training pair with quality score (3=success, 2=neutral, 1=fail). */
+export type DiagramKnowledgePair = {
+  input: string;
+  response: string;
+  score: number;
+  label?: "success" | "fail" | "neutral";
+};
+
+/** Training pairs assigned to one diagram node. */
+export type DiagramNodeKnowledge = {
+  nodeId: string;
+  nodeText: string;
+  pairs: DiagramKnowledgePair[];
+};
+
+/**
+ * Full knowledge base: training pairs distributed across diagram nodes via AI.
+ * Stored per (agentId, scope) and injected into the bot system prompt so it
+ * follows the conversation flow and uses grounded examples.
+ */
+export type DiagramKnowledgeBase = {
+  agentId: string;
+  scope: TrainingScope;
+  entries: DiagramNodeKnowledge[];
+  updatedAt: string;
+};
+
+/**
+ * Persist the selected scope for a given tab + agent so it survives page reloads.
+ * Tab is "training" or "schema"; agentId identifies which agent the choice belongs to.
+ */
+export function saveAgentScope(
+  tab: "training" | "schema",
+  agentId: string,
+  scope: TrainingScope,
+): void {
+  try {
+    localStorage.setItem(`${LS_SCOPE_PREFIX}${tab}_${agentId}`, scope);
+  } catch {
+    // Non-fatal — localStorage may be unavailable in some browsers/contexts.
+  }
+}
+
+/**
+ * Restore the last-saved scope for a given tab + agent.
+ * Returns "personal" as the default if nothing is persisted yet.
+ */
+export function loadAgentScope(tab: "training" | "schema", agentId: string): TrainingScope {
+  try {
+    const val = localStorage.getItem(`${LS_SCOPE_PREFIX}${tab}_${agentId}`);
+    if (val === "personal" || val === "shared") {
+      return val;
+    }
+  } catch {
+    // Non-fatal
+  }
+  return "personal";
+}
 
 export type TrainingSnapshot = {
   groups: TrainingGroup[];
@@ -2037,5 +2395,105 @@ export async function saveTelegramAgentFile(
     throw err;
   } finally {
     state.agentFileSaving = false;
+  }
+}
+
+// ─── Knowledge base controllers ──────────────────────────────────────────────
+
+/** Load the stored knowledge base for the given agent + scope. */
+export async function loadKnowledgeBase(
+  state: TelegramScenarioState,
+  agentId: string,
+  scope: TrainingScope,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  state.telegramKnowledgeBaseLoading = true;
+  try {
+    const result = await state.client!.request<DiagramKnowledgeBase | null>(
+      "telegram.scenario.getKnowledgeBase",
+      { agentId, scope },
+    );
+    state.telegramKnowledgeBase = result ?? null;
+  } catch {
+    state.telegramKnowledgeBase = null;
+  } finally {
+    state.telegramKnowledgeBaseLoading = false;
+  }
+}
+
+/**
+ * Ask the AI to distribute training pairs from the given scope to diagram nodes.
+ * Updates the stored knowledge base and returns it.
+ *
+ * Strategy for finding training data:
+ *   1. If the current training-tab scope matches `scope`, the groups are already
+ *      loaded in memory — pass them directly so no gateway snapshot is required.
+ *   2. Otherwise load the training snapshot for the target scope from the gateway
+ *      first, then pass the groups along with the request.
+ *   3. The gateway will use the provided groups when present and fall back to its
+ *      own saved snapshot only as a last resort.
+ */
+export async function distributeTrainingToNodes(
+  state: TelegramScenarioState,
+  agentId: string,
+  scope: TrainingScope,
+): Promise<DiagramKnowledgeBase | null> {
+  if (!isReady(state)) {
+    throw new Error("Нет соединения с сервером");
+  }
+  state.telegramKnowledgeBaseLoading = true;
+  try {
+    // Collect training groups for the matching scope.
+    let groups: TrainingGroup[] | undefined;
+    if (state.telegramTrainingScope === scope && state.telegramTrainingGroups.length > 0) {
+      // Happy path: the right scope is already active in the training tab.
+      groups = state.telegramTrainingGroups;
+    } else {
+      // Different scope active — try to load the snapshot from the gateway.
+      try {
+        const snap = await state.client!.request<{
+          groups?: TrainingGroup[];
+          labels?: Record<string, TrainingLabel>;
+        } | null>("telegram.scenario.getTrainingSnapshot", { agentId, scope });
+        if (snap?.groups && snap.groups.length > 0) {
+          groups = snap.groups;
+        }
+      } catch {
+        // Non-fatal: gateway will attempt to read its own snapshot.
+      }
+      // Also try localStorage as a further fallback.
+      if (!groups || groups.length === 0) {
+        try {
+          const lsKey = `${LS_TRAINING_PREFIX}${scope === "shared" ? "shared" : agentId}`;
+          const raw = localStorage.getItem(lsKey);
+          if (raw) {
+            const parsed = JSON.parse(raw) as { groups?: TrainingGroup[] };
+            if (parsed.groups && parsed.groups.length > 0) {
+              groups = parsed.groups;
+            }
+          }
+        } catch {
+          // Non-fatal
+        }
+      }
+    }
+
+    const result = await state.client!.request<DiagramKnowledgeBase>(
+      "telegram.scenario.distributeTrainingToNodes",
+      {
+        agentId,
+        scope,
+        // Send the groups so the gateway doesn't need a saved snapshot.
+        ...(groups && groups.length > 0 ? { groups } : {}),
+      },
+    );
+    if (result) {
+      state.telegramKnowledgeBase = result;
+    }
+    return result ?? null;
+  } finally {
+    state.telegramKnowledgeBaseLoading = false;
   }
 }

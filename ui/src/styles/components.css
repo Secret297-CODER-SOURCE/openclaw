@@ -3519,6 +3519,105 @@
   opacity: 0.85;
 }
 
+/* ── Coaching tips card (conversation panel) ──────────────────────────────── */
+
+.tg-coaching-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 16px 12px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.84em;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  width: calc(100% - 32px);
+  text-align: left;
+}
+.tg-coaching-trigger:hover {
+  border-color: #f59e0b;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.06);
+}
+
+.tg-coaching-card {
+  margin: 0 16px 12px;
+  border-radius: 8px;
+  border: 1px solid #3d3317;
+  background: #25200f;
+  padding: 10px 14px;
+}
+.tg-coaching-card--loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 0.85em;
+}
+.tg-coaching-loading-text {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+.tg-coaching-card--collapsed {
+  padding-bottom: 10px;
+}
+.tg-coaching-card--collapsed .tg-coaching-header {
+  margin-bottom: 0;
+}
+.tg-coaching-chevron {
+  font-size: 0.75em;
+  color: var(--text-muted);
+  margin-right: 2px;
+  user-select: none;
+}
+
+.tg-coaching-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+}
+.tg-coaching-icon {
+  font-size: 1em;
+}
+.tg-coaching-title {
+  font-size: 0.84em;
+  font-weight: 600;
+  color: #f59e0b;
+  flex: 1;
+}
+.tg-coaching-refresh {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1em;
+  padding: 0 4px;
+  line-height: 1;
+  border-radius: 4px;
+  transition: color 0.12s;
+}
+.tg-coaching-refresh:hover { color: #f59e0b; }
+
+.tg-coaching-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.tg-coaching-line {
+  font-size: 0.82em;
+  line-height: 1.5;
+  color: var(--text);
+  opacity: 0.9;
+}
+
 /* ── Batch analysis progress bar (training toolbar) ──────────────────────── */
 
 .tg-batch-progress-wrap {

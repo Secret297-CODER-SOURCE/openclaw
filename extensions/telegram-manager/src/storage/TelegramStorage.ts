@@ -158,6 +158,25 @@ export class TelegramStorage {
         updated_at  TEXT NOT NULL
       );
 
+      -- Stores the AI-distributed knowledge base: training pairs mapped to diagram nodes.
+      -- One row per (agent_id, scope) pair; replaced atomically on each save.
+      CREATE TABLE IF NOT EXISTS tg_diagram_knowledge (
+        agent_id   TEXT NOT NULL,
+        scope      TEXT NOT NULL DEFAULT 'personal',
+        data_json  TEXT NOT NULL DEFAULT '{"entries":[]}',
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (agent_id, scope)
+      );
+
+      -- Stores AI coaching tips per dialog, persisted so they survive restarts.
+      CREATE TABLE IF NOT EXISTS tg_coaching_tips (
+        agent_id     TEXT NOT NULL,
+        chat_id      TEXT NOT NULL,
+        content      TEXT NOT NULL,
+        generated_at TEXT NOT NULL,
+        PRIMARY KEY (agent_id, chat_id)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_tg_events_agent ON tg_events(agent_id);
       CREATE INDEX IF NOT EXISTS idx_tg_parsed_agent ON tg_parsed(agent_id);
       CREATE INDEX IF NOT EXISTS idx_agent_missions_master ON agent_missions(master_agent_id);
@@ -546,6 +565,68 @@ export class TelegramStorage {
     }
   }
 
+  // ─── Diagram knowledge base ──────────────────────────────────────────────
+
+  /**
+   * Retrieve the AI-distributed knowledge base for a given agent + scope.
+   * Returns null when no knowledge base has been saved yet.
+   */
+  getKnowledgeBase(agentId: string, scope: "personal" | "shared"): Record<string, unknown> | null {
+    const row = this.db
+      .prepare("SELECT data_json FROM tg_diagram_knowledge WHERE agent_id = ? AND scope = ?")
+      .get(agentId, scope) as { data_json: string } | undefined;
+    if (!row) return null;
+    try {
+      return JSON.parse(row.data_json) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Persist the knowledge base for an agent + scope, replacing any previous value. */
+  saveKnowledgeBase(
+    agentId: string,
+    scope: "personal" | "shared",
+    data: Record<string, unknown>,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO tg_diagram_knowledge (agent_id, scope, data_json, updated_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(agentId, scope, JSON.stringify(data), new Date().toISOString());
+  }
+
+  // ─── Coaching tips ───────────────────────────────────────────────────────
+
+  /** Load all coaching tips for an agent, keyed by chatId. */
+  getCoachingTips(
+    agentId: string,
+  ): Record<string, { chatId: string; content: string; generatedAt: string }> {
+    const rows = this.db
+      .prepare("SELECT chat_id, content, generated_at FROM tg_coaching_tips WHERE agent_id = ?")
+      .all(agentId) as Array<{ chat_id: string; content: string; generated_at: string }>;
+    const result: Record<string, { chatId: string; content: string; generatedAt: string }> = {};
+    for (const row of rows) {
+      result[row.chat_id] = {
+        chatId: row.chat_id,
+        content: row.content,
+        generatedAt: row.generated_at,
+      };
+    }
+    return result;
+  }
+
+  /** Persist a single coaching tip for a dialog, replacing any previous value. */
+  saveCoachingTip(agentId: string, chatId: string, content: string, generatedAt: string): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO tg_coaching_tips (agent_id, chat_id, content, generated_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(agentId, chatId, content, generatedAt);
+  }
+
   // ─── Agent workspace ─────────────────────────────────────────────────────
 
   /** Returns the workspace directory path for a given agent (may not exist yet). */
@@ -698,6 +779,28 @@ export class TelegramStorage {
       )
       .get(agentId, scope) as Record<string, unknown> | undefined;
     return row ? this.toFlowDiagram(row) : null;
+  }
+
+  /** List all saved diagrams for an agent+scope, newest first. */
+  listDiagrams(agentId: string, scope: "personal" | "shared" = "personal"): FlowDiagram[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM tg_flow_diagrams WHERE agent_id = ? AND scope = ? ORDER BY updated_at DESC",
+      )
+      .all(agentId, scope) as Record<string, unknown>[];
+    return rows.map((r) => this.toFlowDiagram(r));
+  }
+
+  /** Delete a diagram by its primary-key id. */
+  deleteDiagram(id: string): void {
+    this.db.prepare("DELETE FROM tg_flow_diagrams WHERE id = ?").run(id);
+  }
+
+  /** Rename a diagram (update title only). */
+  renameDiagram(id: string, title: string): void {
+    this.db
+      .prepare("UPDATE tg_flow_diagrams SET title = ?, updated_at = ? WHERE id = ?")
+      .run(title, new Date().toISOString(), id);
   }
 
   saveDiagram(d: FlowDiagram): void {

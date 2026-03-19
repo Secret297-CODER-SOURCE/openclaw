@@ -343,6 +343,352 @@ export class TgDiagramEditor extends LitElement {
       opacity: 0.6;
       cursor: wait;
     }
+    .tool-btn.tb-knowledge {
+      color: #a78bfa;
+      border-color: rgba(167, 139, 250, 0.3);
+    }
+    .tool-btn.tb-knowledge:hover:not(:disabled) {
+      background: rgba(167, 139, 250, 0.1);
+    }
+    .tool-btn.tb-knowledge.active {
+      background: rgba(167, 139, 250, 0.18);
+      border-color: rgba(167, 139, 250, 0.6);
+    }
+    /* ── KB panel ── */
+    .kb-panel {
+      border-bottom: 1px solid var(--border, #27272a);
+      background: #111;
+      padding: 10px 12px;
+      max-height: 340px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .kb-panel__header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .kb-panel__title {
+      font-size: 11px;
+      font-weight: 700;
+      color: #a78bfa;
+      letter-spacing: 0.04em;
+    }
+    .kb-panel__actions {
+      display: flex;
+      gap: 6px;
+    }
+    .kb-btn-distribute {
+      font-size: 10px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      border: 1px solid rgba(167, 139, 250, 0.4);
+      background: rgba(167, 139, 250, 0.1);
+      color: #a78bfa;
+      cursor: pointer;
+    }
+    .kb-btn-distribute:disabled {
+      opacity: 0.55;
+      cursor: wait;
+    }
+    .kb-btn-close {
+      font-size: 11px;
+      padding: 2px 7px;
+      border-radius: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: transparent;
+      color: #9ca3af;
+      cursor: pointer;
+    }
+    .kb-btn-close:hover {
+      background: rgba(255, 255, 255, 0.06);
+    }
+    .kb-loading,
+    .kb-empty {
+      font-size: 11px;
+      color: #6b7280;
+      padding: 4px 0;
+    }
+    .kb-empty p {
+      margin: 2px 0;
+    }
+    .kb-entries {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .kb-node {
+      border: 1px solid rgba(167, 139, 250, 0.2);
+      border-radius: 6px;
+      padding: 6px 8px;
+    }
+    .kb-node__title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+    .kb-node__name {
+      font-size: 11px;
+      font-weight: 600;
+      color: #d1d5db;
+    }
+    .kb-node__count {
+      font-size: 10px;
+      color: #6b7280;
+    }
+    .kb-pairs {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .kb-pair {
+      display: flex;
+      gap: 6px;
+      align-items: flex-start;
+      font-size: 10px;
+    }
+    .kb-pair__score {
+      color: #fbbf24;
+      flex-shrink: 0;
+      font-size: 9px;
+      padding-top: 1px;
+    }
+    .kb-pair__content {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+    .kb-pair__q {
+      color: #e5e7eb;
+    }
+    .kb-pair__a {
+      color: #9ca3af;
+    }
+    .kb-more {
+      font-size: 10px;
+      color: #6b7280;
+      padding-left: 20px;
+    }
+    .kb-panel__footer {
+      font-size: 9px;
+      color: #4b5563;
+      margin-top: 2px;
+    }
+    /* ── Collections panel ── */
+    .tool-btn.tb-collections {
+      color: #34d399;
+      border-color: rgba(52, 211, 153, 0.3);
+    }
+    .tool-btn.tb-collections:hover:not(:disabled) {
+      background: rgba(52, 211, 153, 0.1);
+    }
+    .tool-btn.tb-collections.active {
+      background: rgba(52, 211, 153, 0.15);
+      border-color: rgba(52, 211, 153, 0.55);
+    }
+    .collections-panel {
+      border-bottom: 1px solid var(--border, #27272a);
+      background: #0f1710;
+      padding: 10px 12px;
+      max-height: 300px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .collections-panel__header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .collections-panel__title {
+      font-size: 11px;
+      font-weight: 700;
+      color: #34d399;
+      letter-spacing: 0.04em;
+    }
+    .collections-new-btn {
+      font-size: 10px;
+      padding: 3px 9px;
+      border-radius: 4px;
+      border: 1px solid rgba(52, 211, 153, 0.4);
+      background: rgba(52, 211, 153, 0.1);
+      color: #34d399;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .collections-new-btn:hover {
+      background: rgba(52, 211, 153, 0.2);
+    }
+    .collections-empty {
+      font-size: 11px;
+      color: #6b7280;
+      padding: 8px 0;
+      line-height: 1.5;
+    }
+    .collections-list {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .collections-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      border-radius: 5px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition:
+        background 0.12s,
+        border-color 0.12s;
+    }
+    .collections-item:hover {
+      background: rgba(255, 255, 255, 0.04);
+      border-color: rgba(255, 255, 255, 0.07);
+    }
+    .collections-item--active {
+      background: rgba(52, 211, 153, 0.1);
+      border-color: rgba(52, 211, 153, 0.35);
+      cursor: default;
+    }
+    .collections-item__main {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      flex: 1;
+      min-width: 0;
+    }
+    .collections-item__title {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text, #e5e7eb);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .collections-item--active .collections-item__title {
+      color: #34d399;
+    }
+    .collections-item__meta {
+      font-size: 10px;
+      color: #6b7280;
+    }
+    .collections-item__actions {
+      display: flex;
+      gap: 4px;
+      flex-shrink: 0;
+      opacity: 0;
+      transition: opacity 0.1s;
+    }
+    .collections-item:hover .collections-item__actions,
+    .collections-item--active .collections-item__actions {
+      opacity: 1;
+    }
+    .collections-action-btn {
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 4px;
+      color: #9ca3af;
+      cursor: pointer;
+      font-size: 10px;
+      padding: 2px 5px;
+      line-height: 1.4;
+      transition:
+        color 0.1s,
+        border-color 0.1s;
+    }
+    .collections-action-btn:hover {
+      color: #e5e7eb;
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+    .collections-action-btn--danger:hover {
+      color: #f87171;
+      border-color: rgba(248, 113, 113, 0.4);
+    }
+    .collections-rename-input {
+      font-size: 12px;
+      font-family: inherit;
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(52, 211, 153, 0.5);
+      border-radius: 4px;
+      color: #34d399;
+      padding: 2px 6px;
+      width: 100%;
+      outline: none;
+    }
+    /* ── AI prompt bar ── */
+    .ai-prompt-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border, #27272a);
+      background: #0d0d0d;
+    }
+    .ai-prompt-bar__icon {
+      font-size: 14px;
+      flex-shrink: 0;
+      color: #818cf8;
+    }
+    .ai-prompt-bar__input {
+      flex: 1;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(129, 140, 248, 0.25);
+      border-radius: 6px;
+      color: #e5e7eb;
+      font-size: 11px;
+      padding: 5px 8px;
+      outline: none;
+      font-family: inherit;
+      resize: none;
+      min-height: 28px;
+      max-height: 80px;
+      overflow-y: auto;
+      line-height: 1.4;
+    }
+    .ai-prompt-bar__input:focus {
+      border-color: rgba(129, 140, 248, 0.6);
+      background: rgba(129, 140, 248, 0.07);
+    }
+    .ai-prompt-bar__input::placeholder {
+      color: #4b5563;
+    }
+    .ai-prompt-bar__btn {
+      flex-shrink: 0;
+      padding: 5px 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(129, 140, 248, 0.4);
+      background: rgba(129, 140, 248, 0.12);
+      color: #818cf8;
+      font-size: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .ai-prompt-bar__btn:hover:not(:disabled) {
+      background: rgba(129, 140, 248, 0.22);
+      border-color: rgba(129, 140, 248, 0.7);
+    }
+    .ai-prompt-bar__btn:disabled {
+      opacity: 0.5;
+      cursor: wait;
+    }
+    .ai-prompt-bar__error {
+      font-size: 10px;
+      color: #f87171;
+      flex-shrink: 0;
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .import-error {
       font-size: 10px;
       color: #ff7070;
@@ -533,6 +879,56 @@ export class TgDiagramEditor extends LitElement {
   @property({ attribute: false })
   onImportImage: ((base64: string, mime: string) => Promise<FlowDiagram | null>) | null = null;
 
+  /** Called to load existing knowledge base for the current agent+scope. */
+  @property({ attribute: false })
+  onLoadKnowledgeBase: (() => Promise<void>) | null = null;
+
+  /** Called to run AI distribution of training pairs across diagram nodes. */
+  @property({ attribute: false })
+  onDistributeTraining: (() => Promise<void>) | null = null;
+
+  /** Current knowledge base data (injected from parent). */
+  @property({ attribute: false })
+  knowledgeBase: import("../controllers/telegram.ts").DiagramKnowledgeBase | null = null;
+
+  /** Whether the knowledge base is being loaded/distributed. */
+  @property({ type: Boolean })
+  knowledgeBaseLoading = false;
+
+  /**
+   * Called with a natural-language prompt (and the current diagram for modifications).
+   * Returns the AI-generated or AI-modified diagram.
+   */
+  @property({ attribute: false })
+  onGenerateDiagramFromText:
+    | ((
+        prompt: string,
+        current: import("../controllers/telegram.ts").FlowDiagram | null,
+      ) => Promise<import("../controllers/telegram.ts").FlowDiagram | null>)
+    | null = null;
+
+  /** Summary list of all saved diagrams for this agent+scope. */
+  @property({ attribute: false })
+  diagramList: import("../controllers/telegram.ts").DiagramSummary[] = [];
+
+  @property({ type: Boolean }) diagramListLoading = false;
+
+  /** Called when user picks a diagram from the collection. */
+  @property({ attribute: false })
+  onSelectDiagram: ((id: string) => void) | null = null;
+
+  /** Called when user deletes a diagram from the collection. */
+  @property({ attribute: false })
+  onDeleteDiagram: ((id: string) => void) | null = null;
+
+  /** Called when user renames a diagram in the collection. */
+  @property({ attribute: false })
+  onRenameDiagram: ((id: string, title: string) => void) | null = null;
+
+  /** Called when user clicks "New diagram". */
+  @property({ attribute: false })
+  onNewDiagram: (() => void) | null = null;
+
   @state() private tool: Tool = "select";
   @state() private selectedIds: Set<string> = new Set();
   @state() private dragging: DragState | null = null;
@@ -546,6 +942,13 @@ export class TgDiagramEditor extends LitElement {
   @state() private saveStatus: "saved" | "saving" | "" = "";
   @state() private importing = false;
   @state() private importError: string | null = null;
+  @state() private kbPanelOpen = false;
+  @state() private collectionsOpen = false;
+  @state() private renamingId: string | null = null;
+  @state() private renameValue = "";
+  @state() private aiPrompt = "";
+  @state() private aiGenerating = false;
+  @state() private aiError: string | null = null;
 
   private _saveTimer: ReturnType<typeof setTimeout> | null = null;
   private _spaceDown = false;
@@ -1258,6 +1661,9 @@ export class TgDiagramEditor extends LitElement {
     return html`
       ${this._renderScopeRow()}
       ${this._renderToolbar()}
+      ${this.kbPanelOpen ? this._renderKbPanel() : nothing}
+      ${this.collectionsOpen ? this._renderCollectionsPanel() : nothing}
+      ${this._renderAiPromptBar()}
       <div class="canvas-wrap">
         <svg
           class="canvas ${canvasCursor}"
@@ -1330,6 +1736,289 @@ export class TgDiagramEditor extends LitElement {
         </div>
       </div>
     `;
+  }
+
+  private _renderKbPanel() {
+    const kb = this.knowledgeBase;
+    const loading = this.knowledgeBaseLoading;
+    const scopeLabel = this.scope === "shared" ? "Общая" : "Личная";
+    const scoreStars = (s: number) => (s === 3 ? "★★★" : s === 2 ? "★★" : "★");
+
+    return html`
+      <div class="kb-panel">
+        <div class="kb-panel__header">
+          <span class="kb-panel__title">📚 База знаний — ${scopeLabel}</span>
+          <div class="kb-panel__actions">
+            <button class="kb-btn-distribute"
+              ?disabled=${loading || !this.onDistributeTraining}
+              title="ИИ автоматически распределяет пары из раздела «Обучение» по узлам схемы"
+              @click=${async () => {
+                if (this.onDistributeTraining) {
+                  await this.onDistributeTraining();
+                }
+              }}>
+              ${loading ? "⏳ Обработка…" : "🤖 Автораспределить"}
+            </button>
+            <button class="kb-btn-close" @click=${() => {
+              this.kbPanelOpen = false;
+            }}
+              title="Закрыть">✕</button>
+          </div>
+        </div>
+
+        ${
+          loading
+            ? html`
+                <div class="kb-loading">Загрузка…</div>
+              `
+            : nothing
+        }
+
+        ${
+          !loading && (!kb || kb.entries.length === 0)
+            ? html`
+              <div class="kb-empty">
+                <p>База знаний пуста.</p>
+                <p>Убедитесь, что в разделе «Обучение» (${scopeLabel}) есть данные и создана схема,
+                   затем нажмите <strong>🤖 Автораспределить</strong>.</p>
+              </div>
+            `
+            : nothing
+        }
+
+        ${
+          kb && kb.entries.length > 0
+            ? html`
+              <div class="kb-entries">
+                ${kb.entries.map(
+                  (entry) => html`
+                    <div class="kb-node">
+                      <div class="kb-node__title">
+                        <span class="kb-node__name">${entry.nodeText}</span>
+                        <span class="kb-node__count">${entry.pairs.length} пар</span>
+                      </div>
+                      <div class="kb-pairs">
+                        ${entry.pairs.slice(0, 5).map(
+                          (pair) => html`
+                            <div class="kb-pair">
+                              <span class="kb-pair__score" title="Оценка качества">${scoreStars(pair.score)}</span>
+                              <div class="kb-pair__content">
+                                <div class="kb-pair__q">${pair.input}</div>
+                                <div class="kb-pair__a">→ ${pair.response}</div>
+                              </div>
+                            </div>
+                          `,
+                        )}
+                        ${
+                          entry.pairs.length > 5
+                            ? html`<div class="kb-more">+ ещё ${entry.pairs.length - 5} пар…</div>`
+                            : nothing
+                        }
+                      </div>
+                    </div>
+                  `,
+                )}
+              </div>
+              <div class="kb-panel__footer">
+                Обновлено: ${kb.updatedAt ? new Date(kb.updatedAt).toLocaleString("ru") : "—"}
+              </div>
+            `
+            : nothing
+        }
+      </div>
+    `;
+  }
+
+  private _renderCollectionsPanel() {
+    const list = this.diagramList;
+    const activeid = this.diagram?.id ?? null;
+
+    const fmtDate = (iso: string) => {
+      try {
+        const d = new Date(iso);
+        return `${d.getDate().toString().padStart(2, "0")}.${(d.getMonth() + 1).toString().padStart(2, "0")} ${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+      } catch {
+        return iso.slice(0, 10);
+      }
+    };
+
+    return html`
+      <div class="collections-panel">
+        <div class="collections-panel__header">
+          <span class="collections-panel__title">🗂 Набор схем</span>
+          <div style="display:flex;gap:6px;align-items:center;">
+            ${
+              this.onNewDiagram
+                ? html`<button class="collections-new-btn"
+                  title="Создать новую пустую схему"
+                  @click=${() => {
+                    this.onNewDiagram!();
+                  }}>
+                  ＋ Новая
+                </button>`
+                : nothing
+            }
+            <button class="kb-btn-close" @click=${() => {
+              this.collectionsOpen = false;
+            }} title="Закрыть">✕</button>
+          </div>
+        </div>
+
+        ${
+          this.diagramListLoading
+            ? html`
+                <div class="collections-empty">Загрузка…</div>
+              `
+            : list.length === 0
+              ? html`
+                  <div class="collections-empty">
+                    Нет сохранённых схем.<br />Нажмите <strong>＋ Новая</strong> чтобы создать.
+                  </div>
+                `
+              : html`<div class="collections-list">
+                ${list.map((item) => {
+                  const isActive = item.id === activeid;
+                  const isRenaming = this.renamingId === item.id;
+                  return html`
+                    <div class="collections-item ${isActive ? "collections-item--active" : ""}">
+                      <div class="collections-item__main"
+                        @click=${() => {
+                          if (!isActive && this.onSelectDiagram) {
+                            this.onSelectDiagram(item.id);
+                          }
+                        }}>
+                        ${
+                          isRenaming
+                            ? html`<input
+                              class="collections-rename-input"
+                              .value=${this.renameValue}
+                              @input=${(e: InputEvent) => {
+                                this.renameValue = (e.target as HTMLInputElement).value;
+                              }}
+                              @keydown=${(e: KeyboardEvent) => {
+                                if (e.key === "Enter") {
+                                  if (this.renameValue.trim() && this.onRenameDiagram) {
+                                    this.onRenameDiagram(item.id, this.renameValue.trim());
+                                  }
+                                  this.renamingId = null;
+                                } else if (e.key === "Escape") {
+                                  this.renamingId = null;
+                                }
+                              }}
+                              @blur=${() => {
+                                if (this.renameValue.trim() && this.onRenameDiagram) {
+                                  this.onRenameDiagram(item.id, this.renameValue.trim());
+                                }
+                                this.renamingId = null;
+                              }}
+                              @click=${(e: MouseEvent) => e.stopPropagation()}
+                            />`
+                            : html`<span class="collections-item__title">${item.title}</span>`
+                        }
+                        <span class="collections-item__meta">${item.nodeCount} уз · ${fmtDate(item.updatedAt)}</span>
+                      </div>
+                      <div class="collections-item__actions">
+                        <button class="collections-action-btn" title="Переименовать"
+                          @click=${(e: MouseEvent) => {
+                            e.stopPropagation();
+                            this.renamingId = item.id;
+                            this.renameValue = item.title;
+                            // Focus the input on next tick
+                            void this.updateComplete.then(() => {
+                              this.renderRoot.querySelector(".collections-rename-input")?.focus();
+                            });
+                          }}>✏</button>
+                        ${
+                          this.onDeleteDiagram && list.length > 1
+                            ? html`<button class="collections-action-btn collections-action-btn--danger" title="Удалить схему"
+                              @click=${(e: MouseEvent) => {
+                                e.stopPropagation();
+                                if (confirm(`Удалить схему «${item.title}»?`)) {
+                                  this.onDeleteDiagram!(item.id);
+                                }
+                              }}>🗑</button>`
+                            : nothing
+                        }
+                      </div>
+                    </div>
+                  `;
+                })}
+              </div>`
+        }
+      </div>
+    `;
+  }
+
+  private _renderAiPromptBar() {
+    const canGenerate = !!this.onGenerateDiagramFromText;
+    const hasNodes = (this.diagram?.nodes?.length ?? 0) > 0;
+    const placeholder = canGenerate
+      ? hasNodes
+        ? "Опишите корректировку схемы…  (напр. «Добавь узел согласования после узла Презентации»)"
+        : "Опишите схему словами…  (напр. «Схема продаж: приветствие → выявление потребностей → презентация → закрытие»)"
+      : "Выберите агента для генерации схемы через ИИ";
+
+    return html`
+      <div class="ai-prompt-bar">
+        <span class="ai-prompt-bar__icon">✨</span>
+        <textarea
+          class="ai-prompt-bar__input"
+          rows="1"
+          .value=${this.aiPrompt}
+          placeholder="${placeholder}"
+          ?disabled=${this.aiGenerating || !canGenerate}
+          @input=${(e: Event) => {
+            this.aiPrompt = (e.target as HTMLTextAreaElement).value;
+            this.aiError = null;
+          }}
+          @keydown=${(e: KeyboardEvent) => {
+            // Ctrl/Cmd+Enter submits; plain Enter adds newline
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault();
+              void this._submitAiPrompt();
+            }
+          }}
+        ></textarea>
+        <button class="ai-prompt-bar__btn"
+          ?disabled=${this.aiGenerating || !canGenerate || !this.aiPrompt.trim()}
+          @click=${() => void this._submitAiPrompt()}>
+          ${this.aiGenerating ? "⏳" : hasNodes ? "✏ Изменить" : "✨ Создать"}
+        </button>
+        ${
+          this.aiError
+            ? html`<span class="ai-prompt-bar__error" title="${this.aiError}">⚠ ${this.aiError}</span>`
+            : nothing
+        }
+      </div>
+    `;
+  }
+
+  private async _submitAiPrompt() {
+    const prompt = this.aiPrompt.trim();
+    if (!prompt || !this.onGenerateDiagramFromText || this.aiGenerating) {
+      return;
+    }
+    this.aiGenerating = true;
+    this.aiError = null;
+    try {
+      const result = await this.onGenerateDiagramFromText(prompt, this.diagram);
+      if (result) {
+        this.diagram = result;
+        this.aiPrompt = "";
+        // Fit the view to the new content
+        const b = this._bounds();
+        if (b.w > 0 && b.h > 0) {
+          this.vb = { x: b.x - 40, y: b.y - 40, w: b.w + 80, h: b.h + 80 };
+        }
+      }
+    } catch (err) {
+      this.aiError = err instanceof Error ? err.message : String(err);
+      setTimeout(() => {
+        this.aiError = null;
+      }, 6000);
+    } finally {
+      this.aiGenerating = false;
+    }
   }
 
   private _renderToolbar() {
@@ -1416,6 +2105,28 @@ export class TgDiagramEditor extends LitElement {
             ? html`<span class="import-error" title="${this.importError}">⚠ ${this.importError}</span>`
             : nothing
         }
+        <button class="tool-btn tb-knowledge ${this.kbPanelOpen ? "active" : ""}"
+          title="${
+            this.onLoadKnowledgeBase
+              ? "Открыть базу знаний (обучение ↔ схема)"
+              : "Выберите агента и откройте схему чтобы использовать базу знаний"
+          }"
+          ?disabled=${!this.onLoadKnowledgeBase}
+          @click=${async () => {
+            if (!this.kbPanelOpen && this.onLoadKnowledgeBase) {
+              await this.onLoadKnowledgeBase();
+            }
+            this.kbPanelOpen = !this.kbPanelOpen;
+          }}>
+          📚 База
+        </button>
+        <button class="tool-btn tb-collections ${this.collectionsOpen ? "active" : ""}"
+          title="Набор схем — сохранённые версии"
+          @click=${() => {
+            this.collectionsOpen = !this.collectionsOpen;
+          }}>
+          🗂 Набор
+        </button>
         <span class="save-badge ${this.saveStatus}">
           ${this.saveStatus === "saving" ? "⏳ Сохранение…" : this.saveStatus === "saved" ? "✓ Сохранено" : ""}
         </span>

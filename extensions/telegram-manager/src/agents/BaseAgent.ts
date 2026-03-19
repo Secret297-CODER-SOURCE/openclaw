@@ -231,6 +231,11 @@ export abstract class BaseAgent extends EventEmitter {
       );
     }
 
+    // Inject diagram flow + knowledge base so the agent strictly follows the
+    // sales/conversation script and uses grounded training examples in replies.
+    const kbSection = await this.buildKnowledgeBaseSection();
+    if (kbSection) sections.push(kbSection);
+
     if (sections.length === 0) {
       // No workspace files configured — use sensible fallbacks.
       return task
@@ -241,6 +246,71 @@ export abstract class BaseAgent extends EventEmitter {
     }
 
     return `You are a Telegram agent.\n\n${sections.join("\n\n")}`;
+  }
+
+  /**
+   * Build a system-prompt section that injects the diagram flow and its
+   * knowledge base (training examples per node) into the conversation context.
+   *
+   * Priority: personal KB first; falls back to shared KB when personal is empty.
+   * Returns an empty string when no diagram or knowledge base is configured.
+   */
+  private async buildKnowledgeBaseSection(): Promise<string> {
+    // Try personal scope first, then shared
+    for (const scope of ["personal", "shared"] as const) {
+      const diagram = this.storage.getDiagram(this.id, scope);
+      if (!diagram || diagram.nodes.length === 0) continue;
+
+      const raw = this.storage.getKnowledgeBase(this.id, scope);
+      if (!raw) continue;
+
+      const entries = raw.entries as
+        | Array<{
+            nodeId: string;
+            nodeText: string;
+            pairs: Array<{ input: string; response: string; score: number; label?: string }>;
+          }>
+        | undefined;
+      if (!entries || entries.length === 0) continue;
+
+      // Build a readable flow description from the diagram
+      const scoreLabel = (s: number) => (s === 3 ? "★★★" : s === 2 ? "★★" : "★");
+      const nodeLines: string[] = [];
+
+      for (const node of diagram.nodes) {
+        nodeLines.push(`• [${node.type.toUpperCase()}] ${node.text}`);
+      }
+      const edgeLines = diagram.edges
+        .map((e) => {
+          const src = diagram.nodes.find((n) => n.id === e.sourceId)?.text ?? e.sourceId;
+          const tgt = diagram.nodes.find((n) => n.id === e.targetId)?.text ?? e.targetId;
+          return `  ${src} → ${tgt}${e.label ? ` (${e.label})` : ""}`;
+        })
+        .join("\n");
+
+      const kbParts: string[] = [];
+      for (const entry of entries) {
+        if (!entry.pairs || entry.pairs.length === 0) continue;
+        const pairLines = entry.pairs
+          .slice(0, 5) // top-5 examples per node to keep prompt compact
+          .map((pr) => `  Q: ${pr.input}\n  A: ${pr.response} ${scoreLabel(pr.score)}`)
+          .join("\n");
+        kbParts.push(`### ${entry.nodeText}\n${pairLines}`);
+      }
+
+      if (kbParts.length === 0) continue;
+
+      return (
+        `## Conversation Flow (${scope === "shared" ? "Shared" : "Personal"})\n` +
+        `Follow this flow strictly during the conversation:\n` +
+        nodeLines.join("\n") +
+        (edgeLines ? `\nTransitions:\n${edgeLines}` : "") +
+        `\n\n## Knowledge Base — Example Dialogues by Step\n` +
+        `Use these verified examples as a guide for your responses. Higher ★ = better outcome.\n\n` +
+        kbParts.join("\n\n")
+      );
+    }
+    return "";
   }
 
   /** Read a file from the agent workspace directory, returning "" when absent. */

@@ -165,14 +165,37 @@ export type TelegramProps = {
   ) => void;
   diagram: import("../controllers/telegram.ts").FlowDiagram | null;
   diagramLoading: boolean;
+  diagramList: import("../controllers/telegram.ts").DiagramSummary[];
+  diagramListLoading: boolean;
   onLoadDiagram: (agentId: string) => void;
   onSaveDiagram: (diagram: import("../controllers/telegram.ts").FlowDiagram) => void;
+  onSelectDiagram: ((id: string) => void) | null;
+  onDeleteDiagram: ((id: string) => void) | null;
+  onRenameDiagram: ((id: string, title: string) => void) | null;
+  onNewDiagram: (() => void) | null;
   onImportDiagramFromImage:
     | ((
         base64: string,
         mime: string,
       ) => Promise<import("../controllers/telegram.ts").FlowDiagram | null>)
     | null;
+  onLoadKnowledgeBase: (() => Promise<void>) | null;
+  onDistributeTraining: (() => Promise<void>) | null;
+  knowledgeBase: import("../controllers/telegram.ts").DiagramKnowledgeBase | null;
+  knowledgeBaseLoading: boolean;
+  onGenerateDiagramFromText:
+    | ((
+        prompt: string,
+        current: import("../controllers/telegram.ts").FlowDiagram | null,
+      ) => Promise<import("../controllers/telegram.ts").FlowDiagram | null>)
+    | null;
+  onGetCoachingTips:
+    | ((chatId: string, pairs: Array<{ input: string; response: string }>) => Promise<void>)
+    | null;
+  onToggleCoachingCollapsed: ((chatId: string) => void) | null;
+  coachingTips: Record<string, import("../controllers/telegram.ts").CoachingTips>;
+  coachingLoading: Set<string>;
+  coachingCollapsed: Set<string>;
   trainingPairs: TrainingPair[];
   trainingGroups: TrainingGroup[];
   trainingGroupsLimit: number;
@@ -1035,9 +1058,25 @@ function renderDetail(props: TelegramProps) {
     onSchemaScopeChange: props.onSchemaScopeChange,
     diagram: props.diagram,
     diagramLoading: props.diagramLoading,
+    diagramList: props.diagramList,
+    diagramListLoading: props.diagramListLoading,
     onLoadDiagram: props.onLoadDiagram,
     onSaveDiagram: props.onSaveDiagram,
+    onSelectDiagram: props.onSelectDiagram,
+    onDeleteDiagram: props.onDeleteDiagram,
+    onRenameDiagram: props.onRenameDiagram,
+    onNewDiagram: props.onNewDiagram,
     onImportDiagramFromImage: props.onImportDiagramFromImage,
+    onLoadKnowledgeBase: props.onLoadKnowledgeBase,
+    onDistributeTraining: props.onDistributeTraining,
+    knowledgeBase: props.knowledgeBase,
+    knowledgeBaseLoading: props.knowledgeBaseLoading,
+    onGenerateDiagramFromText: props.onGenerateDiagramFromText,
+    onGetCoachingTips: props.onGetCoachingTips,
+    onToggleCoachingCollapsed: props.onToggleCoachingCollapsed,
+    coachingTips: props.coachingTips,
+    coachingLoading: props.coachingLoading,
+    coachingCollapsed: props.coachingCollapsed,
     trainingLabels: props.trainingLabels,
     analysisResult: props.analysisResult,
     analysisLoading: props.analysisLoading,

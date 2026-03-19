@@ -83,7 +83,12 @@ import {
   loadTelegramChatNodes,
   loadTelegramFlowNodes,
   loadTelegramDiagram,
+  loadTelegramDiagramList,
   saveTelegramDiagram,
+  selectTelegramDiagramById,
+  deleteTelegramDiagramById,
+  renameTelegramDiagram,
+  createNewTelegramDiagram,
   importTelegramDiagramFromImage,
   addTelegramChatNode,
   deleteTelegramChatNode,
@@ -94,6 +99,13 @@ import {
   cancelBatchAnalysis,
   saveTrainingToGateway,
   loadTrainingFromGateway,
+  saveAgentScope,
+  loadAgentScope,
+  loadKnowledgeBase,
+  distributeTrainingToNodes,
+  generateDiagramFromText,
+  getCoachingTips,
+  loadCoachingTips,
   buildFlatPairs,
   applyTrainingEditorSave,
   loadWebchatDialogs,
@@ -613,11 +625,22 @@ export function renderApp(state: AppViewState) {
                   // Labels and analysis results reset before restore (in case nothing saved)
                   state.telegramTrainingLabels = {};
                   state.telegramAnalysisResults = {};
+                  // Reset coaching tips when switching agents
+                  state.telegramCoachingTips = {};
+                  state.telegramCoachingCollapsed = new Set();
+                  // Restore last-used scope for this agent (persisted in localStorage).
+                  // Must happen before loading data so the correct scope is active.
+                  if (id) {
+                    state.telegramTrainingScope = loadAgentScope("training", id);
+                    state.telegramSchemaScope = loadAgentScope("schema", id);
+                  }
                   // Restore previously persisted training data for this agent (if any),
-                  // using the active scope (personal = per-agentId, shared = global key).
+                  // using the restored scope (personal = per-agentId, shared = global key).
                   // Uses gateway as primary source with localStorage fallback.
                   if (id) {
                     void loadTrainingFromGateway(state, id, state.telegramTrainingScope);
+                    // Load persisted coaching tips from DB (non-blocking)
+                    void loadCoachingTips(state, id);
                   }
                   // Reset webchat state for the new agent
                   if (state._telegramWebchatPollTimer !== null) {
@@ -675,6 +698,11 @@ export function renderApp(state: AppViewState) {
                   }
                   if (panel === "schema" && state.telegramSelectedId) {
                     void loadTelegramDiagram(
+                      state,
+                      state.telegramSelectedId,
+                      state.telegramSchemaScope,
+                    );
+                    void loadTelegramDiagramList(
                       state,
                       state.telegramSelectedId,
                       state.telegramSchemaScope,
@@ -927,6 +955,13 @@ export function renderApp(state: AppViewState) {
                 schemaScope: state.telegramSchemaScope,
                 diagram: state.telegramDiagram,
                 diagramLoading: state.telegramDiagramLoading,
+                diagramList: state.telegramDiagramList,
+                diagramListLoading: state.telegramDiagramListLoading,
+                knowledgeBase: state.telegramKnowledgeBase,
+                knowledgeBaseLoading: state.telegramKnowledgeBaseLoading,
+                coachingTips: state.telegramCoachingTips,
+                coachingLoading: state.telegramCoachingLoading,
+                coachingCollapsed: state.telegramCoachingCollapsed,
                 trainingPairs: state.telegramTrainingPairs,
                 trainingGroups: state.telegramTrainingGroups,
                 trainingGroupsLimit: state.telegramTrainingGroupsLimit,
@@ -966,6 +1001,7 @@ export function renderApp(state: AppViewState) {
                   }
                   // Switch scope, clear state, then load from the new scope
                   state.telegramTrainingScope = scope;
+                  saveAgentScope("training", agentId, scope);
                   state.telegramTrainingPairs = [];
                   state.telegramTrainingGroups = [];
                   state.telegramTrainingLabels = {};
@@ -1036,6 +1072,23 @@ export function renderApp(state: AppViewState) {
                 onLoadDiagram: (agentId) =>
                   void loadTelegramDiagram(state, agentId, state.telegramSchemaScope),
                 onSaveDiagram: (diagram) => void saveTelegramDiagram(state, diagram),
+                onSelectDiagram: state.telegramSelectedId
+                  ? (id) => void selectTelegramDiagramById(state, state.telegramSelectedId!, id)
+                  : null,
+                onDeleteDiagram: state.telegramSelectedId
+                  ? (id) => void deleteTelegramDiagramById(state, id)
+                  : null,
+                onRenameDiagram: state.telegramSelectedId
+                  ? (id, title) => void renameTelegramDiagram(state, id, title)
+                  : null,
+                onNewDiagram: state.telegramSelectedId
+                  ? () =>
+                      void createNewTelegramDiagram(
+                        state,
+                        state.telegramSelectedId!,
+                        state.telegramSchemaScope,
+                      )
+                  : null,
                 onImportDiagramFromImage: state.telegramSelectedId
                   ? (base64, mime) =>
                       importTelegramDiagramFromImage(
@@ -1048,10 +1101,52 @@ export function renderApp(state: AppViewState) {
                   : null,
                 onSchemaScopeChange: (agentId, scope) => {
                   state.telegramSchemaScope = scope;
+                  saveAgentScope("schema", agentId, scope);
                   state.telegramFlowNodes = [];
                   state.telegramDiagram = null;
+                  state.telegramDiagramList = [];
+                  state.telegramKnowledgeBase = null;
                   void loadTelegramFlowNodes(state, agentId, scope);
                   void loadTelegramDiagram(state, agentId, scope);
+                  void loadTelegramDiagramList(state, agentId, scope);
+                  void loadKnowledgeBase(state, agentId, scope);
+                },
+                onLoadKnowledgeBase: state.telegramSelectedId
+                  ? () =>
+                      loadKnowledgeBase(state, state.telegramSelectedId!, state.telegramSchemaScope)
+                  : null,
+                onDistributeTraining: state.telegramSelectedId
+                  ? async () => {
+                      await distributeTrainingToNodes(
+                        state,
+                        state.telegramSelectedId!,
+                        state.telegramSchemaScope,
+                      );
+                    }
+                  : null,
+                onGenerateDiagramFromText: state.telegramSelectedId
+                  ? (prompt, current) =>
+                      generateDiagramFromText(
+                        state,
+                        state.telegramSelectedId!,
+                        state.telegramSchemaScope,
+                        prompt,
+                        current,
+                      )
+                  : null,
+                onGetCoachingTips: state.telegramSelectedId
+                  ? async (chatId, pairs) => {
+                      await getCoachingTips(state, state.telegramSelectedId!, chatId, pairs);
+                    }
+                  : null,
+                onToggleCoachingCollapsed: (chatId) => {
+                  const s = new Set(state.telegramCoachingCollapsed);
+                  if (s.has(chatId)) {
+                    s.delete(chatId);
+                  } else {
+                    s.add(chatId);
+                  }
+                  state.telegramCoachingCollapsed = s;
                 },
                 onAddChatNode: (agentId, role) => void addTelegramChatNode(state, agentId, role),
                 onDeleteChatNode: (agentId, nodeId) =>

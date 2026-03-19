@@ -301,6 +301,15 @@ export class OpenClawApp extends LitElement {
   @state() telegramSchemaScope: import("./controllers/telegram.ts").TrainingScope = "personal";
   @state() telegramDiagram: import("./controllers/telegram.ts").FlowDiagram | null = null;
   @state() telegramDiagramLoading = false;
+  @state() telegramDiagramList: import("./controllers/telegram.ts").DiagramSummary[] = [];
+  @state() telegramDiagramListLoading = false;
+  @state() telegramKnowledgeBase: import("./controllers/telegram.ts").DiagramKnowledgeBase | null =
+    null;
+  @state() telegramKnowledgeBaseLoading = false;
+  @state() telegramCoachingTips: Record<string, import("./controllers/telegram.ts").CoachingTips> =
+    {};
+  @state() telegramCoachingLoading: Set<string> = new Set();
+  @state() telegramCoachingCollapsed: Set<string> = new Set();
   @state() telegramTrainingPairs: import("./controllers/telegram.ts").TrainingPair[] = [];
   @state() telegramTrainingGroups: import("./controllers/telegram.ts").TrainingGroup[] = [];
   @state() telegramTrainingGroupsLimit = 100;

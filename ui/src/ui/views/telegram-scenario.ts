@@ -86,10 +86,44 @@ export type ScenarioProps = {
   /** Visual flowchart diagram for the current agent+scope. */
   diagram: FlowDiagram | null;
   diagramLoading: boolean;
+  /** All saved diagrams for the current agent+scope (summaries). */
+  diagramList: import("../controllers/telegram.ts").DiagramSummary[];
+  diagramListLoading: boolean;
   onLoadDiagram: (agentId: string) => void;
   onSaveDiagram: (diagram: FlowDiagram) => void;
+  onSelectDiagram: ((id: string) => void) | null;
+  onDeleteDiagram: ((id: string) => void) | null;
+  onRenameDiagram: ((id: string, title: string) => void) | null;
+  onNewDiagram: (() => void) | null;
   /** Called when user selects an image to import; returns the AI-generated diagram. */
   onImportDiagramFromImage: ((base64: string, mime: string) => Promise<FlowDiagram | null>) | null;
+  /** Load the existing knowledge base for the current agent+scope. */
+  onLoadKnowledgeBase: (() => Promise<void>) | null;
+  /** Run AI distribution of training pairs across diagram nodes. */
+  onDistributeTraining: (() => Promise<void>) | null;
+  /** Current knowledge base (from state). */
+  knowledgeBase: import("../controllers/telegram.ts").DiagramKnowledgeBase | null;
+  /** Whether KB is loading. */
+  knowledgeBaseLoading: boolean;
+  /** AI text → diagram generation / modification. */
+  onGenerateDiagramFromText:
+    | ((
+        prompt: string,
+        current: import("../controllers/telegram.ts").FlowDiagram | null,
+      ) => Promise<import("../controllers/telegram.ts").FlowDiagram | null>)
+    | null;
+  /** Fetch AI coaching tips for the given chatId + pairs. */
+  onGetCoachingTips:
+    | ((chatId: string, pairs: Array<{ input: string; response: string }>) => Promise<void>)
+    | null;
+  /** Toggle collapsed state of the coaching card for a chatId. */
+  onToggleCoachingCollapsed: ((chatId: string) => void) | null;
+  /** Cached coaching tips keyed by chatId. */
+  coachingTips: Record<string, import("../controllers/telegram.ts").CoachingTips>;
+  /** Set of chatIds for which coaching tips are currently loading. */
+  coachingLoading: Set<string>;
+  /** Set of chatIds whose coaching card is currently collapsed. */
+  coachingCollapsed: Set<string>;
 };
 
 // ─── Sub-panel tabs ───────────────────────────────────────────────────────────
@@ -687,6 +721,72 @@ function renderAiResultCard(result: DialogAnalysisResult | undefined) {
   `;
 }
 
+/** Coaching tips card — shown when AI has generated tips for the selected dialog */
+function renderCoachingCard(
+  tips: import("../controllers/telegram.ts").CoachingTips | undefined,
+  loading: boolean,
+  collapsed: boolean,
+  onRequest: (() => void) | null,
+  onToggleCollapse: (() => void) | null,
+) {
+  if (loading) {
+    return html`
+      <div class="tg-coaching-card tg-coaching-card--loading">
+        <span class="tg-coaching-icon">💡</span>
+        <span class="tg-coaching-loading-text">Генерирую советы…</span>
+      </div>
+    `;
+  }
+  if (tips) {
+    // Split numbered list lines and render as items
+    const lines = tips.content
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+    return html`
+      <div class="tg-coaching-card ${collapsed ? "tg-coaching-card--collapsed" : ""}">
+        <div class="tg-coaching-header" @click=${onToggleCollapse ?? nothing} style="cursor:${onToggleCollapse ? "pointer" : "default"}">
+          <span class="tg-coaching-icon">💡</span>
+          <span class="tg-coaching-title">Советы менеджеру</span>
+          ${
+            onToggleCollapse
+              ? html`<span class="tg-coaching-chevron">${collapsed ? "▸" : "▾"}</span>`
+              : nothing
+          }
+          ${
+            onRequest
+              ? html`<button
+                type="button"
+                class="tg-coaching-refresh"
+                title="Обновить советы"
+                @click=${(e: Event) => {
+                  e.stopPropagation();
+                  onRequest();
+                }}
+              >↺</button>`
+              : nothing
+          }
+        </div>
+        ${
+          collapsed
+            ? nothing
+            : html`<div class="tg-coaching-body">
+              ${lines.map((line) => html`<div class="tg-coaching-line">${line}</div>`)}
+            </div>`
+        }
+      </div>
+    `;
+  }
+  if (onRequest) {
+    return html`
+      <button type="button" class="tg-coaching-trigger" @click=${onRequest}>
+        💡 Советы менеджеру
+      </button>
+    `;
+  }
+  return nothing;
+}
+
 // ─── Training view ─────────────────────────────────────────────────────────────
 
 function renderTrainingView(props: ScenarioProps, agent: TelegramAgentRecord) {
@@ -1034,6 +1134,21 @@ function renderTrainingView(props: ScenarioProps, agent: TelegramAgentRecord) {
               <!-- AI result card (shown when analysis is available) -->
               ${renderAiResultCard(props.analysisResults[selectedGroup.chatId])}
 
+              <!-- Coaching tips card -->
+              ${renderCoachingCard(
+                props.coachingTips[selectedGroup.chatId],
+                props.coachingLoading.has(selectedGroup.chatId),
+                props.coachingCollapsed.has(selectedGroup.chatId),
+                props.onGetCoachingTips
+                  ? () => {
+                      void props.onGetCoachingTips!(selectedGroup.chatId, selectedGroup.pairs);
+                    }
+                  : null,
+                props.onToggleCoachingCollapsed
+                  ? () => props.onToggleCoachingCollapsed!(selectedGroup.chatId)
+                  : null,
+              )}
+
               <!-- Bubbles -->
               <div class="tg-msng-bubbles">
                 ${selectedGroup.pairs.map(
@@ -1364,6 +1479,17 @@ export function renderSchemaPanel(props: ScenarioProps, agent: TelegramAgentReco
           props.onSchemaScopeChange(agentId, scope);
         }}
         .onImportImage=${props.onImportDiagramFromImage}
+        .onLoadKnowledgeBase=${props.onLoadKnowledgeBase}
+        .onDistributeTraining=${props.onDistributeTraining}
+        .knowledgeBase=${props.knowledgeBase}
+        .knowledgeBaseLoading=${props.knowledgeBaseLoading}
+        .onGenerateDiagramFromText=${props.onGenerateDiagramFromText}
+        .diagramList=${props.diagramList}
+        .diagramListLoading=${props.diagramListLoading}
+        .onSelectDiagram=${props.onSelectDiagram}
+        .onDeleteDiagram=${props.onDeleteDiagram}
+        .onRenameDiagram=${props.onRenameDiagram}
+        .onNewDiagram=${props.onNewDiagram}
         style="flex:1;min-height:0;"
       ></tg-diagram-editor>
     </section>
