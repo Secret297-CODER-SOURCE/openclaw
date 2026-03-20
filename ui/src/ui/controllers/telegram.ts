@@ -659,7 +659,7 @@ export async function loadTelegramAgentFiles(
       const workspacePath = res.workspacePath ?? "";
       const files: AgentFileEntry[] = (res.files ?? []).map((f) => ({
         name: f.name,
-        path: workspacePath ? `${workspacePath}/${f.name}` : f.name,
+        path: workspacePath ? `                ${workspacePath}/${f.name}` : f.name,
         missing: !!f.missing,
         size: f.sizeBytes,
         updatedAtMs: f.updatedAt ? new Date(f.updatedAt).getTime() : undefined,
@@ -698,8 +698,6 @@ export async function loadTelegramAgentFileContent(
     state.agentFilesLoading = false;
   }
 }
-
-// ─── Scenario types (mirror extensions/telegram-manager/src/types.ts) ────────
 
 export type ChatNode = {
   id: string;
@@ -789,10 +787,20 @@ export type DiagramSummary = {
 /** Mirrors AgentSettings from the extension's types.ts. */
 export type AgentSettings = {
   activeDiagramId?: string;
-  /** "always" | "schedule" | "schema" */
-  workMode: "always" | "schedule" | "schema";
+  /** Whether to follow the active diagram as a strict script */
+  useSchema: boolean;
+  /** "always" | "schedule" */
+  scheduleMode: "always" | "schedule";
   scheduleFrom?: string; // HH:MM
   scheduleTo?: string; // HH:MM
+  /** "all" | "tasks" — who the agent replies to */
+  replyTo: "all" | "tasks";
+  /**
+   * When true: KB top responses are used as primary templates, replies are
+   * validated against script rules and auto-rebuilt on violations (strict).
+   * When false/absent: standard AI generation with KB context (flexible).
+   */
+  schemaStrictMode?: boolean;
 };
 
 // ─── Scenario controller ──────────────────────────────────────────────────────
@@ -2575,9 +2583,13 @@ export async function loadAgentSettings(
     const res = await state.client!.request<AgentSettings>("telegram.agent.getSettings", {
       agentId,
     });
-    state.telegramAgentSettings = res ?? { workMode: "always" };
+    state.telegramAgentSettings = res ?? {
+      useSchema: false,
+      scheduleMode: "always",
+      replyTo: "all",
+    };
   } catch {
-    state.telegramAgentSettings = { workMode: "always" };
+    state.telegramAgentSettings = { useSchema: false, scheduleMode: "always", replyTo: "all" };
   } finally {
     state.telegramAgentSettingsLoading = false;
   }

@@ -163,14 +163,21 @@ export class TelegramPlugin implements GatewayPlugin {
             break;
           }
           const incoming = (p.settings ?? {}) as Record<string, unknown>;
-          const mode = incoming.workMode;
-          if (mode !== "always" && mode !== "schedule" && mode !== "schema") {
-            fail("invalid workMode");
+          const scheduleMode = incoming.scheduleMode;
+          if (scheduleMode !== "always" && scheduleMode !== "schedule") {
+            fail("invalid scheduleMode");
+            break;
+          }
+          const replyTo = incoming.replyTo;
+          if (replyTo !== "all" && replyTo !== "tasks") {
+            fail("invalid replyTo");
             break;
           }
           const settings: AgentSettings = {
-            workMode: mode as AgentSettings["workMode"],
-            ...(incoming.activeDiagramId !== undefined
+            useSchema: Boolean(incoming.useSchema),
+            scheduleMode,
+            replyTo,
+            ...(incoming.activeDiagramId
               ? { activeDiagramId: String(incoming.activeDiagramId) }
               : {}),
             ...(incoming.scheduleFrom !== undefined

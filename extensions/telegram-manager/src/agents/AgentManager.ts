@@ -406,7 +406,13 @@ ${dialogsText}`;
   // ─── Shutdown ─────────────────────────────────────────────────────────────
 
   async shutdown(): Promise<void> {
-    await Promise.allSettled([...this.pool.values()].map((a) => a.stop()));
+    // Use gracefulShutdown (not stop) so agents that were "running" keep their
+    // DB status intact. AgentManager.init() auto-restarts agents with
+    // status="running" on the next gateway start — this makes auto-restart work
+    // correctly after a normal server shutdown/restart.
+    // User-initiated stops (via telegram.agent.stop handler) call agent.stop()
+    // directly, which does write "stopped" to the DB as expected.
+    await Promise.allSettled([...this.pool.values()].map((a) => a.gracefulShutdown()));
   }
 
   // ─── Private ──────────────────────────────────────────────────────────────

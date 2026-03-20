@@ -195,6 +195,18 @@ export class TelegramStorage {
         PRIMARY KEY (agent_id, chat_id)
       );
 
+      -- Per-client long-term memory: accumulated across schema sessions.
+      -- Survives server restarts; injected into schema prompts so the agent
+      -- remembers who the client is and what was discussed in past sessions.
+      CREATE TABLE IF NOT EXISTS tg_chat_memories (
+        agent_id       TEXT NOT NULL,
+        chat_id        TEXT NOT NULL,
+        memory_text    TEXT NOT NULL DEFAULT '',
+        sessions_count INTEGER NOT NULL DEFAULT 0,
+        updated_at     TEXT NOT NULL,
+        PRIMARY KEY (agent_id, chat_id)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_tg_events_agent ON tg_events(agent_id);
       CREATE INDEX IF NOT EXISTS idx_tg_parsed_agent ON tg_parsed(agent_id);
       CREATE INDEX IF NOT EXISTS idx_agent_missions_master ON agent_missions(master_agent_id);
@@ -652,12 +664,19 @@ export class TelegramStorage {
     const row = this.db
       .prepare("SELECT settings_json FROM tg_agent_settings WHERE agent_id = ?")
       .get(agentId) as { settings_json: string } | undefined;
-    if (!row) return { workMode: "always" };
+    const defaults: AgentSettings = { useSchema: false, scheduleMode: "always", replyTo: "all" };
+    if (!row) return defaults;
     try {
       const parsed = JSON.parse(row.settings_json) as AgentSettings;
-      return { workMode: "always", ...parsed };
+      // Migrate legacy workMode field to new independent flags
+      if ((parsed as unknown as Record<string, unknown>)["workMode"] && !parsed.scheduleMode) {
+        const legacy = (parsed as unknown as Record<string, unknown>)["workMode"] as string;
+        parsed.scheduleMode = legacy === "schedule" ? "schedule" : "always";
+        parsed.useSchema = legacy === "schema";
+      }
+      return { ...defaults, ...parsed };
     } catch {
-      return { workMode: "always" };
+      return defaults;
     }
   }
 
@@ -699,6 +718,36 @@ export class TelegramStorage {
     this.db
       .prepare("DELETE FROM tg_conversation_state WHERE agent_id = ? AND chat_id = ?")
       .run(agentId, chatId);
+  }
+
+  // ─── Per-client long-term memory ────────────────────────────────────────
+
+  /** Load the accumulated memory for a specific client chat. */
+  getChatMemory(
+    agentId: string,
+    chatId: string,
+  ): { memoryText: string; sessionsCount: number } | null {
+    const row = this.db
+      .prepare(
+        "SELECT memory_text, sessions_count FROM tg_chat_memories WHERE agent_id = ? AND chat_id = ?",
+      )
+      .get(agentId, chatId) as { memory_text: string; sessions_count: number } | undefined;
+    if (!row || !row.memory_text) return null;
+    return { memoryText: row.memory_text, sessionsCount: row.sessions_count };
+  }
+
+  /** Persist updated memory for a specific client chat. */
+  saveChatMemory(agentId: string, chatId: string, memoryText: string, sessionsCount: number): void {
+    this.db
+      .prepare(
+        `INSERT INTO tg_chat_memories (agent_id, chat_id, memory_text, sessions_count, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(agent_id, chat_id) DO UPDATE SET
+           memory_text    = excluded.memory_text,
+           sessions_count = excluded.sessions_count,
+           updated_at     = excluded.updated_at`,
+      )
+      .run(agentId, chatId, memoryText, sessionsCount, new Date().toISOString());
   }
 
   // ─── Agent workspace ─────────────────────────────────────────────────────

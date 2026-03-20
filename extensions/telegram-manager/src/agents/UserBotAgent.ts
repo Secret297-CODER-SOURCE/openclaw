@@ -126,6 +126,18 @@ export class UserBotAgent extends BaseAgent {
     this.setStatus("stopped");
   }
 
+  /**
+   * Disconnect the userbot without changing its DB status to "stopped".
+   * Used by AgentManager.shutdown() so the agent is auto-restarted on the
+   * next gateway start (AgentManager.init() restarts agents with status="running").
+   */
+  override async gracefulShutdown(): Promise<void> {
+    this.clearCron();
+    await this.client?.disconnect().catch(() => {});
+    this.client = null;
+    // Intentionally NOT calling setStatus("stopped") — preserve "running" in DB.
+  }
+
   // --- Auth flow ------------------------------------------------------------
 
   async authStart(): Promise<void> {
@@ -343,14 +355,20 @@ export class UserBotAgent extends BaseAgent {
         const chatId = String(msg.chatId || "");
         if (!mc.allowedChatIds.includes(chatId)) return;
 
-        // Capture the resolved InputPeer synchronously before any async gap.
-        // GramJS populates inputChat during event dispatch (includes access_hash),
-        // so sendMessage can target the peer without hitting the entity cache.
+        // Capture the resolved InputPeer before any async gap.
+        // Try msg.inputChat first (fast path: entity already in session cache).
+        // Fall back to event.getInputChat() which uses InputUserFromMessage internally
+        // and can resolve the access_hash even for users not yet in the session cache.
         let msgPeer: EntityLike | undefined;
         try {
-          msgPeer = msg.inputChat as EntityLike;
+          const ic = msg.inputChat as any;
+          if (ic?.className?.startsWith("InputPeer")) {
+            msgPeer = ic as EntityLike;
+          } else if (typeof (event as any).getInputChat === "function") {
+            msgPeer = (await (event as any).getInputChat()) as EntityLike;
+          }
         } catch {
-          /* fallback to BigInt */
+          /* will fall back to BigInt in sendWithFloodGuard */
         }
 
         const text = msg.message || "";
@@ -391,21 +409,50 @@ export class UserBotAgent extends BaseAgent {
         const taskSession = this.getTaskSession(chatId);
         if (!taskSession) return;
 
-        // Capture the resolved InputPeer synchronously before any async gap.
-        // GramJS populates inputChat during event dispatch (includes access_hash),
-        // so sendMessage can target the peer without hitting the entity cache.
+        // Capture the resolved InputPeer before any async gap.
+        // Try msg.inputChat first (fast path: entity already in session cache).
+        // Fall back to event.getInputChat() which uses InputUserFromMessage internally
+        // and can resolve the access_hash even for users not yet in the session cache.
         let msgPeer: EntityLike | undefined;
         try {
-          msgPeer = msg.inputChat as EntityLike;
+          const ic = msg.inputChat as any;
+          if (ic?.className?.startsWith("InputPeer")) {
+            msgPeer = ic as EntityLike;
+          } else if (typeof (event as any).getInputChat === "function") {
+            msgPeer = (await (event as any).getInputChat()) as EntityLike;
+          }
         } catch {
-          /* fallback to BigInt */
+          /* will fall back to BigInt in sendWithFloodGuard */
         }
 
         const text = msg.message || "";
-        this.trackMessage("in", text, chatId);
         // Use a stable per-chat key so history is shared with auto_reply —
         // continuous dialogue is preserved when the task session ends.
         const chatKey = `${this.id}:${chatId}`;
+
+        // Schema mode overrides task session: when the agent is configured to
+        // follow a diagram script, ALL conversations go through that script —
+        // including task-session chats — so the operator gets a consistent flow.
+        const agentSettings = this.getAgentSettings();
+        if (agentSettings.useSchema && agentSettings.activeDiagramId) {
+          this.trackMessage("in", text, chatId);
+          try {
+            const scriptReply = await this.runScriptStep(chatId, text, chatKey);
+            if (scriptReply) {
+              await this.sendWithFloodGuard(chatId, scriptReply, msg.id, msgPeer);
+              this.trackMessage("out", scriptReply, chatId);
+            } else {
+              this.logger.warn(
+                `[TG:${this.name}] schema reply null for task-session chat ${chatId}`,
+              );
+            }
+          } catch (e) {
+            this.logger.warn(`[TG:${this.name}] schema step (task-session) failed: ${String(e)}`);
+          }
+          return;
+        }
+
+        this.trackMessage("in", text, chatId);
         // Fetch the partner's writing style from real Telegram history for new chats.
         const storedHistory = this.storage.loadConversationHistory(chatKey);
         const styleContext = storedHistory.length < 4 ? await this.fetchStyleContext(chatId) : "";
@@ -457,20 +504,30 @@ export class UserBotAgent extends BaseAgent {
         const agentSettings = this.getAgentSettings();
         if (!this.isWithinSchedule(agentSettings)) return;
 
-        // Capture the resolved InputPeer synchronously before any async gap.
-        // GramJS populates inputChat during event dispatch (includes access_hash),
-        // so sendMessage can target the peer without hitting the entity cache.
+        // replyTo: "tasks" — only engage with chats that have an active task session.
+        if (!this.isAllowedChat(chatId, agentSettings)) return;
+
+        // Capture the resolved InputPeer before any async gap.
+        // Try msg.inputChat first (fast path: entity already in session cache).
+        // Fall back to event.getInputChat() which uses InputUserFromMessage internally
+        // and can resolve the access_hash even for users not yet in the session cache.
         let msgPeer: EntityLike | undefined;
         try {
-          msgPeer = msg.inputChat as EntityLike;
+          const ic = msg.inputChat as any;
+          if (ic?.className?.startsWith("InputPeer")) {
+            msgPeer = ic as EntityLike;
+          } else if (typeof (event as any).getInputChat === "function") {
+            msgPeer = (await (event as any).getInputChat()) as EntityLike;
+          }
         } catch {
-          /* fallback to BigInt */
+          /* will fall back to BigInt in sendWithFloodGuard */
         }
 
-        // Schema work mode: follow the active diagram as a strict script.
+        // Schema mode: follow the active diagram as a strict script.
         // Bypasses keyword/trigger requirements so every message in the
         // conversation advances through the script steps.
-        if (agentSettings.workMode === "schema" && agentSettings.activeDiagramId) {
+        // IMPORTANT: always return from this block — never fall through to auto_reply.
+        if (agentSettings.useSchema && agentSettings.activeDiagramId) {
           this.trackMessage("in", text, chatId);
           try {
             const scriptReply = await this.runScriptStep(chatId, text, key);
@@ -478,11 +535,15 @@ export class UserBotAgent extends BaseAgent {
               await this.sendWithFloodGuard(chatId, scriptReply, msg.id, msgPeer);
               cooldowns.set(key, Date.now());
               this.trackMessage("out", scriptReply, chatId);
-              return;
+            } else {
+              this.logger.warn(
+                `[TG:${this.name}] schema reply is null for chat ${chatId} — check diagram has a start node`,
+              );
             }
           } catch (e) {
-            this.logger.warn(`[TG:${this.name}] script step failed: ${String(e)}`);
+            this.logger.warn(`[TG:${this.name}] schema step failed: ${String(e)}`);
           }
+          return; // schema mode: never fall through to auto_reply
         }
 
         if (!this.shouldAutoReply(cfg, text, chatId)) return;
@@ -710,15 +771,56 @@ export class UserBotAgent extends BaseAgent {
       await doSend();
       lastSentAt.set(sendKey, Date.now());
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const errMsg = e instanceof Error ? e.message : String(e);
       // PEER_FLOOD: Telegram's anti-spam per-peer rate limit — back off and retry once.
-      if (msg.includes("PEER_FLOOD")) {
+      if (errMsg.includes("PEER_FLOOD")) {
         this.logger.warn(
           `[TG:${this.name}] PEER_FLOOD for ${chatId}, retrying in ${PEER_FLOOD_RETRY_MS / 1000}s`,
         );
         await this.delay(PEER_FLOOD_RETRY_MS);
         await doSend();
         lastSentAt.set(sendKey, Date.now());
+      } else if (
+        errMsg.includes("input entity") ||
+        errMsg.includes("Cannot find") ||
+        errMsg.includes("PEER_ID_INVALID")
+      ) {
+        // Entity resolution failed — the provided peer had no access_hash or was stale.
+        // Retry by resolving the entity. If it's not in the session cache, force a
+        // refresh via getDialogs (which fetches full User objects with access_hash
+        // for all recent conversations from the Telegram API).
+        this.logger.warn(
+          `[TG:${this.name}] entity error for ${chatId}, retrying via getInputEntity`,
+        );
+        try {
+          // Pass a BigInt so GramJS resolves by numeric peer ID (not username/phone).
+          const numId: EntityLike | undefined = /^-?\d+$/.test(chatId)
+            ? (BigInt(chatId) as unknown as EntityLike)
+            : undefined;
+          if (!numId || !this.client) throw new Error("cannot resolve numeric chatId");
+
+          let resolved: EntityLike;
+          try {
+            resolved = (await this.client.getInputEntity(numId)) as EntityLike;
+          } catch {
+            // Entity not in session cache — force refresh via getDialogs.
+            // getDialogs fetches recent conversations from Telegram's API and
+            // populates the entity cache with full User objects (with access_hash).
+            this.logger.warn(
+              `[TG:${this.name}] entity cache miss for ${chatId}, refreshing via getDialogs`,
+            );
+            await this.client.getDialogs({ limit: 100 });
+            resolved = (await this.client.getInputEntity(numId)) as EntityLike;
+          }
+
+          await this.client.sendMessage(resolved, {
+            message,
+            ...(replyToMsgId ? { replyTo: replyToMsgId } : {}),
+          });
+          lastSentAt.set(sendKey, Date.now());
+        } catch (e2) {
+          throw e2; // both attempts failed
+        }
       } else {
         throw e;
       }

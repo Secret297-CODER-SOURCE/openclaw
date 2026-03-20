@@ -82,6 +82,20 @@ export class BotAgent extends BaseAgent {
     this.setStatus("stopped");
   }
 
+  /**
+   * Disconnect the bot without changing its DB status to "stopped".
+   * Used by AgentManager.shutdown() so the agent is auto-restarted on the
+   * next gateway start (AgentManager.init() restarts agents with status="running").
+   */
+  override async gracefulShutdown(): Promise<void> {
+    this.restartAttempts = 0;
+    for (const j of this.cronJobs.values()) j.stop();
+    this.cronJobs.clear();
+    await this.bot?.stop();
+    this.bot = null;
+    // Intentionally NOT calling setStatus("stopped") — preserve "running" in DB.
+  }
+
   async callTool(tool: string, args: Record<string, unknown>): Promise<unknown> {
     if (!this.bot) throw new Error("Agent not running");
     switch (tool) {
@@ -289,6 +303,26 @@ export class BotAgent extends BaseAgent {
 
     if (taskSession) {
       await ctx.replyWithChatAction("typing");
+
+      // Schema mode overrides task session: when the agent is configured to follow
+      // a diagram script, ALL conversations go through that script — including
+      // task-session chats — so the operator gets a consistent conversation flow.
+      const agentSettingsForTask = this.getAgentSettings();
+      if (agentSettingsForTask.useSchema && agentSettingsForTask.activeDiagramId) {
+        try {
+          const scriptReply = await this.runScriptStep(chatId, text, chatKey);
+          if (scriptReply) {
+            await ctx.reply(scriptReply);
+            this.trackMessage("out", scriptReply, chatId);
+          } else {
+            this.logger.warn(`[TG:${this.name}] schema reply null for task-session chat ${chatId}`);
+          }
+        } catch (e) {
+          this.logger.warn(`[TG:${this.name}] schema step (task-session) failed: ${String(e)}`);
+        }
+        return;
+      }
+
       // Use custom system prompt if provided, otherwise build from workspace files.
       const systemPrompt =
         taskSession.systemPrompt ?? (await this.buildRichSystemPrompt(taskSession.task, chatKey));
@@ -309,21 +343,30 @@ export class BotAgent extends BaseAgent {
     const agentSettings = this.getAgentSettings();
     if (!this.isWithinSchedule(agentSettings)) return;
 
-    // Schema work mode: follow the active diagram as a strict step-by-step script.
+    // replyTo: "tasks" — only engage with chats that have an active task session.
+    if (!this.isAllowedChat(chatId, agentSettings)) return;
+
+    // Schema mode: follow the active diagram as a strict step-by-step script.
     // Bypasses keyword/trigger auto_reply requirements so every message in a
     // schema-mode conversation advances through the script regardless of content.
-    if (agentSettings.workMode === "schema" && agentSettings.activeDiagramId) {
+    // IMPORTANT: always return from this block — never fall through to auto_reply
+    // when schema mode is enabled, even if runScriptStep returns null.
+    if (agentSettings.useSchema && agentSettings.activeDiagramId) {
       await ctx.replyWithChatAction("typing");
       try {
         const scriptReply = await this.runScriptStep(chatId, text, chatKey);
         if (scriptReply) {
           await ctx.reply(scriptReply);
           this.trackMessage("out", scriptReply, chatId);
-          return;
+        } else {
+          this.logger.warn(
+            `[TG:${this.name}] schema reply is null for chat ${chatId} — check diagram has a start node`,
+          );
         }
       } catch (e) {
-        this.logger.warn(`[TG:${this.name}] script step failed: ${String(e)}`);
+        this.logger.warn(`[TG:${this.name}] schema step failed: ${String(e)}`);
       }
+      return; // schema mode: never fall through to auto_reply
     }
 
     const cfg = this.getBehavior<any>("auto_reply");

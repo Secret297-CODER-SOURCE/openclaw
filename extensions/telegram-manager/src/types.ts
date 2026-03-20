@@ -199,18 +199,42 @@ export type BehaviorConfig =
  * Stored in tg_agent_settings table.
  */
 export interface AgentSettings {
-  /** ID of the diagram the agent follows for conversation guidance. */
+  /** ID of the diagram the agent follows when useSchema is true. */
   activeDiagramId?: string;
+
   /**
-   * "always"   — reply to every message (default)
-   * "schedule" — reply only within scheduleFrom..scheduleTo window (local time)
-   * "schema"   — reply always, but use the selected diagram as strict guide
+   * Whether the agent follows the selected diagram as a strict conversation
+   * script.  When true and activeDiagramId is set, every incoming message
+   * advances through the flowchart steps instead of using free-form AI reply.
    */
-  workMode: "always" | "schedule" | "schema";
-  /** HH:MM — start of the reply window (schedule mode) */
+  useSchema: boolean;
+
+  /**
+   * "always"   — reply at any time (default)
+   * "schedule" — reply only within scheduleFrom..scheduleTo window (local time)
+   */
+  scheduleMode: "always" | "schedule";
+
+  /** HH:MM — start of the reply window (scheduleMode: "schedule") */
   scheduleFrom?: string;
-  /** HH:MM — end of the reply window (schedule mode) */
+  /** HH:MM — end of the reply window (scheduleMode: "schedule") */
   scheduleTo?: string;
+
+  /**
+   * "all"   — reply to every chat (default)
+   * "tasks" — reply only to chats that have an active Task Session assigned
+   */
+  replyTo: "all" | "tasks";
+
+  /**
+   * Whether schema mode uses strict enforcement:
+   *   true  (strict)   — KB top responses are used as primary templates; the
+   *                       generated reply is validated against script rules and
+   *                       automatically rebuilt when it violates them.
+   *   false (flexible) — Standard AI generation with KB context injected into
+   *                       the system prompt (default / legacy behaviour).
+   */
+  schemaStrictMode?: boolean;
 }
 
 // ─── Agent manager interface (used by master_control to avoid circular imports) ─

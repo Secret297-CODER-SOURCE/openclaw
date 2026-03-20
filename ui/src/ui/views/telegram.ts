@@ -466,7 +466,11 @@ function renderPanelTabs(props: TelegramProps, agent: TelegramAgentRecord) {
 
 function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
   const busy = isBusy(props, agent.id);
-  const settings = props.agentSettings ?? { workMode: "always" as const };
+  const settings = props.agentSettings ?? {
+    useSchema: false,
+    scheduleMode: "always" as const,
+    replyTo: "all" as const,
+  };
   const settingsSaving = props.agentSettingsSaving;
   const settingsLoading = props.agentSettingsLoading;
   const diagramList = props.diagramList ?? [];
@@ -562,120 +566,182 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
     <!-- ── Work mode settings ─────────────────────────────────────────── -->
     <section class="card" style="margin-top: 16px;">
       <div class="card-title">⚙️ Режим работы</div>
-      <div class="card-sub">Настройте когда и как агент отвечает на сообщения.</div>
 
       ${
         settingsLoading
           ? html`
-              <div style="color: var(--text-muted); margin-top: 12px">Загрузка…</div>
+              <div style="color: var(--text-muted); padding: 8px 0">Загрузка…</div>
             `
           : nothing
       }
 
-      <!-- Diagram selector -->
-      <div style="margin-top: 16px;">
-        <div class="label" style="margin-bottom: 6px;">🗺 Активная схема</div>
-        ${
-          diagramList.length === 0
-            ? html`
-                <div style="color: var(--text-muted); font-size: 13px">
-                  Нет сохранённых схем. Создайте схему в разделе «Схема».
-                </div>
-              `
-            : html`
-              <select
-                class="input"
-                style="max-width: 320px;"
-                .value=${settings.activeDiagramId ?? ""}
-                @change=${(e: Event) => {
-                  const v = (e.target as HTMLSelectElement).value;
-                  saveSettings({ activeDiagramId: v || undefined });
-                }}
-              >
-                <option value="">— Не выбрана —</option>
-                ${diagramList.map(
-                  (d) => html`<option value=${d.id} ?selected=${d.id === settings.activeDiagramId}>
-                    ${d.title} (${d.nodeCount} узл.)
-                  </option>`,
-                )}
-              </select>
-            `
-        }
-      </div>
-
-      <!-- Work mode -->
-      <div style="margin-top: 16px;">
-        <div class="label" style="margin-bottom: 8px;">📋 Режим ответов</div>
-        <div class="tg-workmode-options">
-          ${(
-            [
-              {
-                value: "always",
-                label: "Всегда",
-                desc: "Агент отвечает на все входящие сообщения",
-              },
-              {
-                value: "schedule",
-                label: "По расписанию",
-                desc: "Агент отвечает только в указанный временной промежуток",
-              },
-              {
-                value: "schema",
-                label: "По схеме",
-                desc: "Агент следует выбранной схеме разговора при каждом ответе",
-              },
-            ] as const
-          ).map(
-            (opt) => html`
-              <label
-                class="tg-workmode-option ${settings.workMode === opt.value ? "tg-workmode-option--active" : ""}"
-              >
-                <input
-                  type="radio"
-                  name="workMode-${agent.id}"
-                  value=${opt.value}
-                  ?checked=${settings.workMode === opt.value}
-                  @change=${() => saveSettings({ workMode: opt.value })}
-                  style="display: none;"
-                />
-                <div class="tg-workmode-label">${opt.label}</div>
-                <div class="tg-workmode-desc">${opt.desc}</div>
-              </label>
-            `,
-          )}
+      <!-- ── 1. Активная схема ──────────────────────────────────────── -->
+      <div class="tg-setting-row">
+        <div class="tg-setting-label">🗺 Активная схема</div>
+        <div class="tg-setting-right">
+          ${
+            diagramList.length === 0
+              ? html`
+                  <div class="tg-setting-hint">Нет схем — создайте в разделе «Схема»</div>
+                `
+              : html`<select
+                  class="input"
+                  style="max-width:280px;"
+                  .value=${settings.activeDiagramId ?? ""}
+                  @change=${(e: Event) => {
+                    const v = (e.target as HTMLSelectElement).value;
+                    saveSettings({ activeDiagramId: v || undefined });
+                  }}
+                >
+                  <option value="">— Не выбрана —</option>
+                  ${diagramList.map(
+                    (d) =>
+                      html`<option value=${d.id} ?selected=${d.id === settings.activeDiagramId}>
+                        ${d.title} (${d.nodeCount} узл.)
+                      </option>`,
+                  )}
+                </select>`
+          }
         </div>
       </div>
 
-      <!-- Schedule time range (visible only in "schedule" mode) -->
+      <!-- ── 2. Режим общения ───────────────────────────────────────── -->
+      <div class="tg-setting-row">
+        <div class="tg-setting-label">💬 Режим общения</div>
+        <div class="tg-setting-right">
+          <div class="tg-toggle-group">
+            <label class="tg-toggle-option ${settings.useSchema ? "tg-toggle-option--active" : ""}">
+              <input type="radio" name="useSchema-${agent.id}" ?checked=${settings.useSchema}
+                @change=${() => saveSettings({ useSchema: true })} style="display:none;" />
+              По схеме
+            </label>
+            <label class="tg-toggle-option ${!settings.useSchema ? "tg-toggle-option--active" : ""}">
+              <input type="radio" name="useSchema-${agent.id}" ?checked=${!settings.useSchema}
+                @change=${() => saveSettings({ useSchema: false })} style="display:none;" />
+              Свободно
+            </label>
+          </div>
+          ${
+            settings.useSchema && !settings.activeDiagramId
+              ? html`
+                  <div class="tg-setting-hint tg-setting-hint--warn">⚠ Выберите схему выше</div>
+                `
+              : settings.useSchema
+                ? html`
+                    <div class="tg-setting-hint">Строго по шагам выбранной схемы</div>
+                  `
+                : html`
+                    <div class="tg-setting-hint">Свободный AI-ответ</div>
+                  `
+          }
+        </div>
+      </div>
+
+      <!-- ── 2b. Строгость схемы (visible only when useSchema is on) ─── -->
       ${
-        settings.workMode === "schedule"
+        settings.useSchema
           ? html`
-            <div style="margin-top: 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-              <div class="label">С</div>
-              <input
-                type="time"
-                class="input"
-                style="width: 120px;"
-                .value=${settings.scheduleFrom ?? "09:00"}
-                @change=${(e: Event) =>
-                  saveSettings({ scheduleFrom: (e.target as HTMLInputElement).value })}
-              />
-              <div class="label">до</div>
-              <input
-                type="time"
-                class="input"
-                style="width: 120px;"
-                .value=${settings.scheduleTo ?? "18:00"}
-                @change=${(e: Event) =>
-                  saveSettings({ scheduleTo: (e.target as HTMLInputElement).value })}
-              />
-              <div style="color: var(--text-muted); font-size: 12px;">
-                (по локальному времени сервера)
+              <div class="tg-setting-row">
+                <div class="tg-setting-label">🎯 Строгость</div>
+                <div class="tg-setting-right">
+                  <div class="tg-toggle-group">
+                    <label class="tg-toggle-option ${settings.schemaStrictMode ? "tg-toggle-option--active" : ""}">
+                      <input type="radio" name="schemaStrictMode-${agent.id}"
+                        ?checked=${!!settings.schemaStrictMode}
+                        @change=${() => saveSettings({ schemaStrictMode: true })}
+                        style="display:none;" />
+                      Строгий
+                    </label>
+                    <label class="tg-toggle-option ${!settings.schemaStrictMode ? "tg-toggle-option--active" : ""}">
+                      <input type="radio" name="schemaStrictMode-${agent.id}"
+                        ?checked=${!settings.schemaStrictMode}
+                        @change=${() => saveSettings({ schemaStrictMode: false })}
+                        style="display:none;" />
+                      Гибкий
+                    </label>
+                  </div>
+                  ${
+                    settings.schemaStrictMode
+                      ? html`
+                          <div class="tg-setting-hint">
+                            Шаблоны KB обязательны · ответы проверяются · нарушения пересобираются
+                          </div>
+                        `
+                      : html`
+                          <div class="tg-setting-hint">Шаблоны KB как подсказка · без проверки</div>
+                        `
+                  }
+                </div>
               </div>
-            </div>
-          `
-          : nothing
+            `
+          : html``
       }
+
+      <!-- ── 3. Расписание ──────────────────────────────────────────── -->
+      <div class="tg-setting-row">
+        <div class="tg-setting-label">🕐 Время ответов</div>
+        <div class="tg-setting-right">
+          <div class="tg-toggle-group">
+            <label class="tg-toggle-option ${settings.scheduleMode === "always" ? "tg-toggle-option--active" : ""}">
+              <input type="radio" name="scheduleMode-${agent.id}" ?checked=${settings.scheduleMode === "always"}
+                @change=${() => saveSettings({ scheduleMode: "always" })} style="display:none;" />
+              Всегда
+            </label>
+            <label class="tg-toggle-option ${settings.scheduleMode === "schedule" ? "tg-toggle-option--active" : ""}">
+              <input type="radio" name="scheduleMode-${agent.id}" ?checked=${settings.scheduleMode === "schedule"}
+                @change=${() => saveSettings({ scheduleMode: "schedule" })} style="display:none;" />
+              По расписанию
+            </label>
+          </div>
+          ${
+            settings.scheduleMode === "schedule"
+              ? html`<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;">
+                  <span style="font-size:13px;color:var(--text-muted);">С</span>
+                  <input type="time" class="input" style="width:110px;"
+                    .value=${settings.scheduleFrom ?? "09:00"}
+                    @change=${(e: Event) =>
+                      saveSettings({ scheduleFrom: (e.target as HTMLInputElement).value })} />
+                  <span style="font-size:13px;color:var(--text-muted);">до</span>
+                  <input type="time" class="input" style="width:110px;"
+                    .value=${settings.scheduleTo ?? "18:00"}
+                    @change=${(e: Event) =>
+                      saveSettings({ scheduleTo: (e.target as HTMLInputElement).value })} />
+                  <span class="tg-setting-hint">(время сервера)</span>
+                </div>`
+              : html`
+                  <div class="tg-setting-hint">Отвечает в любое время</div>
+                `
+          }
+        </div>
+      </div>
+
+      <!-- ── 4. Кому отвечать ───────────────────────────────────────── -->
+      <div class="tg-setting-row" style="border-bottom:none;">
+        <div class="tg-setting-label">👥 Кому отвечать</div>
+        <div class="tg-setting-right">
+          <div class="tg-toggle-group">
+            <label class="tg-toggle-option ${settings.replyTo === "all" ? "tg-toggle-option--active" : ""}">
+              <input type="radio" name="replyTo-${agent.id}" ?checked=${settings.replyTo === "all"}
+                @change=${() => saveSettings({ replyTo: "all" })} style="display:none;" />
+              Всем
+            </label>
+            <label class="tg-toggle-option ${settings.replyTo === "tasks" ? "tg-toggle-option--active" : ""}">
+              <input type="radio" name="replyTo-${agent.id}" ?checked=${settings.replyTo === "tasks"}
+                @change=${() => saveSettings({ replyTo: "tasks" })} style="display:none;" />
+              Только из Tasks
+            </label>
+          </div>
+          ${
+            settings.replyTo === "tasks"
+              ? html`
+                  <div class="tg-setting-hint">Только чаты с активной задачей</div>
+                `
+              : html`
+                  <div class="tg-setting-hint">Все входящие сообщения</div>
+                `
+          }
+        </div>
+      </div>
 
       ${
         settingsSaving

@@ -2,9 +2,9 @@ import EventEmitter from "events";
 // plugins/telegram/src/agents/BaseAgent.ts
 import fs from "fs";
 import path from "path";
-import { aiReply } from "../behaviors/AiReplyEngine";
+import { aiReply, analyzeOnceDirect } from "../behaviors/AiReplyEngine.js";
 import { TelegramStorage } from "../storage/TelegramStorage";
-import { createWorkspaceTools } from "../tools/TelegramTools";
+import { createWorkspaceTools } from "../tools/TelegramTools.js";
 import {
   AgentRecord,
   AgentSettings,
@@ -54,6 +54,21 @@ export abstract class BaseAgent extends EventEmitter {
 
   abstract start(): Promise<void>;
   abstract stop(): Promise<void>;
+
+  /**
+   * Gracefully disconnect the agent WITHOUT changing its persisted "running"
+   * status. Called by AgentManager.shutdown() so that agents that were
+   * running remain marked "running" in the DB and are auto-restarted when
+   * the gateway comes back up.
+   *
+   * Subclasses should override to disconnect connections without calling
+   * setStatus("stopped"). Default falls back to stop() (safe but loses
+   * auto-restart for agents that don't override).
+   */
+  async gracefulShutdown(): Promise<void> {
+    await this.stop();
+  }
+
   /** Call a named tool imperatively (e.g. from WS tool.call) */
   abstract callTool(tool: string, args: Record<string, unknown>): Promise<unknown>;
 
@@ -97,7 +112,7 @@ export abstract class BaseAgent extends EventEmitter {
    * work-mode settings.  Always returns true for modes other than "schedule".
    */
   protected isWithinSchedule(settings: AgentSettings): boolean {
-    if (settings.workMode !== "schedule") return true;
+    if (settings.scheduleMode !== "schedule") return true;
     const from = settings.scheduleFrom;
     const to = settings.scheduleTo;
     if (!from || !to) return true;
@@ -339,9 +354,9 @@ export abstract class BaseAgent extends EventEmitter {
       nodeLines.push(`• [${node.type.toUpperCase()}] ${node.text}`);
     }
     const edgeLines = diagram.edges
-      .map((e) => {
-        const src = diagram.nodes.find((n) => n.id === e.sourceId)?.text ?? e.sourceId;
-        const tgt = diagram.nodes.find((n) => n.id === e.targetId)?.text ?? e.targetId;
+      .map((e: DiagramEdge) => {
+        const src = diagram.nodes.find((n: DiagramNode) => n.id === e.sourceId)?.text ?? e.sourceId;
+        const tgt = diagram.nodes.find((n: DiagramNode) => n.id === e.targetId)?.text ?? e.targetId;
         return `  ${src} → ${tgt}${e.label ? ` (${e.label})` : ""}`;
       })
       .join("\n");
@@ -367,6 +382,52 @@ export abstract class BaseAgent extends EventEmitter {
       `Use these verified examples as a guide for your responses. Higher ★ = better outcome.\n\n` +
       kbParts.join("\n\n")
     );
+  }
+
+  /**
+   * Generate and persist a structured memory note for this client after a
+   * schema session completes. Runs in the background (fire-and-forget).
+   *
+   * Uses the last 20 messages from the conversation to produce a concise
+   * structured note (name, interests, outcome, next action). Notes from
+   * multiple sessions accumulate (newest first, capped at 600 chars) so
+   * the agent has a growing picture of who the client is over time.
+   */
+  protected async saveSessionMemory(
+    chatId: string,
+    chatKey: string,
+    previousMemory: { memoryText: string; sessionsCount: number } | null,
+  ): Promise<void> {
+    const history = this.storage.loadConversationHistory(chatKey);
+    if (history.length < 2) return; // too short to be worth summarising
+
+    const messages = history
+      .slice(-20)
+      .map((m) => `${m.role === "user" ? "Клиент" : "Менеджер"}: ${m.content.slice(0, 200)}`)
+      .join("\n");
+
+    const prompt =
+      `Ниже — диалог менеджера с клиентом. Составь краткую структурированную заметку (4-6 пунктов) о клиенте для памяти агента.\n` +
+      `Включи: имя/контакт (если упоминалось), что интересовало клиента, ключевые возражения или вопросы, итог разговора, рекомендуемое следующее действие.\n` +
+      `Пиши коротко и конкретно. Максимум 250 символов. Только факты.\n\n` +
+      `${messages}`;
+
+    try {
+      const summary = await analyzeOnceDirect(prompt);
+      const sessionsCount = (previousMemory?.sessionsCount ?? 0) + 1;
+
+      // Prepend new summary; keep last 2 session notes (newest first).
+      const prevText = previousMemory?.memoryText ?? "";
+      const separator = prevText ? "\n---\n" : "";
+      const combined = `[Сессия ${sessionsCount}] ${summary.slice(0, 250)}${separator}${prevText}`;
+
+      this.storage.saveChatMemory(this.id, chatId, combined.slice(0, 600), sessionsCount);
+      this.logger.info(
+        `[TG:${this.name}] saved chat memory for ${chatId} (session ${sessionsCount})`,
+      );
+    } catch (e) {
+      this.logger.warn(`[TG:${this.name}] failed to save chat memory: ${String(e)}`);
+    }
   }
 
   /** Read a file from the agent workspace directory, returning "" when absent. */
@@ -420,17 +481,89 @@ export abstract class BaseAgent extends EventEmitter {
     return new Promise((r) => setTimeout(r, ms));
   }
 
+  /**
+   * Returns true if the agent should engage with this chat based on the
+   * replyTo setting:
+   *   "all"   → always true
+   *   "tasks" → only when the chat has an active task session assigned
+   */
+  protected isAllowedChat(chatId: string, settings: AgentSettings): boolean {
+    if (settings.replyTo !== "tasks") return true;
+    return !!this.getTaskSession(chatId);
+  }
+
   // ─── Schema work-mode: strict script execution ───────────────────────────
+
+  /**
+   * Extract KB response pairs for a specific node from the diagram's knowledge
+   * base, sorted best-score first (3 = ★★★ > 2 = ★★ > 1 = ★).
+   * Returns [] when no KB data exists for this node.
+   */
+  private getNodeKbPairs(
+    diagram: FlowDiagram,
+    nodeId: string,
+  ): Array<{ input: string; response: string; score: number }> {
+    const raw = this.storage.getKnowledgeBase(
+      diagram.agentId,
+      diagram.scope as "personal" | "shared",
+    );
+    if (!raw) return [];
+    const entries = raw.entries as
+      | Array<{
+          nodeId: string;
+          pairs: Array<{ input: string; response: string; score: number }>;
+        }>
+      | undefined;
+    if (!entries) return [];
+    const entry = entries.find((e) => e.nodeId === nodeId);
+    if (!entry?.pairs?.length) return [];
+    return [...entry.pairs].sort((a, b) => b.score - a.score);
+  }
+
+  /**
+   * Rule-based reply validation for strict schema mode — no AI call, runs fast.
+   * Returns an array of violation descriptions; empty = valid.
+   */
+  private validateStrictReply(reply: string, nodeType: string): string[] {
+    const v: string[] = [];
+    if (!reply.trim()) {
+      v.push("пустой ответ");
+      return v;
+    }
+    // AI self-identification is forbidden in a sales/support script
+    if (
+      /я\s+(языков\w+\s+модел|ии\b|ai\b|бот\b)/i.test(reply) ||
+      /как\s+(языков\w+\s+модел|ии|ai)/i.test(reply)
+    ) {
+      v.push("содержит идентификацию ИИ (запрещено по скрипту)");
+    }
+    // Apologies / refusals are off-script
+    if (/к\s*сожалению,?\s+я|я\s+не\s+могу|невозможно|не\s+в\s+силах/i.test(reply)) {
+      v.push("содержит извинение или отказ, не предусмотренный скриптом");
+    }
+    // Excessive length — non-end nodes should stay under 6 sentences
+    if (nodeType !== "end") {
+      const sentences = reply.split(/(?<=[.!?])\s+/).filter((s) => s.trim().length > 3);
+      if (sentences.length > 6) {
+        v.push(`слишком длинный ответ: ${sentences.length} предл. (лимит 6)`);
+      }
+    }
+    return v;
+  }
 
   /**
    * Execute the current step of the active conversation script (schema mode).
    *
-   * Called on every incoming message when workMode === "schema". Looks up (or
+   * Called on every incoming message when useSchema is true.  Looks up (or
    * initialises) the per-chat position in the active diagram, builds a strict
-   * step-execution prompt, generates the AI reply, then advances the state
-   * machine to the next node.
+   * step-execution prompt — injecting top-scored KB templates when available —
+   * generates the AI reply, validates it (in strict mode), rebuilds when
+   * violations are found, then advances the state machine to the next node.
    *
-   * Returns the reply string, or null if schema mode is not active / no
+   * Logs the active node, reply source (template / generated / rebuilt), and
+   * validation result to make the agent's behaviour fully observable.
+   *
+   * Returns the reply string, or null when schema mode is inactive / no
    * diagram is configured.
    */
   protected async runScriptStep(
@@ -439,34 +572,92 @@ export abstract class BaseAgent extends EventEmitter {
     chatKey: string,
   ): Promise<string | null> {
     const settings = this.getAgentSettings();
-    if (settings.workMode !== "schema" || !settings.activeDiagramId) return null;
+    if (!settings.useSchema) {
+      this.logger.debug?.(`[TG:${this.name}] runScriptStep: useSchema=false, skipping`);
+      return null;
+    }
+    if (!settings.activeDiagramId) {
+      this.logger.warn(`[TG:${this.name}] runScriptStep: schema mode on but no activeDiagramId`);
+      return null;
+    }
 
     const diagram = this.storage.getDiagramById(settings.activeDiagramId);
-    if (!diagram || diagram.nodes.length === 0) return null;
+    if (!diagram) {
+      this.logger.warn(
+        `[TG:${this.name}] runScriptStep: diagram ${settings.activeDiagramId} not found`,
+      );
+      return null;
+    }
+    if (diagram.nodes.length === 0) {
+      this.logger.warn(`[TG:${this.name}] runScriptStep: diagram has no nodes`);
+      return null;
+    }
 
-    // Entry point: find the start node
-    const startNode = diagram.nodes.find((n) => n.type === "start");
+    // Strict mode: validates + rebuilds replies that violate script rules.
+    const strict = settings.schemaStrictMode ?? false;
+
+    // Entry point: prefer "start" node; fall back to first node so that
+    // diagrams without an explicit start marker still work.
+    const startNode =
+      diagram.nodes.find((n: DiagramNode) => n.type === "start") ?? diagram.nodes[0];
     if (!startNode) return null;
 
     // Resolve current position (null → first message → start node)
     const savedNodeId = this.storage.getConversationNodeId(this.id, chatId);
     const currentNode: DiagramNode =
-      (savedNodeId ? diagram.nodes.find((n) => n.id === savedNodeId) : null) ?? startNode;
+      (savedNodeId ? diagram.nodes.find((n: DiagramNode) => n.id === savedNodeId) : null) ??
+      startNode;
 
-    // Outgoing edges and their target nodes
-    const outEdges = diagram.edges.filter((e) => e.sourceId === currentNode.id);
-    const nextNodes = outEdges
-      .map((e) => ({ edge: e, node: diagram.nodes.find((n) => n.id === e.targetId) }))
-      .filter((x): x is { edge: DiagramEdge; node: DiagramNode } => x.node !== undefined);
-
-    // Build a step-focused system prompt
     const isDecision = currentNode.type === "decision";
     const isEnd = currentNode.type === "end";
 
-    let systemPrompt =
-      `Ты ведёшь разговор строго по заданному скрипту. Не отклоняйся от него.\n\n` +
-      `## ТЕКУЩИЙ ШАГ\n` +
-      `[${currentNode.type.toUpperCase()}] "${currentNode.text}"\n\n`;
+    this.logger.info(
+      `[TG:${this.name}] schema | chat=${chatId} node=[${currentNode.type}] "${currentNode.text.slice(0, 60)}" strict=${strict}`,
+    );
+
+    // ── KB top-response lookup ─────────────────────────────────────────────
+    // Top pairs (score ≥ 2) will be injected as explicit templates.
+    const kbPairs = this.getNodeKbPairs(diagram, currentNode.id);
+    const topPairs = kbPairs.filter((p) => p.score >= 2).slice(0, 4);
+    const hasTemplates = topPairs.length > 0;
+
+    // ── Per-client long-term memory (survives restarts) ────────────────────
+    const chatMemory = this.storage.getChatMemory(this.id, chatId);
+
+    // ── Outgoing edges (BRANCH routing + next-step context) ───────────────
+    const outEdges = diagram.edges.filter((e: DiagramEdge) => e.sourceId === currentNode.id);
+    const nextNodes = outEdges
+      .map((e: DiagramEdge) => ({
+        edge: e,
+        node: diagram.nodes.find((n: DiagramNode) => n.id === e.targetId),
+      }))
+      .filter(
+        (x: {
+          edge: DiagramEdge;
+          node: DiagramNode | undefined;
+        }): x is { edge: DiagramEdge; node: DiagramNode } => x.node !== undefined,
+      );
+
+    // ── System prompt ──────────────────────────────────────────────────────
+    // Strict mode preamble is more explicit about the template-first rule.
+    let systemPrompt = strict
+      ? `Ты менеджер, который ведёт разговор СТРОГО по скрипту. ОБЯЗАТЕЛЬНЫЕ правила:\n` +
+        `• Отвечай только в рамках текущего шага — не перескакивай и не возвращайся назад.\n` +
+        `• Используй шаблонные ответы (если они есть) дословно или с минимальной адаптацией.\n` +
+        `• Не раскрывай, что ты ИИ или бот.\n` +
+        `• Не извиняйся и не отказывай без причины.\n` +
+        `• Ответ краткий и конкретный (не более 4–6 предложений).\n\n`
+      : `Ты ведёшь разговор строго по заданному скрипту. Не отклоняйся от него.\n\n`;
+
+    if (chatMemory?.memoryText) {
+      systemPrompt +=
+        `## ПАМЯТЬ О КЛИЕНТЕ (из прошлых сессий)\n` +
+        `${chatMemory.memoryText}\n` +
+        `(Всего предыдущих сессий: ${chatMemory.sessionsCount})\n\n`;
+    }
+
+    systemPrompt +=
+      `## ТЕКУЩИЙ ШАГ\n` + `[${currentNode.type.toUpperCase()}] "${currentNode.text}"\n\n`;
 
     if (isEnd) {
       systemPrompt += `Инструкция: Это последний шаг — завершай разговор согласно скрипту.\n`;
@@ -485,24 +676,48 @@ export abstract class BaseAgent extends EventEmitter {
       }
     }
 
-    // For decision nodes with multiple branches, embed a BRANCH: tag instruction
-    // so the AI signals which path to take without a second round-trip.
+    // KB template injection — in strict mode, the AI is told to use these verbatim.
+    if (hasTemplates) {
+      const scoreLabel = (s: number) => (s === 3 ? "★★★" : s === 2 ? "★★" : "★");
+      systemPrompt += strict
+        ? `\n## ШАБЛОНЫ ОТВЕТОВ ДЛЯ ЭТОГО ШАГА (использовать как основу — обязательно)\n` +
+          `Используй один из этих шаблонов ДОСЛОВНО или адаптируй минимально:\n`
+        : `\n## ПРИМЕРЫ ОТВЕТОВ ДЛЯ ЭТОГО ШАГА (ориентируйся на них)\n`;
+      for (const p of topPairs) {
+        systemPrompt += `${scoreLabel(p.score)} ${p.response}\n`;
+      }
+      systemPrompt += `\n`;
+    }
+
+    // BRANCH tag for multi-exit decision nodes (stripped from the reply before sending)
     if (nextNodes.length > 1) {
-      const labels = nextNodes.map((x) => x.edge.label ?? x.node.text).join(" | ");
+      const labels = nextNodes
+        .map((x: { edge: DiagramEdge; node: DiagramNode }) => x.edge.label ?? x.node.text)
+        .join(" | ");
       systemPrompt +=
         `\nПосле своего ответа добавь ОТДЕЛЬНОЙ новой строкой: BRANCH:<вариант>\n` +
         `Где <вариант> — ТОЧНО одно из: ${labels}\n` +
         `(Эта строка будет удалена перед отправкой пользователю.)\n`;
     }
 
-    systemPrompt +=
-      `\n${this.buildScriptContext(diagram)}\n\n` +
-      `ВАЖНО: Отвечай ТОЛЬКО по текущему шагу. Не перескакивай вперёд и не возвращайся назад.`;
+    systemPrompt += `\n${this.buildScriptContext(diagram)}\n\n`;
 
+    // Recent conversation history — the model can continue naturally after a restart.
+    const recentHistory = this.storage.loadConversationHistory(chatKey).slice(-8);
+    if (recentHistory.length > 0) {
+      const lines = recentHistory.map(
+        (m) => `${m.role === "user" ? "Клиент" : "Менеджер"}: ${m.content.slice(0, 300)}`,
+      );
+      systemPrompt += `## ИСТОРИЯ ДИАЛОГА (для контекста)\n${lines.join("\n")}\n\n`;
+    }
+
+    systemPrompt += `ВАЖНО: Отвечай ТОЛЬКО по текущему шагу. Не перескакивай вперёд и не возвращайся назад.`;
+
+    // ── Generate reply ────────────────────────────────────────────────────
     const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
     const rawReply = await aiReply(userText, chatKey, systemPrompt, this.storage, workspaceTools);
 
-    // Strip the BRANCH: decision tag from the visible reply
+    // ── Strip BRANCH: routing tag ─────────────────────────────────────────
     let reply = rawReply;
     let chosenNextNodeId: string | undefined;
 
@@ -513,7 +728,7 @@ export abstract class BaseAgent extends EventEmitter {
         const chosenLabel = branchMatch[1].trim().toLowerCase();
         // Case-insensitive partial match on edge label or target node text
         const matched = nextNodes.find(
-          (x) =>
+          (x: { edge: DiagramEdge; node: DiagramNode }) =>
             x.edge.label?.toLowerCase().includes(chosenLabel) ||
             chosenLabel.includes((x.edge.label ?? "").toLowerCase()) ||
             x.node.text.toLowerCase().includes(chosenLabel) ||
@@ -526,10 +741,56 @@ export abstract class BaseAgent extends EventEmitter {
       }
     }
 
-    // Advance the state machine
+    // ── Strict-mode validation + auto-rebuild ─────────────────────────────
+    // Track reply source for observability logging.
+    let replySource = hasTemplates ? "template" : "generated";
+
+    if (strict) {
+      const violations = this.validateStrictReply(reply, currentNode.type);
+      if (violations.length > 0) {
+        this.logger.warn(
+          `[TG:${this.name}] strict validation FAIL chat=${chatId}: ${violations.join("; ")} — rebuilding`,
+        );
+        const templateHint =
+          topPairs.length > 0
+            ? `\nЭталонные ответы для данного шага:\n${topPairs.map((p) => `- ${p.response}`).join("\n")}\n`
+            : "";
+        const rebuildPrompt =
+          `Перепиши ответ менеджера, устранив нарушения скрипта.\n\n` +
+          `НАРУШЕНИЯ: ${violations.join("; ")}\n\n` +
+          `ТЕКУЩИЙ ШАГ: [${currentNode.type.toUpperCase()}] "${currentNode.text}"\n` +
+          templateHint +
+          `\nОРИГИНАЛЬНЫЙ ОТВЕТ:\n${reply}\n\n` +
+          `ТРЕБОВАНИЯ:\n` +
+          `• Строго в рамках текущего шага.\n` +
+          `• Без идентификации ИИ.\n` +
+          `• Без извинений и отказов.\n` +
+          `• Не более 4–6 предложений.\n` +
+          `• Верни только готовый ответ, без заголовков и пояснений.`;
+        try {
+          const rebuilt = await analyzeOnceDirect(rebuildPrompt);
+          if (rebuilt.trim()) {
+            reply = rebuilt.trim();
+            replySource = "rebuilt";
+          }
+        } catch (e) {
+          this.logger.warn(`[TG:${this.name}] strict rebuild failed: ${String(e)}`);
+        }
+      } else {
+        this.logger.info(`[TG:${this.name}] strict validation OK chat=${chatId}`);
+      }
+    }
+
+    this.logger.info(
+      `[TG:${this.name}] schema reply | chat=${chatId} source=${replySource} node="${currentNode.text.slice(0, 40)}"`,
+    );
+
+    // ── Advance the state machine ─────────────────────────────────────────
     if (nextNodes.length === 0 || isEnd) {
-      // Script complete — clear state so the next message restarts from the top
+      // Script complete — clear position so the next message restarts from the top.
       this.storage.deleteConversationState(this.id, chatId);
+      // Asynchronously save a structured memory note for future sessions (fire-and-forget).
+      void this.saveSessionMemory(chatId, chatKey, chatMemory);
     } else if (nextNodes.length === 1) {
       this.storage.setConversationNodeId(this.id, chatId, nextNodes[0].node.id);
     } else {
@@ -548,7 +809,7 @@ export abstract class BaseAgent extends EventEmitter {
     if (diagram.nodes.length === 0) return "";
     const lines: string[] = ["## ПОЛНЫЙ СКРИПТ (для справки)"];
 
-    const startNode = diagram.nodes.find((n) => n.type === "start");
+    const startNode = diagram.nodes.find((n: DiagramNode) => n.type === "start");
     if (!startNode) {
       // Fallback: flat list
       for (const n of diagram.nodes) lines.push(`• [${n.type.toUpperCase()}] ${n.text}`);
@@ -565,13 +826,13 @@ export abstract class BaseAgent extends EventEmitter {
       if (visited.has(nodeId)) continue;
       visited.add(nodeId);
 
-      const node = diagram.nodes.find((n) => n.id === nodeId);
+      const node = diagram.nodes.find((n: DiagramNode) => n.id === nodeId);
       if (!node) continue;
 
-      const outs = diagram.edges.filter((e) => e.sourceId === nodeId);
+      const outs = diagram.edges.filter((e: DiagramEdge) => e.sourceId === nodeId);
       const branchStr = outs
-        .map((e) => {
-          const target = diagram.nodes.find((n) => n.id === e.targetId);
+        .map((e: DiagramEdge) => {
+          const target = diagram.nodes.find((n: DiagramNode) => n.id === e.targetId);
           return `→ ${e.label ? `[${e.label}] ` : ""}${target?.text ?? "?"}`;
         })
         .join("  ");
