@@ -35,7 +35,8 @@ export type TelegramPanel =
   | "files"
   | "tasks"
   | "chat"
-  | "schema";
+  | "schema"
+  | "leads";
 
 export type { TelegramChatSubPanel };
 
@@ -165,6 +166,8 @@ export type TelegramProps = {
   ) => void;
   diagram: import("../controllers/telegram.ts").FlowDiagram | null;
   diagramLoading: boolean;
+  /** Live schema conversation states: chatId → nodeId or "__done__" (free-mode). */
+  chatConversationStates: Record<string, string>;
   diagramList: import("../controllers/telegram.ts").DiagramSummary[];
   diagramListLoading: boolean;
   onLoadDiagram: (agentId: string) => void;
@@ -179,6 +182,12 @@ export type TelegramProps = {
         mime: string,
       ) => Promise<import("../controllers/telegram.ts").FlowDiagram | null>)
     | null;
+  onExportDiagramJson: ((diagram: import("../controllers/telegram.ts").FlowDiagram) => void) | null;
+  onImportDiagramJson:
+    | ((file: File) => Promise<import("../controllers/telegram.ts").FlowDiagram | null>)
+    | null;
+  onCheckAnthropicKey: (() => Promise<boolean>) | null;
+  onSaveAnthropicKey: ((key: string) => Promise<{ ok: boolean; error?: string }>) | null;
   onLoadKnowledgeBase: (() => Promise<void>) | null;
   onDistributeTraining: (() => Promise<void>) | null;
   knowledgeBase: import("../controllers/telegram.ts").DiagramKnowledgeBase | null;
@@ -268,6 +277,13 @@ export type TelegramProps = {
     agentId: string,
     settings: import("../controllers/telegram.ts").AgentSettings,
   ) => void;
+  // Leads tab
+  leads: import("../controllers/telegram.ts").TelegramLead[];
+  leadsLoading: boolean;
+  leadsError: string | null;
+  onLoadLeads: (agentId: string) => void;
+  onDeleteLead: (leadId: string) => void;
+  onSaveLead: (lead: import("../controllers/telegram.ts").TelegramLead) => void;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -443,6 +459,7 @@ function renderPanelTabs(props: TelegramProps, agent: TelegramAgentRecord) {
     { id: "files", label: "Files" },
     { id: "chat", label: "Чат" },
     { id: "schema", label: "Схема" },
+    { id: "leads", label: "🎯 Лиды" },
   ];
 
   return html`
@@ -716,7 +733,7 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
       </div>
 
       <!-- ── 4. Кому отвечать ───────────────────────────────────────── -->
-      <div class="tg-setting-row" style="border-bottom:none;">
+      <div class="tg-setting-row">
         <div class="tg-setting-label">👥 Кому отвечать</div>
         <div class="tg-setting-right">
           <div class="tg-toggle-group">
@@ -738,6 +755,219 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                 `
               : html`
                   <div class="tg-setting-hint">Все входящие сообщения</div>
+                `
+          }
+        </div>
+      </div>
+
+      <!-- ── 5. Реактивация лидов ──────────────────────────────────── -->
+      <div class="tg-setting-row">
+        <div class="tg-setting-label">🔁 Реактивация</div>
+        <div class="tg-setting-right">
+
+          <!-- Header: toggle + description -->
+          <div class="tg-reeng-header">
+            <div class="tg-toggle-group">
+              <label class="tg-toggle-option ${settings.reEngagementEnabled ? "tg-toggle-option--active" : ""}">
+                <input type="radio" name="reeng-${agent.id}"
+                  ?checked=${!!settings.reEngagementEnabled}
+                  @change=${() => saveSettings({ reEngagementEnabled: true })}
+                  style="display:none;" />
+                ✅ Включить
+              </label>
+              <label class="tg-toggle-option ${!settings.reEngagementEnabled ? "tg-toggle-option--active" : ""}">
+                <input type="radio" name="reeng-${agent.id}"
+                  ?checked=${!settings.reEngagementEnabled}
+                  @change=${() => saveSettings({ reEngagementEnabled: false })}
+                  style="display:none;" />
+                Выкл
+              </label>
+            </div>
+            <div class="tg-setting-hint" style="margin-top:6px;">
+              Агент автоматически возобновляет диалог с молчащими контактами.
+              ИИ персонализирует каждое сообщение на основе истории переписки.
+            </div>
+          </div>
+
+          ${
+            settings.reEngagementEnabled
+              ? html`
+            <div class="tg-reeng-panel">
+
+              <!-- Day chips -->
+              <div class="tg-reeng-section-title">Интервалы молчания (дней)</div>
+              <div class="tg-reeng-days">
+                ${[1, 2, 3, 5, 7, 14].map((d) => {
+                  const active = (settings.reEngagementDelays ?? [1, 2, 3, 5]).includes(d);
+                  return html`
+                    <button
+                      type="button"
+                      class="tg-reeng-day ${active ? "tg-reeng-day--active" : ""}"
+                      title="${d} ${d === 1 ? "день" : d < 5 ? "дня" : "дней"} без ответа"
+                      @click=${() => {
+                        const cur = settings.reEngagementDelays ?? [1, 2, 3, 5];
+                        const next = active
+                          ? cur.filter((x) => x !== d)
+                          : [...cur, d].toSorted((a, b) => a - b);
+                        saveSettings({ reEngagementDelays: next });
+                      }}
+                    >${d}д</button>
+                  `;
+                })}
+              </div>
+
+              <!-- Template -->
+              <div class="tg-reeng-section-title" style="margin-top:14px;">
+                Шаблон сообщения
+                <span class="tg-reeng-badge-ai">✨ AI улучшает</span>
+              </div>
+              <textarea
+                class="input tg-reeng-textarea"
+                rows="3"
+                placeholder='Привет {имя}! Горит сделка с профитом 37%, ты с нами? 🔥'
+                .value=${settings.reEngagementTemplate ?? ""}
+                @input=${(e: Event) =>
+                  saveSettings({
+                    reEngagementTemplate: (e.target as HTMLTextAreaElement).value || undefined,
+                  })}
+              ></textarea>
+
+              <!-- Placeholders hint -->
+              <div class="tg-reeng-placeholders">
+                <span class="tg-reeng-hint-label">Переменные:</span>
+                <code class="tg-reeng-code">{имя}</code>
+                <code class="tg-reeng-code">{фамилия}</code>
+                <code class="tg-reeng-code">{имя_полное}</code>
+              </div>
+
+              <!-- AI tip box -->
+              <div class="tg-reeng-ai-tip">
+                <span class="tg-reeng-ai-tip-icon">🤖</span>
+                <span>
+                  ИИ персонализирует шаблон для каждого клиента. Если имя не указано — берёт
+                  <strong>имя профиля</strong> (@username). Итоговый текст будет живым и интересным.
+                </span>
+              </div>
+
+              <!-- Name-only checkbox -->
+              <label class="tg-reeng-checkbox">
+                <input
+                  type="checkbox"
+                  ?checked=${!!settings.reEngagementNameOnly}
+                  @change=${(e: Event) =>
+                    saveSettings({ reEngagementNameOnly: (e.target as HTMLInputElement).checked })}
+                />
+                <span>Не писать, если нет ни имени, ни @username</span>
+              </label>
+
+            </div>
+          `
+              : nothing
+          }
+        </div>
+      </div>
+
+      <!-- ── 6. Группа для лидов ───────────────────────────────────── -->
+      <div class="tg-setting-row">
+        <div class="tg-setting-label">🎯 Группа лидов</div>
+        <div class="tg-setting-right">
+          <input
+            type="text"
+            class="input"
+            style="width:100%;max-width:420px;font-size:13px;"
+            placeholder="https://t.me/+xxxx или @groupname"
+            .value=${settings.leadsGroupLink ?? ""}
+            @input=${(e: Event) =>
+              saveSettings({
+                leadsGroupLink: (e.target as HTMLInputElement).value.trim() || undefined,
+              })}
+          />
+          <div class="tg-setting-hint">
+            Агент будет автоматически отправлять карточку лида в эту группу/канал при каждом новом контакте.
+            Работает с закрытыми группами (ссылка-приглашение) и публичными (<code style="background:var(--bg-muted);padding:1px 4px;border-radius:3px;">@username</code>).
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 6. Офлайн-режим ────────────────────────────────────────── -->
+      <div class="tg-setting-row" style="border-bottom:none;">
+        <div class="tg-setting-label">📴 Менеджер офлайн</div>
+        <div class="tg-setting-right">
+          <div class="tg-toggle-group">
+            <label class="tg-toggle-option ${settings.offlineReplyEnabled ? "tg-toggle-option--active" : ""}">
+              <input type="radio" name="offlineReply-${agent.id}"
+                ?checked=${!!settings.offlineReplyEnabled}
+                @change=${() => saveSettings({ offlineReplyEnabled: true })}
+                style="display:none;" />
+              ИИ ведёт диалог
+            </label>
+            <label class="tg-toggle-option ${!settings.offlineReplyEnabled ? "tg-toggle-option--active" : ""}">
+              <input type="radio" name="offlineReply-${agent.id}"
+                ?checked=${!settings.offlineReplyEnabled}
+                @change=${() => saveSettings({ offlineReplyEnabled: false })}
+                style="display:none;" />
+              Молчать
+            </label>
+          </div>
+          ${
+            settings.offlineReplyEnabled
+              ? html`
+                  <div class="tg-setting-hint" style="margin-bottom:10px;">
+                    Пока менеджер недоступен — ИИ продолжает общение, обрабатывает лид
+                    и узнаёт удобное время звонка. Работает в режиме «По расписанию».
+                  </div>
+
+                  <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;font-weight:500;">
+                    Рабочие часы менеджера
+                  </div>
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+                    <span style="font-size:13px;color:var(--text-muted);">с</span>
+                    <input
+                      type="time"
+                      class="input"
+                      style="width:120px;font-size:13px;"
+                      .value=${settings.managerWorkFrom ?? settings.scheduleFrom ?? "09:00"}
+                      @change=${(e: Event) =>
+                        saveSettings({ managerWorkFrom: (e.target as HTMLInputElement).value })}
+                    />
+                    <span style="font-size:13px;color:var(--text-muted);">до</span>
+                    <input
+                      type="time"
+                      class="input"
+                      style="width:120px;font-size:13px;"
+                      .value=${settings.managerWorkTo ?? settings.scheduleTo ?? "18:00"}
+                      @change=${(e: Event) =>
+                        saveSettings({ managerWorkTo: (e.target as HTMLInputElement).value })}
+                    />
+                  </div>
+                  <div class="tg-setting-hint" style="margin-bottom:10px;">
+                    ИИ скажет клиенту: «менеджер доступен с [от] до [до] — давайте созвонимся завтра в это время»
+                  </div>
+
+                  <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">
+                    Доп. инструкции для ИИ в офлайн-режиме
+                    <span style="opacity:0.6;">(необязательно)</span>
+                  </div>
+                  <textarea
+                    class="input"
+                    rows="3"
+                    style="width:100%;max-width:420px;resize:vertical;font-size:13px;line-height:1.5;"
+                    placeholder="Например: уточни какой продукт интересует, предложи записаться на демо в {от}–{до}"
+                    .value=${settings.offlineReplyTemplate ?? ""}
+                    @input=${(e: Event) =>
+                      saveSettings({
+                        offlineReplyTemplate: (e.target as HTMLTextAreaElement).value || undefined,
+                      })}
+                  ></textarea>
+                  <div class="tg-setting-hint" style="margin-top:4px;">
+                    В инструкциях можно использовать
+                    <code style="background:var(--bg-muted);padding:1px 4px;border-radius:3px;">{от}</code>
+                    и <code style="background:var(--bg-muted);padding:1px 4px;border-radius:3px;">{до}</code>
+                    — подставится время из расписания.
+                  </div>
+                `
+              : html`
+                  <div class="tg-setting-hint">Вне расписания агент не отвечает — сообщения игнорируются</div>
                 `
           }
         </div>
@@ -1268,6 +1498,7 @@ function renderDetail(props: TelegramProps) {
     onSchemaScopeChange: props.onSchemaScopeChange,
     diagram: props.diagram,
     diagramLoading: props.diagramLoading,
+    chatConversationStates: props.chatConversationStates,
     diagramList: props.diagramList,
     diagramListLoading: props.diagramListLoading,
     onLoadDiagram: props.onLoadDiagram,
@@ -1277,6 +1508,10 @@ function renderDetail(props: TelegramProps) {
     onRenameDiagram: props.onRenameDiagram,
     onNewDiagram: props.onNewDiagram,
     onImportDiagramFromImage: props.onImportDiagramFromImage,
+    onExportDiagramJson: props.onExportDiagramJson,
+    onImportDiagramJson: props.onImportDiagramJson,
+    onCheckAnthropicKey: props.onCheckAnthropicKey,
+    onSaveAnthropicKey: props.onSaveAnthropicKey,
     onLoadKnowledgeBase: props.onLoadKnowledgeBase,
     onDistributeTraining: props.onDistributeTraining,
     knowledgeBase: props.knowledgeBase,
@@ -1356,6 +1591,104 @@ function renderDetail(props: TelegramProps) {
       ${props.activePanel === "files" ? renderFilesPanel(props, agent.id) : nothing}
       ${props.activePanel === "chat" ? renderChatPanel(scenarioProps, agent) : nothing}
       ${props.activePanel === "schema" ? renderSchemaPanel(scenarioProps, agent) : nothing}
+      ${props.activePanel === "leads" ? renderLeadsPanel(props, agent) : nothing}
+    </section>
+  `;
+}
+
+// ─── Leads panel ─────────────────────────────────────────────────────────────
+
+function renderLeadsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
+  const leads = props.leads ?? [];
+
+  const formatDate = (iso: string) => {
+    try {
+      const d = new Date(iso);
+      return `${d.getDate().toString().padStart(2, "0")}.${(d.getMonth() + 1).toString().padStart(2, "0")} / ${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+    } catch {
+      return iso;
+    }
+  };
+
+  return html`
+    <section class="card" style="margin-top: 12px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+        <div class="card-title" style="margin:0;">🎯 Лиды</div>
+        <button
+          type="button"
+          class="btn btn-sm"
+          ?disabled=${props.leadsLoading}
+          @click=${() => props.onLoadLeads(agent.id)}
+        >
+          ${props.leadsLoading ? "Загрузка…" : "Обновить"}
+        </button>
+      </div>
+
+      ${props.leadsError ? html`<div class="error-banner">${props.leadsError}</div>` : nothing}
+
+      ${
+        leads.length === 0 && !props.leadsLoading
+          ? html`
+              <div class="empty-hint">
+                Лиды ещё не собраны. Они появятся автоматически, когда ИИ зафиксирует телефон или завершит диалог.
+              </div>
+            `
+          : nothing
+      }
+
+      <div class="tg-leads-list">
+        ${leads.map((lead) => {
+          const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "—";
+          const contactTimeStr = lead.preferredContactTime
+            ? `Время связи ${lead.preferredContactTime}`
+            : null;
+          return html`
+            <div class="tg-lead-card">
+              <div class="tg-lead-name">${name}</div>
+              <div class="tg-lead-fields">
+                ${lead.phone ? html`<span class="tg-lead-chip">📞 ${lead.phone}</span>` : nothing}
+                ${
+                  lead.contactMethod
+                    ? html`<span class="tg-lead-chip">${lead.contactMethod}</span>`
+                    : nothing
+                }
+                ${
+                  lead.country
+                    ? html`<span class="tg-lead-chip">🌍 ${lead.country}</span>`
+                    : nothing
+                }
+                ${lead.age ? html`<span class="tg-lead-chip">👤 ${lead.age} лет</span>` : nothing}
+                ${
+                  contactTimeStr
+                    ? html`<span class="tg-lead-chip">🕐 ${contactTimeStr}</span>`
+                    : nothing
+                }
+                ${lead.role ? html`<span class="tg-lead-chip">💼 ${lead.role}</span>` : nothing}
+              </div>
+              ${
+                lead.telegramLink
+                  ? html`
+                    <div class="tg-lead-row">
+                      <a href=${lead.telegramLink} target="_blank" rel="noopener" class="tg-lead-link">
+                        ${lead.telegramLink}
+                      </a>
+                    </div>
+                  `
+                  : nothing
+              }
+              <div class="tg-lead-footer">
+                <span class="tg-lead-meta">🤖 ${lead.agentName ?? agent.name}</span>
+                <span class="tg-lead-meta">📅 ${formatDate(lead.createdAt)}</span>
+                <button
+                  type="button"
+                  class="btn btn-xs btn-danger"
+                  @click=${() => props.onDeleteLead(lead.id)}
+                >✕</button>
+              </div>
+            </div>
+          `;
+        })}
+      </div>
     </section>
   `;
 }

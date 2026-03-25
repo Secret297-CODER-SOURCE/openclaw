@@ -235,6 +235,84 @@ export interface AgentSettings {
    *                       the system prompt (default / legacy behaviour).
    */
   schemaStrictMode?: boolean;
+
+  /**
+   * When true and scheduleMode === "schedule", the AI continues chatting and
+   * processing leads while the manager is offline.  The AI knows the manager's
+   * working hours ({от}/{до}) and focuses on qualifying the lead and collecting
+   * a convenient callback time.  Agent replies to every message as usual.
+   */
+  offlineReplyEnabled?: boolean;
+
+  /**
+   * Extra task instructions injected into the AI system prompt for offline mode.
+   * Supports {от} (scheduleFrom) and {до} (scheduleTo) placeholders.
+   * Leave empty for the built-in default goal.
+   */
+  offlineReplyTemplate?: string;
+
+  /**
+   * Explicit manager working hours shown to the AI in offline mode so it can
+   * tell clients "the manager is available from HH:MM to HH:MM".
+   * Falls back to scheduleFrom/scheduleTo when not set.
+   */
+  managerWorkFrom?: string;
+  managerWorkTo?: string;
+
+  /**
+   * Telegram group/channel link (e.g. https://t.me/+xxxx or @groupname) where
+   * the agent will push a formatted lead card each time a new lead is captured.
+   * Works for both private (invite-link) and public groups.
+   */
+  leadsGroupLink?: string;
+
+  // ── Re-engagement (cold outreach to dormant contacts) ──────────────────────
+
+  /** When true, the agent periodically writes to contacts who haven't replied in N days. */
+  reEngagementEnabled?: boolean;
+
+  /**
+   * Days-after-last-client-message thresholds at which to send a re-engagement message.
+   * Example: [1, 2, 3, 5] sends at day 1, day 2, day 3, and day 5 of silence.
+   */
+  reEngagementDelays?: number[];
+
+  /**
+   * Message template. Supports placeholders:
+   *   {имя}        — first name
+   *   {фамилия}    — last name
+   *   {имя_полное} — first + last
+   * Example: "Привет {имя}! Горит сделка с профитом 37%, ты с нами? 🔥"
+   */
+  reEngagementTemplate?: string;
+
+  /** When true, only send re-engagement if the contact's first name is known. */
+  reEngagementNameOnly?: boolean;
+}
+
+// ─── Lead record ──────────────────────────────────────────────────────────────
+
+/** A lead collected from a conversation (auto-extracted or manually created). */
+export interface TelegramLead {
+  id: string;
+  agentId: string;
+  chatId: string;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  /** e.g. "Tg" | "Tel" | "Tg/Tel" | "WhatsApp" */
+  contactMethod?: string;
+  country?: string;
+  age?: number;
+  /** e.g. "24.03 / 14:05 TR" */
+  preferredContactTime?: string;
+  /** e.g. "Баер - Менеджер" */
+  role?: string;
+  telegramLink?: string;
+  agentName?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 // ─── Agent manager interface (used by master_control to avoid circular imports) ─

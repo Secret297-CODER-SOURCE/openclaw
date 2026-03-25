@@ -49,6 +49,8 @@ export class BotAgent extends BaseAgent {
       await this.ensureWorkspaceFiles();
       await this.registerBehaviors(this.record.behaviors);
       this.setupBaseHandlers();
+      this.restorePendingFollowups();
+      this.startReEngagementCron();
 
       this.bot
         .start({
@@ -262,6 +264,18 @@ export class BotAgent extends BaseAgent {
     const text = ctx.message?.text ?? "";
     const chatId = String(ctx.chat?.id ?? "");
     this.trackMessage("in", text, chatId);
+    // Use a single, stable conversation key per chat so that context is shared
+    // across task sessions and auto_reply — enabling continuous dialogue even
+    // when the mode switches or the agent restarts.
+    const chatKey = `${this.id}:${chatId}`;
+    // Save contact info for re-engagement tracking
+    this.saveContactInfo(chatId, {
+      firstName: ctx.from?.first_name,
+      lastName: ctx.from?.last_name,
+      username: ctx.from?.username,
+    });
+    // Detect "напиши через X минут" and schedule a follow-up; also cancels prior follow-up.
+    this.detectFollowupRequest(chatId, chatKey, text);
 
     // master_control: highest priority — if this chat is an authorized control
     // channel, route to the agentic management loop and skip normal handling.
@@ -278,11 +292,6 @@ export class BotAgent extends BaseAgent {
       }
       return;
     }
-
-    // Use a single, stable conversation key per chat so that context is shared
-    // across task sessions and auto_reply — enabling continuous dialogue even
-    // when the mode switches or the agent restarts.
-    const chatKey = `${this.id}:${chatId}`;
 
     // Task sessions take priority over auto_reply.
     // First try an exact numeric chatId match; fall back to username matching
@@ -339,9 +348,33 @@ export class BotAgent extends BaseAgent {
       return;
     }
 
-    // Respect work-mode settings: skip reply outside scheduled window.
+    // Respect work-mode settings: outside schedule → offline lead-processing.
     const agentSettings = this.getAgentSettings();
-    if (!this.isWithinSchedule(agentSettings)) return;
+    if (!this.isWithinSchedule(agentSettings)) {
+      if (this.isOfflineLeadMode(agentSettings)) {
+        // AI continues chatting: qualifies lead, collects callback time.
+        try {
+          await ctx.replyWithChatAction("typing");
+          const diagram = agentSettings.activeDiagramId
+            ? (this.storage.getDiagramById(agentSettings.activeDiagramId) ?? undefined)
+            : undefined;
+          const reply = await this.runOfflineLeadMode(
+            chatId,
+            text,
+            chatKey,
+            agentSettings,
+            diagram,
+          );
+          if (reply) {
+            await ctx.reply(reply);
+            this.trackMessage("out", reply, chatId);
+          }
+        } catch (e) {
+          this.logger.warn(`[TG:${this.name}] offline-lead reply failed: ${String(e)}`);
+        }
+      }
+      return;
+    }
 
     // replyTo: "tasks" — only engage with chats that have an active task session.
     if (!this.isAllowedChat(chatId, agentSettings)) return;

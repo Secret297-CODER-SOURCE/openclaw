@@ -11,7 +11,12 @@ import { randomUUID } from "crypto";
 import fs from "fs";
 import path from "path";
 import { AgentManager } from "./agents/AgentManager";
-import { analyzeImageOnce, callAdapterOnce } from "./behaviors/AiReplyEngine";
+import {
+  analyzeImageOnce,
+  callAdapterOnce,
+  callAdapterOnceJson,
+  resetDirectAdapter,
+} from "./behaviors/AiReplyEngine";
 import { TelegramStorage } from "./storage/TelegramStorage";
 import type { ProxyConfig } from "./storage/TelegramStorage";
 import {
@@ -37,6 +42,52 @@ import {
 /** Returns true if `id` is a pure numeric Telegram peer ID (possibly negative for groups/channels). */
 function isNumericTelegramId(id: string): boolean {
   return /^-?\d+$/.test(id.replace(/^@/, ""));
+}
+
+/**
+ * Extract a JSON object or array from an AI reply that may include markdown fences,
+ * preamble text, or trailing commentary.
+ * Strategy:
+ *   1. Strip ``` / ```json fences (multiline-safe).
+ *   2. Try parsing the whole cleaned string.
+ *   3. If that fails, find the first `{` or `[` and the matching last `}` or `]`
+ *      and parse just that slice.
+ * Returns the parsed value or throws with the original raw text in the message.
+ */
+function extractJsonFromAiReply(raw: string): unknown {
+  // Step 1: strip markdown code fences (handles ```json\n...\n``` and inline ```)
+  let cleaned = raw
+    .replace(/^```(?:json)?\s*/im, "")
+    .replace(/\s*```\s*$/im, "")
+    .trim();
+
+  // Step 2: try direct parse
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // fall through
+  }
+
+  // Step 3: find outermost JSON object or array
+  const objStart = cleaned.indexOf("{");
+  const arrStart = cleaned.indexOf("[");
+  const start =
+    objStart === -1 ? arrStart : arrStart === -1 ? objStart : Math.min(objStart, arrStart);
+  if (start !== -1) {
+    const openChar = cleaned[start];
+    const closeChar = openChar === "{" ? "}" : "]";
+    const end = cleaned.lastIndexOf(closeChar);
+    if (end > start) {
+      const slice = cleaned.slice(start, end + 1);
+      try {
+        return JSON.parse(slice);
+      } catch {
+        // fall through to error
+      }
+    }
+  }
+
+  throw new Error(`ИИ вернул некорректный JSON: ${raw.slice(0, 300)}`);
 }
 
 /** Shape returned by the `resolveEntityId` tool. */
@@ -71,6 +122,16 @@ export class TelegramPlugin implements GatewayPlugin {
     this.manager = new AgentManager(this.storage, ctx.logger);
     await this.manager.init();
 
+    // Restore saved Anthropic key into the environment so vision features work
+    // after a gateway restart without the user having to re-enter the key.
+    if (!process.env.ANTHROPIC_API_KEY?.trim()) {
+      const savedCfg = this.storage.loadPluginConfig();
+      if (savedCfg?.anthropicApiKey) {
+        process.env.ANTHROPIC_API_KEY = savedCfg.anthropicApiKey;
+        ctx.logger.info("[TelegramPlugin] restored ANTHROPIC_API_KEY from saved config");
+      }
+    }
+
     // Forward all agent events to every connected WS client
     this.manager.onEvent((event: TelegramEvent) => {
       ctx.broadcast({ method: "telegram.event", params: event });
@@ -95,6 +156,12 @@ export class TelegramPlugin implements GatewayPlugin {
       reply({ id: msg.id, method: msg.method, result: safeSerialize(result) });
 
     const fail = (error: string) => reply({ id: msg.id, method: msg.method, error });
+
+    // Guard against requests arriving before init() completes (race on startup).
+    if (!this.storage || !this.manager) {
+      fail("Plugin still initializing — please retry in a moment");
+      return true;
+    }
 
     const p = (msg.params ?? {}) as Record<string, any>;
 
@@ -185,6 +252,9 @@ export class TelegramPlugin implements GatewayPlugin {
               : {}),
             ...(incoming.scheduleTo !== undefined
               ? { scheduleTo: String(incoming.scheduleTo) }
+              : {}),
+            ...(incoming.schemaStrictMode !== undefined
+              ? { schemaStrictMode: Boolean(incoming.schemaStrictMode) }
               : {}),
           };
           this.storage.saveAgentSettings(String(p.agentId), settings);
@@ -510,6 +580,36 @@ export class TelegramPlugin implements GatewayPlugin {
           break;
         }
 
+        // ── Anthropic API key management ───────────────────────────────────
+
+        case "telegram.config.checkAnthropicKey": {
+          // Returns whether ANTHROPIC_API_KEY is currently set (env OR saved config).
+          const hasKey = !!process.env.ANTHROPIC_API_KEY?.trim();
+          respond({ hasKey });
+          break;
+        }
+
+        case "telegram.config.setAnthropicKey": {
+          const newKey = String(p.key ?? "").trim();
+          if (!newKey) {
+            fail("key is required");
+            break;
+          }
+          // Basic format sanity check — Anthropic keys start with "sk-ant-"
+          if (!newKey.startsWith("sk-ant-")) {
+            fail("Неверный формат ключа. Anthropic API ключ должен начинаться с «sk-ant-»");
+            break;
+          }
+          // Apply immediately so the next image call picks it up
+          process.env.ANTHROPIC_API_KEY = newKey;
+          resetDirectAdapter();
+          // Persist to plugin-config.json alongside apiId/apiHash
+          const existingCfg = this.storage.loadPluginConfig() ?? { apiId: 0, apiHash: "" };
+          this.storage.savePluginConfig({ ...existingCfg, anthropicApiKey: newKey });
+          respond({ ok: true });
+          break;
+        }
+
         case "telegram.config.set": {
           const apiId = parseInt(String(p.apiId ?? "0"), 10);
           const apiHash = String(p.apiHash ?? "").trim();
@@ -562,6 +662,50 @@ export class TelegramPlugin implements GatewayPlugin {
             ...(p.proxyPassword ? { password: String(p.proxyPassword) } : {}),
           };
           this.storage.savePluginConfig({ ...existing, proxy });
+          respond({ ok: true });
+          break;
+        }
+
+        // ── Scenario: Conversation States ─────────────────────────────────
+
+        case "telegram.scenario.getConversationStates": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          // Returns array of {chatId, nodeId} for all chats tracked for this agent.
+          // nodeId == "__done__" means schema completed → free continuation mode.
+          respond(this.storage.getAllConversationStates(String(p.agentId)));
+          break;
+        }
+
+        // ── Leads ─────────────────────────────────────────────────────────
+
+        case "telegram.leads.list": {
+          if (!p.agentId) {
+            fail("agentId required");
+            break;
+          }
+          respond({ leads: this.storage.getLeads(String(p.agentId)) });
+          break;
+        }
+
+        case "telegram.leads.save": {
+          if (!p.lead || typeof p.lead !== "object") {
+            fail("lead required");
+            break;
+          }
+          this.storage.saveLead(p.lead as import("./types.js").TelegramLead);
+          respond({ ok: true });
+          break;
+        }
+
+        case "telegram.leads.delete": {
+          if (!p.leadId) {
+            fail("leadId required");
+            break;
+          }
+          this.storage.deleteLead(String(p.leadId));
           respond({ ok: true });
           break;
         }
@@ -791,12 +935,6 @@ Rules:
             break;
           }
 
-          // Strip markdown code fences if present
-          const jsonStr = rawText
-            .replace(/^```(?:json)?\s*/i, "")
-            .replace(/\s*```$/i, "")
-            .trim();
-
           let parsed: {
             title?: string;
             nodes?: unknown[];
@@ -804,9 +942,9 @@ Rules:
             groups?: unknown[];
           };
           try {
-            parsed = JSON.parse(jsonStr) as typeof parsed;
-          } catch {
-            fail(`AI returned invalid JSON: ${jsonStr.slice(0, 200)}`);
+            parsed = extractJsonFromAiReply(rawText) as typeof parsed;
+          } catch (err) {
+            fail(err instanceof Error ? err.message : String(err));
             break;
           }
 
@@ -852,8 +990,7 @@ Rules:
 }`;
 
           const systemPrompt = isModify
-            ? `You are a flowchart editor assistant. The user will give you an existing FlowDiagram JSON and a modification request.
-Apply the requested changes and return the COMPLETE updated FlowDiagram JSON.
+            ? `You are a flowchart editor. Output ONLY a single JSON object matching the FlowDiagram schema below. No prose, no questions, no explanations — just the JSON.
 
 ${diagramSchema}
 
@@ -861,40 +998,35 @@ Rules:
 - Keep all existing node IDs/positions unless the change explicitly requires moving or deleting them
 - Use short unique IDs (8 random chars) for any NEW nodes/edges/groups
 - Keep x in 0-900, y in 0-900 range; space nodes 130-160px apart
-- Return ONLY the JSON object, no markdown, no explanation`
-            : `You are a flowchart generation assistant. The user will describe a process or workflow.
-Generate a FlowDiagram JSON that visually represents it.
+- YOUR ENTIRE RESPONSE MUST BE THE JSON OBJECT. Nothing before or after it.`
+            : `You are a flowchart generator. Output ONLY a single JSON object matching the FlowDiagram schema below. No prose, no questions, no explanations — just the JSON.
 
 ${diagramSchema}
 
 Rules:
 - Use short unique IDs (8 random chars) for all id fields
-- Place nodes in a readable top-to-bottom or left-to-right layout, x in 0-900, y in 0-900, spaced 130-160px apart
+- Place nodes in a readable top-to-bottom layout, x in 0-900, y in 0-900, spaced 130-160px apart
 - Always include at least one "start" and one "end" node
 - For groups, set x/y to enclose the contained nodes with 30px padding on each side
-- Return ONLY the JSON object, no markdown, no explanation`;
+- YOUR ENTIRE RESPONSE MUST BE THE JSON OBJECT. Nothing before or after it.`;
 
           const userPrompt = isModify
             ? `Current diagram:\n${JSON.stringify(p.currentDiagram)}\n\nModification request:\n${String(p.prompt)}`
-            : String(p.prompt);
+            : `Generate a FlowDiagram JSON for this workflow:\n${String(p.prompt)}`;
 
           let rawText: string;
           try {
-            rawText = await callAdapterOnce(userPrompt, systemPrompt);
+            rawText = await callAdapterOnceJson(userPrompt, systemPrompt);
           } catch (err) {
             fail(err instanceof Error ? err.message : String(err));
             break;
           }
 
-          const jsonStr = rawText
-            .replace(/^```(?:json)?\s*/i, "")
-            .replace(/\s*```$/i, "")
-            .trim();
           let parsed: { title?: string; nodes?: unknown[]; edges?: unknown[]; groups?: unknown[] };
           try {
-            parsed = JSON.parse(jsonStr) as typeof parsed;
-          } catch {
-            fail(`ИИ вернул некорректный JSON: ${jsonStr.slice(0, 200)}`);
+            parsed = extractJsonFromAiReply(rawText) as typeof parsed;
+          } catch (err) {
+            fail(err instanceof Error ? err.message : String(err));
             break;
           }
 
@@ -1175,10 +1307,18 @@ Rules:
             break;
           }
 
-          // Load diagram to get node list
-          const diagram = this.storage.getDiagram(agentId, distScope);
+          // Load diagram to get node list.
+          // Priority: activeDiagramId from agent settings → latest for scope.
+          const agentSettingsForDist = this.storage.getAgentSettings(agentId);
+          const diagram =
+            (agentSettingsForDist.activeDiagramId
+              ? this.storage.getDiagramById(agentSettingsForDist.activeDiagramId)
+              : null) ?? this.storage.getDiagram(agentId, distScope);
           if (!diagram || diagram.nodes.length === 0) {
-            fail("Нет схемы или узлов для этого агента/области. Сначала создайте схему.");
+            fail(
+              "Нет схемы или узлов для этого агента/области. " +
+                "Сначала создайте схему и выберите её как активную в настройках агента.",
+            );
             break;
           }
 
@@ -1247,33 +1387,36 @@ Rules:
             )
             .join("\n---\n");
 
-          const distSystem = `You are a helpful assistant that maps conversation Q&A pairs to the most relevant step/node in a sales flow diagram.
-Return ONLY a valid JSON object where keys are node IDs (from the provided list) and values are arrays of pair indexes (integers).
-Example: {"node_abc": [0, 2, 5], "node_xyz": [1, 3]}
-Rules:
-- Every pair must be assigned to exactly one node.
-- Assign each pair to the node whose topic most closely matches the conversation topic.
-- Use only node IDs from the provided list.`;
-          const distUser = `Flow diagram nodes:\n${nodeList}\n\nTraining pairs (index: Q&A):\n${pairsText}\n\nReturn the JSON mapping.`;
+          const distSystem =
+            `Ты — система распределения диалогов по узлам схемы продаж.\n` +
+            `Твоя задача: каждую пару вопрос/ответ назначить на ОДИН наиболее подходящий узел схемы.\n\n` +
+            `Верни ТОЛЬКО валидный JSON-объект: ключи — ID узлов, значения — массивы индексов пар.\n` +
+            `Пример: {"node_abc": [0, 2, 5], "node_xyz": [1, 3]}\n\n` +
+            `Правила:\n` +
+            `- Каждая пара назначается РОВНО в один узел.\n` +
+            `- Назначай пару в узел, чья тема/назначение наиболее точно совпадает с темой разговора.\n` +
+            `- Используй ТОЛЬКО ID узлов из предоставленного списка.\n` +
+            `- Не пропускай пары — все индексы от 0 до N-1 должны быть в ответе.\n` +
+            `- Не добавляй пояснений — только JSON.`;
+          const distUser =
+            `Узлы схемы продаж:\n${nodeList}\n\n` +
+            `Обучающие пары (индекс: вопрос → ответ менеджера):\n${pairsText}\n\n` +
+            `Верни JSON-маппинг: какие пары (по индексу) относятся к каким узлам.`;
 
           let rawText: string;
           try {
-            rawText = await callAdapterOnce(distUser, distSystem);
+            rawText = await callAdapterOnceJson(distUser, distSystem);
           } catch (err) {
             fail(`Ошибка ИИ: ${err instanceof Error ? err.message : String(err)}`);
             break;
           }
 
-          // Parse AI mapping response (strip optional code fence)
-          const jsonStr = rawText
-            .replace(/^```(?:json)?\s*/i, "")
-            .replace(/\s*```$/i, "")
-            .trim();
+          // Parse AI mapping response
           let mapping: Record<string, number[]>;
           try {
-            mapping = JSON.parse(jsonStr) as Record<string, number[]>;
-          } catch {
-            fail(`ИИ вернул некорректный JSON: ${jsonStr.slice(0, 200)}`);
+            mapping = extractJsonFromAiReply(rawText) as Record<string, number[]>;
+          } catch (err) {
+            fail(err instanceof Error ? err.message : String(err));
             break;
           }
 

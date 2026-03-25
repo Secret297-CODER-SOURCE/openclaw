@@ -85,12 +85,15 @@ import {
   loadTelegramDiagram,
   loadTelegramDiagramList,
   loadDiagramListAllScopes,
+  loadConversationStates,
   saveTelegramDiagram,
   selectTelegramDiagramById,
   deleteTelegramDiagramById,
   renameTelegramDiagram,
   createNewTelegramDiagram,
   importTelegramDiagramFromImage,
+  exportTelegramDiagramJson,
+  importTelegramDiagramFromJson,
   addTelegramChatNode,
   deleteTelegramChatNode,
   processTelegramTrainingFile,
@@ -114,6 +117,9 @@ import {
   loadWebchatDialogs,
   loadWebchatMessages,
   sendWebchatMessage,
+  loadLeads,
+  deleteTelegramLead,
+  saveTelegramLead,
 } from "./controllers/telegram.ts";
 import { icons } from "./icons.ts";
 import { TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
@@ -654,6 +660,10 @@ export function renderApp(state: AppViewState) {
                     // active-diagram dropdown is populated immediately without requiring
                     // the user to visit the Schema tab first.
                     void loadDiagramListAllScopes(state, id);
+                    // Load live schema conversation states so the diagram can show
+                    // which clients are at which node (including "__done__" → free mode).
+                    void loadConversationStates(state, id);
+                    void loadLeads(state, id);
                   }
                   // Reset webchat state for the new agent
                   if (state._telegramWebchatPollTimer !== null) {
@@ -968,6 +978,7 @@ export function renderApp(state: AppViewState) {
                 schemaScope: state.telegramSchemaScope,
                 diagram: state.telegramDiagram,
                 diagramLoading: state.telegramDiagramLoading,
+                chatConversationStates: state.telegramConversationStates,
                 diagramList: state.telegramDiagramList,
                 diagramListLoading: state.telegramDiagramListLoading,
                 knowledgeBase: state.telegramKnowledgeBase,
@@ -1118,6 +1129,43 @@ export function renderApp(state: AppViewState) {
                         mime,
                       )
                   : null,
+                onExportDiagramJson: state.telegramDiagram
+                  ? (diagram) => exportTelegramDiagramJson(diagram)
+                  : null,
+                onImportDiagramJson: state.telegramSelectedId
+                  ? (file) =>
+                      importTelegramDiagramFromJson(
+                        state,
+                        state.telegramSelectedId!,
+                        state.telegramSchemaScope,
+                        file,
+                      )
+                  : null,
+                onCheckAnthropicKey: async () => {
+                  if (!state.client) {
+                    return false;
+                  }
+                  try {
+                    const res = await state.client.request<{ hasKey: boolean }>(
+                      "telegram.config.checkAnthropicKey",
+                      {},
+                    );
+                    return res?.hasKey ?? false;
+                  } catch {
+                    return false;
+                  }
+                },
+                onSaveAnthropicKey: async (key: string) => {
+                  if (!state.client) {
+                    return { ok: false, error: "Нет соединения" };
+                  }
+                  try {
+                    await state.client.request("telegram.config.setAnthropicKey", { key });
+                    return { ok: true };
+                  } catch (e) {
+                    return { ok: false, error: String(e) };
+                  }
+                },
                 onSchemaScopeChange: (agentId, scope) => {
                   state.telegramSchemaScope = scope;
                   saveAgentScope("schema", agentId, scope);
@@ -1315,6 +1363,24 @@ export function renderApp(state: AppViewState) {
                 },
                 onWebchatSearchChange: (q) => {
                   state.telegramWebchatSearchQuery = q;
+                },
+                // Leads tab
+                leads: state.telegramLeads,
+                leadsLoading: state.telegramLeadsLoading,
+                leadsError: state.telegramLeadsError,
+                onLoadLeads: (agentId: string) => {
+                  void loadLeads(state, agentId);
+                },
+                onDeleteLead: (leadId: string) => {
+                  void deleteTelegramLead(state, leadId).then(() => {
+                    const id = state.telegramSelectedId;
+                    if (id) {
+                      void loadLeads(state, id);
+                    }
+                  });
+                },
+                onSaveLead: (lead) => {
+                  void saveTelegramLead(state, lead);
                 },
               })
             : nothing

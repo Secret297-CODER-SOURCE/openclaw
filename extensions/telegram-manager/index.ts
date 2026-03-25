@@ -117,6 +117,15 @@ const TELEGRAM_METHODS = [
   "telegram.scenario.getKnowledgeBase",
   "telegram.scenario.saveKnowledgeBase",
   "telegram.scenario.distributeTrainingToNodes",
+  // Conversation state tracking
+  "telegram.scenario.getConversationStates",
+  // Anthropic key management
+  "telegram.config.checkAnthropicKey",
+  "telegram.config.setAnthropicKey",
+  // Leads
+  "telegram.leads.list",
+  "telegram.leads.save",
+  "telegram.leads.delete",
 ] as const;
 
 const plugin = {

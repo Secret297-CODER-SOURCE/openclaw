@@ -31,6 +31,15 @@ let _cachedEnvAdapter: ModelAdapter | null = null;
 // Not cleared by setModelAdapter() so it survives gateway adapter registration.
 let _cachedDirectAdapter: ModelAdapter | null = null;
 
+/**
+ * Clear the direct-adapter cache so the next call re-reads ANTHROPIC_API_KEY
+ * from process.env. Call this after programmatically setting the key at runtime.
+ */
+export function resetDirectAdapter(): void {
+  _cachedDirectAdapter = null;
+  cachedAnthropicClient = null;
+}
+
 // Gateway connection info stored separately so vision calls can use it directly.
 let _gatewayConfig: { baseUrl: string; token: string; model: string } | null = null;
 
@@ -478,4 +487,46 @@ export async function callAdapterOnce(userPrompt: string, systemPrompt: string):
   const adapter = resolveAdapter();
   const msgs: ModelMessage[] = [{ role: "user", content: userPrompt }];
   return adapter(msgs, systemPrompt);
+}
+
+/**
+ * Like `callAdapterOnce` but enforces a JSON response.
+ * If the first attempt returns no JSON object/array, retries once with an
+ * explicit correction message so the model understands it must output pure JSON.
+ */
+export async function callAdapterOnceJson(
+  userPrompt: string,
+  systemPrompt: string,
+): Promise<string> {
+  // Reinforce the JSON-only requirement in both the system prompt and user message
+  const jsonSystem =
+    systemPrompt +
+    "\n\nCRITICAL: Your ENTIRE response must be a single valid JSON object. " +
+    "Do NOT write any explanations, greetings, questions or prose. " +
+    "Start your response with { and end with }. Nothing else.";
+
+  const jsonUser =
+    userPrompt +
+    "\n\n⚠️ IMPORTANT: Respond with ONLY a raw JSON object. No text before or after it. No markdown.";
+
+  const adapter = resolveAdapter();
+  const firstReply = await adapter([{ role: "user", content: jsonUser }], jsonSystem);
+
+  // Check if there is a JSON object or array in the response
+  const hasJson = firstReply.includes("{") || firstReply.includes("[");
+  if (hasJson) return firstReply;
+
+  // Retry: show the model what it did wrong and demand JSON
+  const retryMsgs: ModelMessage[] = [
+    { role: "user", content: jsonUser },
+    { role: "assistant", content: firstReply },
+    {
+      role: "user",
+      content:
+        "Your previous response was plain text, not JSON. " +
+        "You MUST respond with ONLY a valid JSON object starting with { and ending with }. " +
+        "No explanations. No questions. ONLY the JSON.",
+    },
+  ];
+  return adapter(retryMsgs, jsonSystem);
 }

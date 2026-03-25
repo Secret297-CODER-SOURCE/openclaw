@@ -27,6 +27,114 @@ const MIN_SEND_INTERVAL_MS = 3_000;
 const PEER_FLOOD_RETRY_MS = 60_000;
 // Map of chatId → timestamp of last outbound send (module-level, per agent instance key).
 const lastSentAt = new Map<string, number>();
+// Map of agentId:chatId → timestamp of last INCOMING message (for inactivity follow-up).
+const lastIncomingAt = new Map<string, number>();
+// Map of agentId:chatId → timestamp of last follow-up sent (prevents repeated pings).
+const followUpSentAt = new Map<string, number>();
+// Set of "agentId:chatId:msgId" already processed this session — prevents double-reply
+// when catchUpUnread and the live NewMessage handler race for the same message.
+const processedMsgIds = new Set<string>();
+
+/**
+ * Per-chat reply lock: "agentId:chatId" → Promise resolving when current reply is done.
+ * Ensures rapid burst messages from the same client are processed one at a time.
+ * Without this, two messages arriving within milliseconds could both load the same
+ * conversation history, generate independent AI replies, and both send responses —
+ * resulting in near-identical duplicate messages from the agent.
+ */
+const chatLocks = new Map<string, Promise<void>>();
+
+/**
+ * Serialize async work per chat. `fn` runs only after any in-progress reply for
+ * `lockKey` has finished. If `fn` is already queued/running, the second call waits.
+ */
+function withChatLock(lockKey: string, fn: () => Promise<void>): Promise<void> {
+  const prev = chatLocks.get(lockKey) ?? Promise.resolve();
+  const next = prev
+    .then(() => fn())
+    .catch(() => {
+      /* individual handlers log their own errors */
+    });
+  chatLocks.set(lockKey, next);
+  // Auto-clean: once `next` settles, remove from map if nothing else was chained.
+  next.finally(() => {
+    if (chatLocks.get(lockKey) === next) chatLocks.delete(lockKey);
+  });
+  return next;
+}
+
+/**
+ * Split an AI reply into multiple Telegram messages.
+ *
+ * Priority:
+ *   1. Explicit [MSG] marker injected by the AI via system-prompt instruction.
+ *   2. Paragraph breaks (double newline).
+ *   3. Sentence grouping — 2–3 sentences per message.
+ *   4. Single message for very short texts (< 80 chars).
+ *
+ * Maximum 4 parts to avoid flooding the chat.
+ */
+/**
+ * Split an AI reply into 1–3 natural Telegram messages.
+ *
+ * Decision tree (human-like):
+ *  1. [MSG] marker  — explicit AI split, always respected (max 3 parts).
+ *  2. ≤ 200 chars   — single bubble, never split.
+ *  3. Double newline — split only when BOTH parts are ≥ 60 chars (real ideas, not noise).
+ *  4. Very long (> 600 chars) — split at sentence boundary near the midpoint.
+ *  5. Everything else — single bubble (better to send one clean message).
+ *
+ * Max 3 parts — more than that feels spammy.
+ */
+function splitMessage(text: string): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+
+  // 1. Explicit [MSG] marker — highest priority.
+  if (trimmed.includes("[MSG]")) {
+    const parts = trimmed
+      .split(/\[MSG\]/gi)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (parts.length >= 2) return parts.slice(0, 3);
+  }
+
+  // 2. Very short — always single bubble.
+  if (trimmed.length <= 200) return [trimmed];
+
+  // 3. Paragraph split — only when both parts are substantial ideas.
+  const paragraphs = trimmed
+    .split(/\n\n+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (paragraphs.length >= 2 && paragraphs.length <= 3 && paragraphs.every((p) => p.length >= 60)) {
+    return paragraphs.slice(0, 3);
+  }
+
+  // 4. Very long single block — split near midpoint at a sentence end.
+  if (trimmed.length > 600) {
+    const mid = Math.floor(trimmed.length / 2);
+    // Find the nearest sentence-ending punctuation after the midpoint.
+    const after = trimmed.slice(mid).search(/[.!?]\s/);
+    if (after !== -1) {
+      const splitAt = mid + after + 1;
+      const first = trimmed.slice(0, splitAt).trim();
+      const second = trimmed.slice(splitAt).trim();
+      if (first.length >= 60 && second.length >= 60) return [first, second];
+    }
+  }
+
+  // 5. Default — single message.
+  return [trimmed];
+}
+
+/** Instruction appended to every system prompt so the AI splits its reply. */
+const MULTI_MSG_INSTRUCTION =
+  `\n\n## Формат ответа\n` +
+  `ЯЗЫК: Отвечай СТРОГО на том языке, на котором написал клиент (русский, турецкий, английский и т.д.).\n` +
+  `Пиши ответ как 2–3 отдельных коротких сообщения, разделяя их маркером [MSG].\n` +
+  `Каждое сообщение — 1–2 предложения. Не пиши сам маркер в тексте — только между частями.\n` +
+  `Пример: "Привет! Как дела? [MSG] Расскажи подробнее. [MSG] Буду рад помочь."`;
 
 // WeakMap stores TelegramClient outside the instance so that structuredClone
 // (called by the pi-agent framework in emitContext) never traverses into it.
@@ -113,6 +221,10 @@ export class UserBotAgent extends BaseAgent {
       await this.registerBehaviors(this.record.behaviors);
       this.setStatus("running");
       this.logger.info(`[TG:${this.name}] userbot online (${this.creds.phoneNumber})`);
+      // Process any messages that arrived while the agent was offline.
+      this.catchUpUnread().catch((e) =>
+        this.logger.warn(`[TG:${this.name}] catch-up error`, { e: String(e) }),
+      );
     } catch (err) {
       this.setStatus("error", String(err));
       throw err;
@@ -311,6 +423,126 @@ export class UserBotAgent extends BaseAgent {
 
   // --- Behaviors ------------------------------------------------------------
 
+  /**
+   * After restart, scan dialogs for unread incoming messages and route each
+   * through the same handler (schema / task-session / auto_reply) as live messages.
+   * Only processes dialogs where the last message is incoming (not sent by us).
+   */
+  private async catchUpUnread(): Promise<void> {
+    if (!this.client) return;
+    const agentSettings = this.getAgentSettings();
+    const mc = this.getBehavior<MasterControlBehavior>("master_control");
+    const autoReplyCfg = this.getBehavior<any>("auto_reply");
+
+    let dialogs: any[];
+    try {
+      dialogs = await this.client.getDialogs({ limit: 50 });
+    } catch (e) {
+      this.logger.warn(`[TG:${this.name}] catch-up: getDialogs failed`, { e: String(e) });
+      return;
+    }
+
+    const unread = dialogs.filter((d: any) => d.unreadCount > 0 && d.message && !d.message.out);
+
+    if (unread.length === 0) return;
+    this.logger.info(`[TG:${this.name}] catch-up: ${unread.length} dialog(s) with unread messages`);
+
+    for (const dialog of unread) {
+      const chatId = String(dialog.id);
+      // Skip master_control chats — they have their own handler.
+      if (mc?.enabled && mc.allowedChatIds.includes(chatId)) continue;
+
+      const taskSession = this.getTaskSession(chatId);
+      const hasAutoReply = autoReplyCfg?.enabled;
+      const hasSchema = agentSettings.useSchema && !!agentSettings.activeDiagramId;
+
+      // Only process if this chat would be handled by schema, task_session, or auto_reply.
+      if (!hasSchema && !taskSession && !hasAutoReply) continue;
+      if (!hasSchema && !taskSession && hasAutoReply && !this.isAllowedChat(chatId, agentSettings))
+        continue;
+
+      // Fetch the last few messages to find the latest incoming one.
+      let msgs: any[];
+      try {
+        msgs = await this.client.getMessages(chatId, { limit: 5 });
+      } catch (e) {
+        this.logger.warn(`[TG:${this.name}] catch-up: getMessages failed for ${chatId}`, {
+          e: String(e),
+        });
+        continue;
+      }
+
+      // If the most recent message is already outgoing, we replied in this session — skip.
+      if (msgs[0]?.out) {
+        this.logger.info(`[TG:${this.name}] catch-up: ${chatId} already answered, skipping`);
+        continue;
+      }
+
+      // Find the most recent incoming message (not sent by us).
+      const incomingMsg = msgs.find((m: any) => !m.out);
+      if (!incomingMsg) continue;
+
+      const text = incomingMsg.message || "";
+      if (!text) continue;
+
+      // Deduplicate: skip if a live handler already processed this exact message.
+      const msgKey = `${this.id}:${chatId}:${incomingMsg.id}`;
+      if (processedMsgIds.has(msgKey)) {
+        this.logger.info(
+          `[TG:${this.name}] catch-up: ${chatId} msg ${incomingMsg.id} already handled, skipping`,
+        );
+        continue;
+      }
+      processedMsgIds.add(msgKey);
+
+      const chatKey = `${this.id}:${chatId}`;
+      lastIncomingAt.set(chatKey, Date.now());
+      followUpSentAt.delete(chatKey);
+
+      this.trackMessage("in", text, chatId);
+      this.detectFollowupRequest(chatId, chatKey, text);
+      this.logger.info(`[TG:${this.name}] catch-up: processing unread from ${chatId}`);
+
+      try {
+        if (agentSettings.useSchema && agentSettings.activeDiagramId) {
+          const scriptReply = await this.runScriptStep(chatId, text, chatKey);
+          if (scriptReply) {
+            await this.sendAsChunks(chatId, scriptReply, incomingMsg.id);
+            this.trackMessage("out", scriptReply, chatId);
+          }
+        } else if (taskSession) {
+          // Task session: use the task session AI reply path.
+          const systemPrompt =
+            (await this.buildRichSystemPrompt(undefined, chatKey, "")) + MULTI_MSG_INSTRUCTION;
+          const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
+          const reply = await aiReply(text, chatKey, systemPrompt, this.storage, workspaceTools);
+          if (reply) {
+            await this.sendAsChunks(chatId, reply, incomingMsg.id);
+            this.trackMessage("out", reply, chatId);
+          }
+        } else if (hasAutoReply && this.shouldAutoReply(autoReplyCfg, text, chatId)) {
+          const systemPrompt =
+            (autoReplyCfg.aiSystemPrompt ??
+              (await this.buildRichSystemPrompt(autoReplyCfg.goal, chatKey, ""))) +
+            MULTI_MSG_INSTRUCTION;
+          const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
+          const reply = await aiReply(text, chatKey, systemPrompt, this.storage, workspaceTools);
+          if (reply) {
+            await this.sendAsChunks(chatId, reply, incomingMsg.id);
+            this.trackMessage("out", reply, chatId);
+          }
+        }
+      } catch (e) {
+        this.logger.warn(`[TG:${this.name}] catch-up: reply failed for ${chatId}`, {
+          e: String(e),
+        });
+      }
+
+      // Small delay between chats to avoid rate limits.
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+
   protected async onBehaviorsChanged(behaviors: BehaviorConfig[]): Promise<void> {
     if (this.record.status !== "running" || !this.client) return;
     this.clearCron();
@@ -325,6 +557,17 @@ export class UserBotAgent extends BaseAgent {
     // sessions at message-handling time, so it works even for sessions assigned
     // after start() without requiring a reconnect.
     this.setupTaskSessionHandler();
+    // Always register the schema handler — it activates when useSchema is on,
+    // independent of auto_reply being configured. Handles ALL chats (not just
+    // task sessions) so new contacts also get a reply in schema mode.
+    this.setupSchemaHandler();
+    // Always start the inactivity follow-up watcher regardless of behaviors —
+    // it covers both task-session chats and schema-mode conversations.
+    this.setupInactivityFollowup();
+    // Restore any scheduled follow-ups that survived a gateway restart.
+    this.restorePendingFollowups();
+    // Start periodic re-engagement outreach to dormant contacts.
+    this.startReEngagementCron();
     for (const b of behaviors) {
       if (b.type === "master_control") this.setupMasterControl();
       if (b.type === "auto_reply") this.setupAutoReply();
@@ -335,6 +578,126 @@ export class UserBotAgent extends BaseAgent {
           this.logger.warn(`[TG:${this.name}] parser error`, { e: String(e) }),
         );
     }
+  }
+
+  /**
+   * Always-on schema handler — registered regardless of whether auto_reply
+   * is configured.  Activates only when the agent has useSchema + activeDiagramId.
+   *
+   * Covers the gap where a new contact (no task session assigned) writes to the
+   * userbot and auto_reply is disabled or replyTo="tasks" would block them.
+   */
+  private setupSchemaHandler(): void {
+    if (!this.client) return;
+
+    this.client.addEventHandler(
+      async (event: any) => {
+        const msg = event.message;
+        if (!msg || msg.out) return;
+        const chatId = String(msg.chatId || "");
+
+        // Skip master_control chats — handled by setupMasterControl.
+        const mc = this.getBehavior<MasterControlBehavior>("master_control");
+        if (mc?.enabled && mc.allowedChatIds.includes(chatId)) return;
+
+        // Skip task-session chats — handled by setupTaskSessionHandler.
+        if (this.getTaskSession(chatId)) return;
+
+        const agentSettings = this.getAgentSettings();
+
+        // Only active when schema mode is on.
+        if (!agentSettings.useSchema || !agentSettings.activeDiagramId) return;
+
+        // Capture resolved InputPeer before any async gap (needed for offline reply too).
+        let msgPeer: EntityLike | undefined;
+        try {
+          const ic = msg.inputChat as any;
+          if (ic?.className?.startsWith("InputPeer")) {
+            msgPeer = ic as EntityLike;
+          } else if (typeof (event as any).getInputChat === "function") {
+            msgPeer = (await (event as any).getInputChat()) as EntityLike;
+          }
+        } catch {
+          /* fall back to BigInt in sendWithFloodGuard */
+        }
+
+        const text = msg.message || "";
+        if (!text) return;
+
+        // Outside schedule: AI continues lead-processing in offline mode.
+        if (!this.isWithinSchedule(agentSettings)) {
+          if (this.isOfflineLeadMode(agentSettings)) {
+            const key = `${this.id}:${chatId}`;
+            const msgKey = `${this.id}:${chatId}:${msg.id}`;
+            if (processedMsgIds.has(msgKey)) return;
+            processedMsgIds.add(msgKey);
+            const lockKey = `${this.id}:${chatId}`;
+            withChatLock(lockKey, async () => {
+              try {
+                const diagram = agentSettings.activeDiagramId
+                  ? (this.storage.getDiagramById(agentSettings.activeDiagramId) ?? undefined)
+                  : undefined;
+                const reply = await this.runOfflineLeadMode(
+                  chatId,
+                  text,
+                  key,
+                  agentSettings,
+                  diagram,
+                );
+                if (reply) {
+                  await this.sendAsChunks(chatId, reply, msg.id, msgPeer);
+                  this.trackMessage("out", reply, chatId);
+                }
+              } catch (e) {
+                this.logger.warn(`[TG:${this.name}] offline-lead (schema) failed: ${String(e)}`);
+              }
+            });
+          }
+          return;
+        }
+
+        if (!text) return;
+
+        // Deduplicate: skip if catchUpUnread already processed this message.
+        const msgKey = `${this.id}:${chatId}:${msg.id}`;
+        if (processedMsgIds.has(msgKey)) return;
+        processedMsgIds.add(msgKey);
+
+        const key = `${this.id}:${chatId}`;
+        lastIncomingAt.set(key, Date.now());
+        followUpSentAt.delete(key);
+        this.trackMessage("in", text, chatId);
+        this.saveContactInfo(chatId, {
+          firstName: (msg as any).sender?.firstName,
+          lastName: (msg as any).sender?.lastName,
+          username: (msg as any).sender?.username,
+        });
+        this.detectFollowupRequest(chatId, key, text);
+
+        // Serialize per-chat: rapid bursts of messages from the same client must
+        // be processed one at a time so AI calls see up-to-date history and
+        // don't produce duplicate/identical responses.
+        const lockKey = `${this.id}:${chatId}`;
+        withChatLock(lockKey, async () => {
+          try {
+            const scriptReply = await this.runScriptStep(chatId, text, key);
+            if (scriptReply) {
+              await this.sendAsChunks(chatId, scriptReply, msg.id, msgPeer);
+              this.trackMessage("out", scriptReply, chatId);
+            } else {
+              this.logger.warn(
+                `[TG:${this.name}] schema reply null for chat ${chatId} — check diagram has a start node`,
+              );
+            }
+          } catch (e) {
+            this.logger.warn(`[TG:${this.name}] schema handler failed for ${chatId}: ${String(e)}`);
+          }
+        });
+      },
+      new NewMessage({ incoming: true }),
+    );
+
+    this.logger.info(`[TG:${this.name}] schema handler active`);
   }
 
   /**
@@ -430,49 +793,63 @@ export class UserBotAgent extends BaseAgent {
         // continuous dialogue is preserved when the task session ends.
         const chatKey = `${this.id}:${chatId}`;
 
-        // Schema mode overrides task session: when the agent is configured to
-        // follow a diagram script, ALL conversations go through that script —
-        // including task-session chats — so the operator gets a consistent flow.
-        const agentSettings = this.getAgentSettings();
-        if (agentSettings.useSchema && agentSettings.activeDiagramId) {
-          this.trackMessage("in", text, chatId);
+        // Deduplicate: skip if catchUpUnread already processed this message.
+        const msgKey = `${this.id}:${chatId}:${msg.id}`;
+        if (processedMsgIds.has(msgKey)) return;
+        processedMsgIds.add(msgKey);
+
+        // Track incoming message time for inactivity follow-up; reset follow-up cooldown.
+        lastIncomingAt.set(chatKey, Date.now());
+        followUpSentAt.delete(chatKey);
+        this.trackMessage("in", text, chatId);
+        this.saveContactInfo(chatId, {
+          firstName: (msg as any).sender?.firstName,
+          lastName: (msg as any).sender?.lastName,
+          username: (msg as any).sender?.username,
+        });
+        this.detectFollowupRequest(chatId, chatKey, text);
+
+        // Serialize per-chat to prevent concurrent AI calls for rapid bursts.
+        const lockKey = `${this.id}:${chatId}`;
+        withChatLock(lockKey, async () => {
+          const agentSettings = this.getAgentSettings();
+          if (agentSettings.useSchema && agentSettings.activeDiagramId) {
+            try {
+              const scriptReply = await this.runScriptStep(chatId, text, chatKey);
+              if (scriptReply) {
+                await this.sendAsChunks(chatId, scriptReply, msg.id, msgPeer);
+                this.trackMessage("out", scriptReply, chatId);
+              } else {
+                this.logger.warn(
+                  `[TG:${this.name}] schema reply null for task-session chat ${chatId}`,
+                );
+              }
+            } catch (e) {
+              this.logger.warn(`[TG:${this.name}] schema step (task-session) failed: ${String(e)}`);
+            }
+            return;
+          }
+
+          // Fetch the partner's writing style from real Telegram history for new chats.
+          const storedHistory = this.storage.loadConversationHistory(chatKey);
+          const styleContext = storedHistory.length < 4 ? await this.fetchStyleContext(chatId) : "";
+          // Use custom system prompt if provided, otherwise build from workspace files.
+          const systemPrompt =
+            (taskSession.systemPrompt ??
+              (await this.buildRichSystemPrompt(taskSession.task, chatKey, styleContext))) +
+            MULTI_MSG_INSTRUCTION;
+          const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
           try {
-            const scriptReply = await this.runScriptStep(chatId, text, chatKey);
-            if (scriptReply) {
-              await this.sendWithFloodGuard(chatId, scriptReply, msg.id, msgPeer);
-              this.trackMessage("out", scriptReply, chatId);
-            } else {
-              this.logger.warn(
-                `[TG:${this.name}] schema reply null for task-session chat ${chatId}`,
-              );
+            const reply = await aiReply(text, chatKey, systemPrompt, this.storage, workspaceTools);
+            if (reply) {
+              await this.sendAsChunks(chatId, reply, msg.id, msgPeer);
+              this.trackMessage("out", reply, chatId);
             }
           } catch (e) {
-            this.logger.warn(`[TG:${this.name}] schema step (task-session) failed: ${String(e)}`);
+            const errMsg = e instanceof Error ? e.message : String(e);
+            this.logger.warn(`[TG:${this.name}] task session reply failed: ${errMsg}`);
           }
-          return;
-        }
-
-        this.trackMessage("in", text, chatId);
-        // Fetch the partner's writing style from real Telegram history for new chats.
-        const storedHistory = this.storage.loadConversationHistory(chatKey);
-        const styleContext = storedHistory.length < 4 ? await this.fetchStyleContext(chatId) : "";
-        // Use custom system prompt if provided, otherwise build from workspace files.
-        // Pass chatKey so the prompt includes a brief recap of prior exchanges.
-        const systemPrompt =
-          taskSession.systemPrompt ??
-          (await this.buildRichSystemPrompt(taskSession.task, chatKey, styleContext));
-        // Tools scoped to this agent's workspace — cannot access other agents' files.
-        const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
-        try {
-          const reply = await aiReply(text, chatKey, systemPrompt, this.storage, workspaceTools);
-          if (reply) {
-            await this.sendWithFloodGuard(chatId, reply, msg.id, msgPeer);
-            this.trackMessage("out", reply, chatId);
-          }
-        } catch (e) {
-          const errMsg = e instanceof Error ? e.message : String(e);
-          this.logger.warn(`[TG:${this.name}] task session reply failed: ${errMsg}`);
-        }
+        });
       },
       new NewMessage({ incoming: true }),
     );
@@ -502,12 +879,8 @@ export class UserBotAgent extends BaseAgent {
         if (cooldowns.has(key) && now - cooldowns.get(key)! < cd) return;
         // Respect work-mode settings: skip reply outside scheduled window.
         const agentSettings = this.getAgentSettings();
-        if (!this.isWithinSchedule(agentSettings)) return;
 
-        // replyTo: "tasks" — only engage with chats that have an active task session.
-        if (!this.isAllowedChat(chatId, agentSettings)) return;
-
-        // Capture the resolved InputPeer before any async gap.
+        // Capture the resolved InputPeer before any async gap (needed for offline reply too).
         // Try msg.inputChat first (fast path: entity already in session cache).
         // Fall back to event.getInputChat() which uses InputUserFromMessage internally
         // and can resolve the access_hash even for users not yet in the session cache.
@@ -523,63 +896,93 @@ export class UserBotAgent extends BaseAgent {
           /* will fall back to BigInt in sendWithFloodGuard */
         }
 
-        // Schema mode: follow the active diagram as a strict script.
-        // Bypasses keyword/trigger requirements so every message in the
-        // conversation advances through the script steps.
-        // IMPORTANT: always return from this block — never fall through to auto_reply.
-        if (agentSettings.useSchema && agentSettings.activeDiagramId) {
-          this.trackMessage("in", text, chatId);
-          try {
-            const scriptReply = await this.runScriptStep(chatId, text, key);
-            if (scriptReply) {
-              await this.sendWithFloodGuard(chatId, scriptReply, msg.id, msgPeer);
-              cooldowns.set(key, Date.now());
-              this.trackMessage("out", scriptReply, chatId);
-            } else {
-              this.logger.warn(
-                `[TG:${this.name}] schema reply is null for chat ${chatId} — check diagram has a start node`,
-              );
-            }
-          } catch (e) {
-            this.logger.warn(`[TG:${this.name}] schema step failed: ${String(e)}`);
+        // Outside schedule: AI continues lead-processing in offline mode.
+        if (!this.isWithinSchedule(agentSettings)) {
+          if (this.isOfflineLeadMode(agentSettings)) {
+            const msgKey2 = `${this.id}:${chatId}:${msg.id}`;
+            if (processedMsgIds.has(msgKey2)) return;
+            processedMsgIds.add(msgKey2);
+            const lockKey2 = `${this.id}:${chatId}`;
+            withChatLock(lockKey2, async () => {
+              try {
+                const diagram = agentSettings.activeDiagramId
+                  ? (this.storage.getDiagramById(agentSettings.activeDiagramId) ?? undefined)
+                  : undefined;
+                const reply = await this.runOfflineLeadMode(
+                  chatId,
+                  text,
+                  key,
+                  agentSettings,
+                  diagram,
+                );
+                if (reply) {
+                  await this.sendAsChunks(chatId, reply, msg.id, msgPeer);
+                  cooldowns.set(key, Date.now());
+                  this.trackMessage("out", reply, chatId);
+                }
+              } catch (e) {
+                this.logger.warn(
+                  `[TG:${this.name}] offline-lead (auto_reply) failed: ${String(e)}`,
+                );
+              }
+            });
           }
-          return; // schema mode: never fall through to auto_reply
+          return;
         }
+
+        // replyTo: "tasks" — only engage with chats that have an active task session.
+        if (!this.isAllowedChat(chatId, agentSettings)) return;
+
+        // Deduplicate: skip if already processed by another handler or catchUpUnread.
+        const msgKey = `${this.id}:${chatId}:${msg.id}`;
+        if (processedMsgIds.has(msgKey)) return;
+        processedMsgIds.add(msgKey);
+
+        // Track incoming message for inactivity follow-up; reset follow-up cooldown.
+        lastIncomingAt.set(key, Date.now());
+        followUpSentAt.delete(key);
+
+        // Schema mode is handled by the dedicated setupSchemaHandler — skip here
+        // to avoid double-processing the same message.
+        if (agentSettings.useSchema && agentSettings.activeDiagramId) return;
 
         if (!this.shouldAutoReply(cfg, text, chatId)) return;
 
         this.trackMessage("in", text, chatId);
 
-        let reply = "";
-        if (cfg.replyMode === "ai") {
-          // Fetch partner's writing style from Telegram history for new conversations.
-          const storedHistory = this.storage.loadConversationHistory(key);
-          const styleContext = storedHistory.length < 4 ? await this.fetchStyleContext(chatId) : "";
-          // Use configured system prompt if present, otherwise build from workspace files.
-          // Pass goal (if set) so the agent has a clear objective in every conversation.
-          const systemPrompt =
-            cfg.aiSystemPrompt ?? (await this.buildRichSystemPrompt(cfg.goal, key, styleContext));
-          // Tools scoped to this agent's workspace — cannot access other agents' files.
-          const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
-          try {
-            reply = await aiReply(text, key, systemPrompt, this.storage, workspaceTools);
-          } catch (e) {
-            const errMsg = e instanceof Error ? e.message : String(e);
-            this.logger.warn(`[TG:${this.name}] auto_reply AI failed: ${errMsg}`);
-            return;
+        // Serialize per-chat to prevent concurrent AI calls for rapid bursts.
+        const lockKey = `${this.id}:${chatId}`;
+        withChatLock(lockKey, async () => {
+          let reply = "";
+          if (cfg.replyMode === "ai") {
+            const storedHistory = this.storage.loadConversationHistory(key);
+            const styleContext =
+              storedHistory.length < 4 ? await this.fetchStyleContext(chatId) : "";
+            const systemPrompt =
+              (cfg.aiSystemPrompt ??
+                (await this.buildRichSystemPrompt(cfg.goal, key, styleContext))) +
+              MULTI_MSG_INSTRUCTION;
+            const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
+            try {
+              reply = await aiReply(text, key, systemPrompt, this.storage, workspaceTools);
+            } catch (e) {
+              const errMsg = e instanceof Error ? e.message : String(e);
+              this.logger.warn(`[TG:${this.name}] auto_reply AI failed: ${errMsg}`);
+              return;
+            }
+          } else {
+            const tpl = cfg.templates?.find((t: any) =>
+              text.toLowerCase().includes(t.trigger.toLowerCase()),
+            );
+            reply = tpl?.response ?? "";
           }
-        } else {
-          const tpl = cfg.templates?.find((t: any) =>
-            text.toLowerCase().includes(t.trigger.toLowerCase()),
-          );
-          reply = tpl?.response ?? "";
-        }
 
-        if (reply) {
-          await this.sendWithFloodGuard(chatId, reply, msg.id, msgPeer);
-          cooldowns.set(key, Date.now());
-          this.trackMessage("out", reply, chatId);
-        }
+          if (reply) {
+            await this.sendAsChunks(chatId, reply, msg.id, msgPeer);
+            cooldowns.set(key, Date.now());
+            this.trackMessage("out", reply, chatId);
+          }
+        });
       },
       new NewMessage({ incoming: true }),
     );
@@ -868,6 +1271,121 @@ export class UserBotAgent extends BaseAgent {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ agentId: this.id, agentName: this.name, ...(body as any) }),
     }).catch(() => {});
+  }
+
+  /**
+   * Split `text` into natural chunks and send each with a 3–7 s human-like
+   * delay. Only the first chunk uses replyToMsgId / resolvedPeer — subsequent
+   * parts are independent messages so they don't create a thread inside the
+   * first one (Telegram UI stacks them naturally as a conversation).
+   */
+  private async sendAsChunks(
+    chatId: string,
+    text: string,
+    replyToMsgId?: number,
+    resolvedPeer?: EntityLike,
+  ): Promise<void> {
+    const parts = splitMessage(text);
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) {
+        // Human-like delay: scales with the length of the previous part
+        // (longer message → longer "typing" time), plus random jitter.
+        const prevLen = parts[i - 1].length;
+        // ~50 ms per character to simulate typing, capped at 5 s base + 2 s jitter.
+        const typingBase = Math.min(prevLen * 50, 5000);
+        const delayMs = typingBase + 1000 + Math.random() * 2000;
+        await this.delay(delayMs);
+      }
+      await this.sendWithFloodGuard(
+        chatId,
+        parts[i],
+        i === 0 ? replyToMsgId : undefined,
+        i === 0 ? resolvedPeer : undefined,
+      );
+    }
+  }
+
+  /**
+   * Cron-based inactivity follow-up: fires every minute and sends a
+   * context-aware re-engagement message to chats that have been silent for
+   * more than FOLLOWUP_TIMEOUT_MS (default 10 min).
+   *
+   * Follows the active schema script step when schema mode is enabled, so the
+   * follow-up stays on-track with the current conversation stage.
+   * Only one follow-up per chat per FOLLOWUP_COOLDOWN_MS (default 1 h).
+   */
+  private setupInactivityFollowup(): void {
+    if (!this.client) return;
+
+    const FOLLOWUP_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes of silence
+    const FOLLOWUP_COOLDOWN_MS = 60 * 60 * 1000; // 1 h cooldown between follow-ups
+
+    const check = async () => {
+      if (this.record.status !== "running" || !this.client) return;
+      const now = Date.now();
+
+      // Collect candidate chatIds: active task sessions + schema-tracked chats.
+      const chatIds = new Set<string>();
+      for (const s of this.listTaskSessions()) {
+        if (s.status === "active") chatIds.add(s.chatId);
+      }
+
+      for (const chatId of chatIds) {
+        const chatKey = `${this.id}:${chatId}`;
+        const last = lastIncomingAt.get(chatKey);
+        if (!last) continue; // never received a message — skip
+        if (now - last < FOLLOWUP_TIMEOUT_MS) continue; // not inactive enough
+        const lastFU = followUpSentAt.get(chatKey) ?? 0;
+        if (now - lastFU < FOLLOWUP_COOLDOWN_MS) continue; // cooldown active
+
+        try {
+          const agentSettings = this.getAgentSettings();
+          let followUpText: string | null = null;
+
+          if (agentSettings.useSchema && agentSettings.activeDiagramId) {
+            // Schema mode: generate follow-up that fits the current script step.
+            followUpText = await this.runScriptStep(chatId, "__FOLLOWUP__", chatKey);
+          } else {
+            // Free-form: build a contextual re-engagement prompt.
+            const taskSession = this.getTaskSession(chatId);
+            const basePrompt = taskSession
+              ? await this.buildRichSystemPrompt(taskSession.task, chatKey)
+              : await this.buildRichSystemPrompt(undefined, chatKey);
+            const followUpPrompt =
+              basePrompt +
+              `\n\n## Ситуация\nСобеседник не отвечает уже ${Math.round((now - last) / 60000)} мин. ` +
+              `Напиши ОДНО короткое, ненавязчивое follow-up сообщение, чтобы мягко продолжить диалог. ` +
+              `Не упоминай, что прошло время. Продолжай как будто разговор продолжается естественно.`;
+            followUpText = await aiReply(
+              "__FOLLOWUP__",
+              chatKey,
+              followUpPrompt,
+              this.storage,
+              undefined,
+            );
+          }
+
+          if (followUpText) {
+            // Send as chunks with natural delays (same as regular replies).
+            await this.sendAsChunks(chatId, followUpText);
+            followUpSentAt.set(chatKey, Date.now());
+            this.trackMessage("out", followUpText, chatId);
+            this.logger.info(
+              `[TG:${this.name}] follow-up sent to ${chatId} after ${Math.round((now - last) / 60000)} min`,
+            );
+          }
+        } catch (e) {
+          this.logger.warn(`[TG:${this.name}] follow-up failed for ${chatId}: ${String(e)}`);
+        }
+      }
+    };
+
+    // Check every minute.
+    this.cronJobs.set(
+      "inactivity_followup",
+      cron.schedule("* * * * *", () => void check()),
+    );
+    this.logger.info(`[TG:${this.name}] inactivity follow-up watcher active`);
   }
 
   private clearCron() {

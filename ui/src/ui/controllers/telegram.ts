@@ -875,6 +875,15 @@ type TelegramScenarioState = TelegramState & {
   /** Knowledge base distributed from training data to diagram nodes. */
   telegramKnowledgeBase: DiagramKnowledgeBase | null;
   telegramKnowledgeBaseLoading: boolean;
+  /**
+   * Live conversation states: maps chatId → nodeId (or "__done__" for free-mode).
+   * Fetched from gateway on agent select and refreshed periodically.
+   */
+  telegramConversationStates: Record<string, string>;
+  /** Collected lead records for the selected agent. */
+  telegramLeads: TelegramLead[];
+  telegramLeadsLoading: boolean;
+  telegramLeadsError: string | null;
 };
 
 export async function loadTelegramChatNodes(
@@ -944,6 +953,32 @@ export async function loadTelegramDiagram(
     // non-fatal — handler may not be deployed yet
   } finally {
     state.telegramDiagramLoading = false;
+  }
+}
+
+/**
+ * Fetch all active conversation states for an agent from the gateway.
+ * Maps chatId → nodeId (or "__done__" for chats in free-mode continuation).
+ */
+export async function loadConversationStates(
+  state: TelegramScenarioState,
+  agentId: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  try {
+    const rows = await state.client!.request<Array<{ chatId: string; nodeId: string }>>(
+      "telegram.scenario.getConversationStates",
+      { agentId },
+    );
+    const map: Record<string, string> = {};
+    for (const r of rows ?? []) {
+      map[r.chatId] = r.nodeId;
+    }
+    state.telegramConversationStates = map;
+  } catch {
+    // non-fatal — handler may not be deployed
   }
 }
 
@@ -1206,6 +1241,63 @@ export async function generateDiagramFromText(
     state.telegramDiagram = result;
   }
   return result ?? null;
+}
+
+/**
+ * Export a diagram as a downloadable JSON file.
+ * Pure client-side — no gateway call needed.
+ */
+export function exportTelegramDiagramJson(diagram: FlowDiagram): void {
+  const json = JSON.stringify(diagram, null, 2);
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const safeName = diagram.title.replace(/[^а-яёa-z0-9_-]/gi, "_").slice(0, 60) || "diagram";
+  a.href = url;
+  a.download = `${safeName}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Import a diagram from a JSON file.
+ * Assigns a new ID and overwrites agentId + scope to match the current context,
+ * then saves it via the gateway so it's persisted.
+ */
+export async function importTelegramDiagramFromJson(
+  state: TelegramScenarioState,
+  agentId: string,
+  scope: TrainingScope,
+  file: File,
+): Promise<FlowDiagram | null> {
+  const text = await file.text();
+  let parsed: FlowDiagram;
+  try {
+    parsed = JSON.parse(text) as FlowDiagram;
+  } catch {
+    throw new Error("Файл не является корректным JSON");
+  }
+  if (
+    !parsed.nodes ||
+    !Array.isArray(parsed.nodes) ||
+    !parsed.edges ||
+    !Array.isArray(parsed.edges)
+  ) {
+    throw new Error("JSON не содержит схему (нет nodes/edges)");
+  }
+  // Assign new ID to avoid collisions; bind to current agent+scope.
+  const now = new Date().toISOString();
+  const imported: FlowDiagram = {
+    ...parsed,
+    id: crypto.randomUUID(),
+    agentId,
+    scope,
+    groups: Array.isArray(parsed.groups) ? parsed.groups : [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  await saveTelegramDiagram(state, imported);
+  return imported;
 }
 
 /**
@@ -2515,39 +2607,75 @@ export async function distributeTrainingToNodes(
   }
   state.telegramKnowledgeBaseLoading = true;
   try {
-    // Collect training groups for the matching scope.
+    // ── Collect training groups ────────────────────────────────────────────
+    // Resolution order (first non-empty source wins):
+    //  1. State already has groups for this scope (user is on the training tab).
+    //  2. Gateway snapshot (authoritative DB, survives restarts).
+    //  3. localStorage cache (populated when training file was imported).
+    //  4. Try other scope (shared ↔ personal) as last resort.
     let groups: TrainingGroup[] | undefined;
+
+    const pickGroups = (raw: string | null): TrainingGroup[] | undefined => {
+      if (!raw) {
+        return undefined;
+      }
+      try {
+        const parsed = JSON.parse(raw) as { groups?: TrainingGroup[] };
+        return parsed.groups && parsed.groups.length > 0 ? parsed.groups : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+
+    // 1. In-memory state (training tab already loaded the right scope)
     if (state.telegramTrainingScope === scope && state.telegramTrainingGroups.length > 0) {
-      // Happy path: the right scope is already active in the training tab.
       groups = state.telegramTrainingGroups;
-    } else {
-      // Different scope active — try to load the snapshot from the gateway.
+    }
+
+    // 2. Gateway snapshot
+    if (!groups) {
       try {
         const snap = await state.client!.request<{
           groups?: TrainingGroup[];
-          labels?: Record<string, TrainingLabel>;
         } | null>("telegram.scenario.getTrainingSnapshot", { agentId, scope });
         if (snap?.groups && snap.groups.length > 0) {
           groups = snap.groups;
         }
       } catch {
-        // Non-fatal: gateway will attempt to read its own snapshot.
+        /* non-fatal */
       }
-      // Also try localStorage as a further fallback.
-      if (!groups || groups.length === 0) {
-        try {
-          const lsKey = `${LS_TRAINING_PREFIX}${scope === "shared" ? "shared" : agentId}`;
-          const raw = localStorage.getItem(lsKey);
-          if (raw) {
-            const parsed = JSON.parse(raw) as { groups?: TrainingGroup[] };
-            if (parsed.groups && parsed.groups.length > 0) {
-              groups = parsed.groups;
-            }
-          }
-        } catch {
-          // Non-fatal
+    }
+
+    // 3. localStorage cache
+    if (!groups) {
+      const lsKey = `${LS_TRAINING_PREFIX}${scope === "shared" ? "shared" : agentId}`;
+      groups = pickGroups(localStorage.getItem(lsKey));
+    }
+
+    // 4. Try the other scope (shared ↔ personal) — user may have data there
+    if (!groups) {
+      const altScope: TrainingScope = scope === "personal" ? "shared" : "personal";
+      try {
+        const snap = await state.client!.request<{ groups?: TrainingGroup[] } | null>(
+          "telegram.scenario.getTrainingSnapshot",
+          { agentId, scope: altScope },
+        );
+        if (snap?.groups && snap.groups.length > 0) {
+          groups = snap.groups;
         }
+      } catch {
+        /* non-fatal */
       }
+      if (!groups) {
+        const altKey = `${LS_TRAINING_PREFIX}${altScope === "shared" ? "shared" : agentId}`;
+        groups = pickGroups(localStorage.getItem(altKey));
+      }
+    }
+
+    if (!groups || groups.length === 0) {
+      throw new Error(
+        "Нет данных обучения. Сначала загрузите диалоги в разделе «Обучение» и нажмите «Анализировать».",
+      );
     }
 
     const result = await state.client!.request<DiagramKnowledgeBase>(
@@ -2555,8 +2683,8 @@ export async function distributeTrainingToNodes(
       {
         agentId,
         scope,
-        // Send the groups so the gateway doesn't need a saved snapshot.
-        ...(groups && groups.length > 0 ? { groups } : {}),
+        // Always send groups directly — avoids relying on gateway snapshot state.
+        groups,
       },
     );
     if (result) {
@@ -2616,4 +2744,63 @@ export async function saveAgentSettings(
   } finally {
     state.telegramAgentSettingsSaving = false;
   }
+}
+
+// ─── Leads ────────────────────────────────────────────────────────────────────
+
+export type TelegramLead = {
+  id: string;
+  agentId: string;
+  chatId: string;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  contactMethod?: string;
+  country?: string;
+  age?: number;
+  preferredContactTime?: string;
+  role?: string;
+  telegramLink?: string;
+  agentName?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function loadLeads(state: TelegramScenarioState, agentId: string): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  state.telegramLeadsLoading = true;
+  state.telegramLeadsError = null;
+  try {
+    const res = await state.client!.request<{ leads: TelegramLead[] }>("telegram.leads.list", {
+      agentId,
+    });
+    state.telegramLeads = res.leads ?? [];
+  } catch (e) {
+    state.telegramLeadsError = String(e);
+  } finally {
+    state.telegramLeadsLoading = false;
+  }
+}
+
+export async function deleteTelegramLead(
+  state: TelegramScenarioState,
+  leadId: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  await state.client!.request("telegram.leads.delete", { leadId });
+}
+
+export async function saveTelegramLead(
+  state: TelegramScenarioState,
+  lead: TelegramLead,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  await state.client!.request("telegram.leads.save", { lead });
 }

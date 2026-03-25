@@ -86,6 +86,8 @@ export type ScenarioProps = {
   /** Visual flowchart diagram for the current agent+scope. */
   diagram: FlowDiagram | null;
   diagramLoading: boolean;
+  /** Live conversation states: chatId → nodeId or "__done__" (free-mode). */
+  chatConversationStates: Record<string, string>;
   /** All saved diagrams for the current agent+scope (summaries). */
   diagramList: import("../controllers/telegram.ts").DiagramSummary[];
   diagramListLoading: boolean;
@@ -97,6 +99,14 @@ export type ScenarioProps = {
   onNewDiagram: (() => void) | null;
   /** Called when user selects an image to import; returns the AI-generated diagram. */
   onImportDiagramFromImage: ((base64: string, mime: string) => Promise<FlowDiagram | null>) | null;
+  /** Export current diagram as JSON file download. */
+  onExportDiagramJson: ((diagram: FlowDiagram) => void) | null;
+  /** Called when user selects a JSON file to import as a diagram. */
+  onImportDiagramJson: ((file: File) => Promise<FlowDiagram | null>) | null;
+  /** Check if Anthropic API key is configured on the gateway. */
+  onCheckAnthropicKey: (() => Promise<boolean>) | null;
+  /** Save Anthropic API key to gateway config. */
+  onSaveAnthropicKey: ((key: string) => Promise<{ ok: boolean; error?: string }>) | null;
   /** Load the existing knowledge base for the current agent+scope. */
   onLoadKnowledgeBase: (() => Promise<void>) | null;
   /** Run AI distribution of training pairs across diagram nodes. */
@@ -1471,6 +1481,7 @@ export function renderSchemaPanel(props: ScenarioProps, agent: TelegramAgentReco
         .agentId=${agent.id}
         .scope=${props.schemaScope}
         .diagram=${diagram}
+        .chatStates=${props.chatConversationStates}
         .onSave=${(d: FlowDiagram) => props.onSaveDiagram(d)}
         .onScopeChange=${(
           agentId: string,
@@ -1479,6 +1490,10 @@ export function renderSchemaPanel(props: ScenarioProps, agent: TelegramAgentReco
           props.onSchemaScopeChange(agentId, scope);
         }}
         .onImportImage=${props.onImportDiagramFromImage}
+        .onExportJson=${props.onExportDiagramJson}
+        .onImportJson=${props.onImportDiagramJson}
+        .onCheckAnthropicKey=${props.onCheckAnthropicKey}
+        .onSaveAnthropicKey=${props.onSaveAnthropicKey}
         .onLoadKnowledgeBase=${props.onLoadKnowledgeBase}
         .onDistributeTraining=${props.onDistributeTraining}
         .knowledgeBase=${props.knowledgeBase}

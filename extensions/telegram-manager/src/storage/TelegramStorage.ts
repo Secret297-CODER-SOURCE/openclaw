@@ -27,6 +27,8 @@ export type TelegramPluginConfig = {
   apiId: number;
   apiHash: string;
   proxy?: ProxyConfig;
+  /** Anthropic API key saved by the user via the UI (optional). */
+  anthropicApiKey?: string;
 };
 
 export class TelegramStorage {
@@ -207,6 +209,50 @@ export class TelegramStorage {
         PRIMARY KEY (agent_id, chat_id)
       );
 
+      -- Lead records collected from conversations (auto-extracted or manual).
+      CREATE TABLE IF NOT EXISTS tg_leads (
+        id          TEXT PRIMARY KEY,
+        agent_id    TEXT NOT NULL,
+        chat_id     TEXT NOT NULL,
+        data_json   TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS tg_contacts (
+        agent_id           TEXT NOT NULL,
+        chat_id            TEXT NOT NULL,
+        first_name         TEXT,
+        last_name          TEXT,
+        username           TEXT,
+        last_client_msg_at TEXT NOT NULL,
+        first_msg_at       TEXT NOT NULL,
+        PRIMARY KEY (agent_id, chat_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS tg_reengagement (
+        agent_id    TEXT NOT NULL,
+        chat_id     TEXT NOT NULL,
+        delay_days  INTEGER NOT NULL,
+        period_ref  TEXT NOT NULL,
+        sent_at     TEXT NOT NULL,
+        PRIMARY KEY (agent_id, chat_id, delay_days, period_ref)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_tg_contacts_agent ON tg_contacts(agent_id, last_client_msg_at);
+
+      CREATE TABLE IF NOT EXISTS tg_followup_queue (
+        id         TEXT PRIMARY KEY,
+        agent_id   TEXT NOT NULL,
+        chat_id    TEXT NOT NULL,
+        chat_key   TEXT NOT NULL,
+        send_at    TEXT NOT NULL,
+        sent       INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_tg_followup_agent ON tg_followup_queue(agent_id, sent, send_at);
+      CREATE INDEX IF NOT EXISTS idx_tg_leads_agent ON tg_leads(agent_id);
       CREATE INDEX IF NOT EXISTS idx_tg_events_agent ON tg_events(agent_id);
       CREATE INDEX IF NOT EXISTS idx_tg_parsed_agent ON tg_parsed(agent_id);
       CREATE INDEX IF NOT EXISTS idx_agent_missions_master ON agent_missions(master_agent_id);
@@ -431,6 +477,18 @@ export class TelegramStorage {
       // Corrupted row — return empty so the conversation restarts cleanly.
       return [];
     }
+  }
+
+  /**
+   * Return the ISO timestamp of the last saved message for this chat,
+   * or null when there is no prior conversation.
+   * Used to compute elapsed time since last contact.
+   */
+  getConversationLastAt(chatKey: string): string | null {
+    const row = this.db
+      .prepare("SELECT updated_at FROM tg_conversations WHERE chat_key=?")
+      .get(chatKey) as { updated_at: string } | undefined;
+    return row?.updated_at ?? null;
   }
 
   /** Persist AI conversation history for a given chat key. */
@@ -713,6 +771,14 @@ export class TelegramStorage {
       .run(agentId, chatId, nodeId, new Date().toISOString());
   }
 
+  /** Return all tracked conversation states for an agent (chatId → nodeId). */
+  getAllConversationStates(agentId: string): Array<{ chatId: string; nodeId: string }> {
+    const rows = this.db
+      .prepare("SELECT chat_id, node_id FROM tg_conversation_state WHERE agent_id = ?")
+      .all(agentId) as Array<{ chat_id: string; node_id: string }>;
+    return rows.map((r) => ({ chatId: r.chat_id, nodeId: r.node_id }));
+  }
+
   /** Remove the conversation state (called when the script reaches an end node). */
   deleteConversationState(agentId: string, chatId: string): void {
     this.db
@@ -748,6 +814,176 @@ export class TelegramStorage {
            updated_at     = excluded.updated_at`,
       )
       .run(agentId, chatId, memoryText, sessionsCount, new Date().toISOString());
+  }
+
+  // ─── Lead records ────────────────────────────────────────────────────────
+
+  saveLead(lead: import("../types.js").TelegramLead): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO tg_leads (id, agent_id, chat_id, data_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        lead.id,
+        lead.agentId,
+        lead.chatId,
+        JSON.stringify(lead),
+        lead.createdAt,
+        lead.updatedAt,
+      );
+  }
+
+  getLeads(agentId: string): import("../types.js").TelegramLead[] {
+    const rows = this.db
+      .prepare("SELECT data_json FROM tg_leads WHERE agent_id = ? ORDER BY created_at DESC")
+      .all(agentId) as Array<{ data_json: string }>;
+    return rows.map((r) => JSON.parse(r.data_json) as import("../types.js").TelegramLead);
+  }
+
+  deleteLead(leadId: string): void {
+    this.db.prepare("DELETE FROM tg_leads WHERE id = ?").run(leadId);
+  }
+
+  /** Insert or merge fields into a lead keyed by agent+chat. */
+  upsertLeadFields(
+    agentId: string,
+    chatId: string,
+    fields: Partial<import("../types.js").TelegramLead>,
+  ): void {
+    const row = this.db
+      .prepare("SELECT data_json FROM tg_leads WHERE agent_id = ? AND chat_id = ?")
+      .get(agentId, chatId) as { data_json: string } | undefined;
+    const now = new Date().toISOString();
+    const lead: import("../types.js").TelegramLead = row
+      ? { ...JSON.parse(row.data_json), ...fields, updatedAt: now }
+      : { id: `${agentId}:${chatId}`, agentId, chatId, createdAt: now, updatedAt: now, ...fields };
+    this.saveLead(lead);
+  }
+
+  // ─── Contact registry ────────────────────────────────────────────────────
+
+  /** Upsert contact info; always updates last_client_msg_at to now. */
+  upsertContact(
+    agentId: string,
+    chatId: string,
+    info: { firstName?: string; lastName?: string; username?: string },
+  ): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO tg_contacts (agent_id, chat_id, first_name, last_name, username, last_client_msg_at, first_msg_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(agent_id, chat_id) DO UPDATE SET
+           first_name         = COALESCE(excluded.first_name, first_name),
+           last_name          = COALESCE(excluded.last_name, last_name),
+           username           = COALESCE(excluded.username, username),
+           last_client_msg_at = excluded.last_client_msg_at`,
+      )
+      .run(
+        agentId,
+        chatId,
+        info.firstName ?? null,
+        info.lastName ?? null,
+        info.username ?? null,
+        now,
+        now,
+      );
+  }
+
+  /**
+   * Return contacts whose last_client_msg_at falls in the window
+   * [windowStart, windowEnd) and haven't had a re-engagement sent for
+   * the given delayDays+periodRef combination.
+   */
+  getContactsForReEngagement(
+    agentId: string,
+    delayDays: number,
+    windowStart: string,
+    windowEnd: string,
+  ): Array<{
+    chatId: string;
+    firstName: string | null;
+    lastName: string | null;
+    username: string | null;
+    lastClientMsgAt: string;
+  }> {
+    return this.db
+      .prepare(
+        `SELECT c.chat_id as chatId, c.first_name as firstName, c.last_name as lastName,
+                c.username as username, c.last_client_msg_at as lastClientMsgAt
+         FROM tg_contacts c
+         WHERE c.agent_id = ?
+           AND c.last_client_msg_at >= ?
+           AND c.last_client_msg_at < ?
+           AND NOT EXISTS (
+             SELECT 1 FROM tg_reengagement r
+             WHERE r.agent_id = c.agent_id
+               AND r.chat_id = c.chat_id
+               AND r.delay_days = ?
+               AND r.period_ref = c.last_client_msg_at
+           )`,
+      )
+      .all(agentId, windowStart, windowEnd, delayDays) as Array<{
+      chatId: string;
+      firstName: string | null;
+      lastName: string | null;
+      username: string | null;
+      lastClientMsgAt: string;
+    }>;
+  }
+
+  /** Record that a re-engagement message was sent for this contact+delay. */
+  markReEngagementSent(
+    agentId: string,
+    chatId: string,
+    delayDays: number,
+    periodRef: string,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO tg_reengagement (agent_id, chat_id, delay_days, period_ref, sent_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(agentId, chatId, delayDays, periodRef, new Date().toISOString());
+  }
+
+  // ─── Follow-up queue ─────────────────────────────────────────────────────
+
+  /** Save a scheduled follow-up message to the queue. */
+  addFollowup(id: string, agentId: string, chatId: string, chatKey: string, sendAt: string): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO tg_followup_queue (id, agent_id, chat_id, chat_key, send_at, sent, created_at)
+         VALUES (?, ?, ?, ?, ?, 0, ?)`,
+      )
+      .run(id, agentId, chatId, chatKey, sendAt, new Date().toISOString());
+  }
+
+  /** Return all unsent follow-ups for an agent (including future ones — for re-scheduling on restart). */
+  getAllPendingFollowups(
+    agentId: string,
+  ): Array<{ id: string; chatId: string; chatKey: string; sendAt: string }> {
+    return this.db
+      .prepare(
+        `SELECT id, chat_id as chatId, chat_key as chatKey, send_at as sendAt
+           FROM tg_followup_queue WHERE agent_id = ? AND sent = 0 ORDER BY send_at ASC`,
+      )
+      .all(agentId) as Array<{ id: string; chatId: string; chatKey: string; sendAt: string }>;
+  }
+
+  /** Mark a follow-up as sent so it won't fire again. */
+  markFollowupSent(id: string): void {
+    this.db.prepare("UPDATE tg_followup_queue SET sent = 1 WHERE id = ?").run(id);
+  }
+
+  /** Cancel all pending follow-ups for a specific chat (e.g. client replied on their own). */
+  cancelFollowupsForChat(agentId: string, chatId: string): void {
+    this.db
+      .prepare(
+        "UPDATE tg_followup_queue SET sent = 1 WHERE agent_id = ? AND chat_id = ? AND sent = 0",
+      )
+      .run(agentId, chatId);
   }
 
   // ─── Agent workspace ─────────────────────────────────────────────────────

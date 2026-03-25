@@ -50,7 +50,17 @@ export abstract class BaseAgent extends EventEmitter {
       configurable: true,
       enumerable: false, // non-enumerable → skipped by structuredClone
     });
+    // followupTimers: non-enumerable for the same reason as cronJobs.
+    Object.defineProperty(this, "followupTimers", {
+      value: new Map<string, ReturnType<typeof setTimeout>>(),
+      writable: true,
+      configurable: true,
+      enumerable: false,
+    });
   }
+
+  /** Map of pending follow-up timers: followup id → timeout handle. Non-enumerable. */
+  protected followupTimers!: Map<string, ReturnType<typeof setTimeout>>;
 
   abstract start(): Promise<void>;
   abstract stop(): Promise<void>;
@@ -127,6 +137,229 @@ export abstract class BaseAgent extends EventEmitter {
       return hhmm >= from && hhmm <= to;
     } else {
       return hhmm >= from || hhmm <= to;
+    }
+  }
+
+  // ─── Offline lead-processing mode ─────────────────────────────────────────
+
+  /**
+   * Returns true when the agent should handle this message in offline mode
+   * (outside schedule, but with AI lead-processing enabled).
+   */
+  protected isOfflineLeadMode(settings: AgentSettings): boolean {
+    return (
+      settings.offlineReplyEnabled === true &&
+      settings.scheduleMode === "schedule" &&
+      !this.isWithinSchedule(settings)
+    );
+  }
+
+  /**
+   * AI-driven offline mode: the manager is unavailable, but the AI continues
+   * chatting, qualifies the lead, and collects a convenient callback time.
+   *
+   * Behaves like runFreeMode but with an offline-aware system prompt:
+   *  - AI knows manager's working hours
+   *  - Goal: keep the lead warm, collect callback preferences
+   *  - Never claims the manager is online
+   */
+  protected async runOfflineLeadMode(
+    chatId: string,
+    userText: string,
+    chatKey: string,
+    settings: AgentSettings,
+    diagram?: FlowDiagram,
+  ): Promise<string | null> {
+    const conversationHistory = this.storage.loadConversationHistory(chatKey);
+    // Use full history (up to 50) for rich context analysis
+    const recentHistory = conversationHistory.slice(-50);
+
+    const rawDisplayName = this.name.replace(/\s*\(.*?\)\s*/g, "").trim();
+    const agentDisplayName =
+      rawDisplayName.charAt(0).toUpperCase() + rawDisplayName.slice(1) || rawDisplayName;
+
+    // Full dialogue history for the prompt
+    const historyLines = recentHistory
+      .map((m) => `${m.role === "user" ? "Клиент" : "Менеджер"}: ${m.content.slice(0, 300)}`)
+      .join("\n");
+
+    // All client messages for language detection + signal analysis
+    const allClientMessages = recentHistory.filter((m) => m.role === "user").map((m) => m.content);
+    const allClientText = [...allClientMessages, userText].join(" ");
+
+    // Manager working hours: explicit fields take priority, fallback to schedule times.
+    const from = settings.managerWorkFrom ?? settings.scheduleFrom ?? "?";
+    const to = settings.managerWorkTo ?? settings.scheduleTo ?? "?";
+
+    // Custom task instructions from settings (optional), placeholders replaced.
+    const customTask = settings.offlineReplyTemplate
+      ? settings.offlineReplyTemplate.replace(/\{от\}/g, from).replace(/\{до\}/g, to)
+      : "";
+
+    // Product/service context from the active diagram
+    const topicContext = diagram
+      ? diagram.nodes
+          .filter((n: DiagramNode) => n.type !== "start" && n.type !== "end")
+          .map((n: DiagramNode) => `• ${n.text.slice(0, 100)}`)
+          .join("\n")
+      : "";
+
+    // ── Client signal analysis ───────────────────────────────────────────────
+    const turnCount = recentHistory.filter((m) => m.role === "user").length;
+
+    // Buying signals: client shows genuine interest
+    const buyingSignals = allClientMessages.filter((t) =>
+      /цена|стоимость|сколько|условия|как работ|расскаж|интересно|хочу|могу|попробовать|записат|подход|покупа|заказ|интересует|узнать больше/i.test(
+        t,
+      ),
+    );
+
+    // Objections detected in client messages
+    const objections = allClientMessages.filter((t) =>
+      /дорого|не нужно|не интересно|подумаю|потом|позже|занят|нет времени|не сейчас|наверное нет|пока не|сомнева/i.test(
+        t,
+      ),
+    );
+
+    // Interest level: high if buying signals > objections, and 2+ exchanges
+    const interestLevel: "high" | "medium" | "low" =
+      buyingSignals.length > objections.length && turnCount >= 2
+        ? "high"
+        : objections.length > buyingSignals.length
+          ? "low"
+          : "medium";
+
+    // ── Callback-time negotiation state ─────────────────────────────────────
+    const timeRegex = /\d{1,2}[:\.]\d{2}|\d{1,2}\s*(?:утра|вечера|дня|ночи|am|pm)/i;
+
+    const lastAgentWithTime = [...recentHistory]
+      .reverse()
+      .find((m) => m.role === "assistant" && timeRegex.test(m.content));
+    const timeProposed = !!lastAgentWithTime;
+
+    const positiveReply =
+      /\bда\b|ок\b|окей|хорош|подход|отлич|договор|супер|yes\b|ok\b|sure\b|good\b|tamam\b|olur\b|ладно|давай|согласен|норм/i;
+    const timeAgreed =
+      timeProposed &&
+      (() => {
+        const idx = recentHistory.lastIndexOf(lastAgentWithTime!);
+        return recentHistory
+          .slice(idx + 1)
+          .some((m) => m.role === "user" && positiveReply.test(m.content));
+      })();
+
+    const clientMentionedTime = recentHistory.some(
+      (m) => m.role === "user" && timeRegex.test(m.content),
+    );
+
+    // Propose middle of the work window as the default (not the very start)
+    const proposalTime = (() => {
+      if (from === "?") return "10:00";
+      const [h] = from.split(":").map(Number);
+      const mid = h + 1; // one hour after opening
+      return `${String(mid).padStart(2, "0")}:00`;
+    })();
+
+    // Last few agent replies to prevent repeating the same phrasing
+    const lastAgentReplies = recentHistory
+      .filter((m) => m.role === "assistant")
+      .slice(-3)
+      .map((m) => m.content.slice(0, 120))
+      .join(" | ");
+
+    // ── Determine what to do about scheduling ────────────────────────────────
+    let callbackInstruction: string;
+    if (timeAgreed) {
+      const agreedTime = lastAgentWithTime!.content.match(timeRegex)?.[0] ?? proposalTime;
+      callbackInstruction =
+        `ВРЕМЯ ДОГОВОРЕНО (${agreedTime}). Подтверди одной фразой: ` +
+        `«Договорились! Менеджер позвонит вам завтра в ${agreedTime} 👍» — и тепло заверши разговор. ` +
+        `Больше не возвращайся к теме звонка.`;
+    } else if (clientMentionedTime && !timeProposed) {
+      callbackInstruction =
+        `Клиент сам назвал время — прими без лишних слов: ` +
+        `«Отлично, запишу! Менеджер свяжется с вами в [время]» и продолжи разговор.`;
+    } else if (timeProposed) {
+      callbackInstruction =
+        `Время уже предложено, ответа нет. Не навязывай — сначала ответь по существу, ` +
+        `затем мягко: «Кстати, то время вам ещё актуально, или скорректируем?»`;
+    } else if (interestLevel === "high" || turnCount >= 3) {
+      // Client is engaged — time to propose a call naturally
+      callbackInstruction =
+        `Интерес клиента высокий. Предложи звонок органично, в конце ответа: ` +
+        `«Давайте созвонимся с менеджером завтра в ${proposalTime}? Обсудим детали — ` +
+        `займёт 10 минут. Удобно?» НЕ задавай открытый вопрос про время.`;
+    } else {
+      // First exchanges — build interest first, don't rush to scheduling
+      callbackInstruction =
+        `Диалог только начался (${turnCount} реплики). Главная задача — заинтересовать. ` +
+        `НЕ предлагай звонок прямо сейчас — сначала покажи ценность. ` +
+        `Если разговор идёт хорошо, в конце можно упомянуть: «Если хотите подробнее — ` +
+        `могу договориться о звонке с менеджером».`;
+    }
+
+    // ── Objection-handling context ────────────────────────────────────────────
+    const objectionContext =
+      objections.length > 0
+        ? `## Возражения клиента:\n${objections.map((o) => `• "${o.slice(0, 100)}"`).join("\n")}\n` +
+          `→ Не игнорируй — признай и переформулируй как преимущество. Не спорь.\n\n`
+        : "";
+
+    // ── Buying signal context ─────────────────────────────────────────────────
+    const signalContext =
+      buyingSignals.length > 0
+        ? `## Сигналы интереса клиента:\n${buyingSignals.map((s) => `• "${s.slice(0, 100)}"`).join("\n")}\n` +
+          `→ Клиент заинтересован — развивай тему, конкретизируй выгоды.\n\n`
+        : "";
+
+    const systemPrompt =
+      `Ты — ${agentDisplayName}, опытный менеджер по продажам. НЕ бот, НЕ ИИ — живой человек.\n` +
+      `Сейчас нерабочее время. Менеджер доступен для звонков с ${from} до ${to}.\n` +
+      `Ты ведёшь переписку самостоятельно и профессионально — как лучший продажник компании.\n\n` +
+      (topicContext ? `## Продукт / услуга (темы для разговора):\n${topicContext}\n\n` : "") +
+      objectionContext +
+      signalContext +
+      (historyLines ? `## Полная история диалога:\n${historyLines}\n\n` : "") +
+      `## Текущее сообщение клиента: "${userText.slice(0, 400)}"\n\n` +
+      `## КАК ВЕСТИ ДИАЛОГ (обязательно):\n` +
+      `• Читай контекст — анализируй что клиент уже спрашивал, что его зацепило, что смущает.\n` +
+      `• Отвечай точно на вопрос — не уходи в сторону, не перегружай информацией.\n` +
+      `• Показывай ЦЕННОСТЬ, а не характеристики: что клиент получит, какую проблему решит.\n` +
+      `• Используй конкретику и цифры где возможно — «в 2 раза быстрее», «за 3 дня», «уже 500 клиентов».\n` +
+      `• Будь уверен, дружелюбен, без навязчивости. Задавай максимум ОДИН вопрос за раз.\n` +
+      `• Уровень интереса клиента сейчас: ${interestLevel === "high" ? "🔥 высокий" : interestLevel === "medium" ? "🟡 средний" : "❄️ низкий"}.\n\n` +
+      `## СЛЕДУЮЩИЙ ШАГ (звонок):\n${callbackInstruction}\n` +
+      (customTask ? `\n## Доп. инструкции от компании:\n${customTask}\n` : "") +
+      `\n## СТРОГО ЗАПРЕЩЕНО:\n` +
+      `• Говорить что менеджер сейчас онлайн или перезвонит прямо сейчас\n` +
+      `• Давать телефонные номера клиенту\n` +
+      `• Раскрывать что ты ИИ или бот\n` +
+      `• Повторять фразы из последних ответов: "${lastAgentReplies.slice(0, 150)}"\n` +
+      `• Отправлять одиночный "?" как сообщение\n` +
+      `• Использовать шаблонные фразы: «могу помочь?», «чем могу быть полезен?», «если есть вопросы»\n\n` +
+      `## Язык ответа: определи по тексту клиента («${allClientText.slice(0, 150)}») и отвечай СТРОГО на нём.\n\n` +
+      `Стиль: профессиональный, живой, уверенный. 2–4 предложения. Без пустых строк.`;
+
+    const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
+    try {
+      const raw = await aiReply(userText, chatKey, systemPrompt, this.storage, workspaceTools);
+      const reply = raw
+        .replace(/(?<!\d)(\+?\d[\d\s\-().]{5,}\d)(?!\d)/g, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+      this.logger.info(
+        `[TG:${this.name}] offline-lead | chat=${chatId} ` +
+          `phase=${timeAgreed ? "agreed" : timeProposed ? "proposed" : "init"} ` +
+          `interest=${interestLevel} turns=${turnCount}`,
+      );
+      // Capture lead on phone detection or when time is confirmed
+      if (/(?:\+?[\d][\d\s\-()]{6,}\d)/.test(userText) || timeAgreed) {
+        void this.extractAndSaveLead(chatId, chatKey);
+      }
+      return reply || null;
+    } catch (e) {
+      this.logger.warn(`[TG:${this.name}] offline-lead mode failed: ${String(e)}`);
+      return null;
     }
   }
 
@@ -297,7 +530,12 @@ export abstract class BaseAgent extends EventEmitter {
         : "You are a helpful Telegram assistant. Be concise and friendly.";
     }
 
-    return `You are a Telegram agent.\n\n${sections.join("\n\n")}`;
+    return (
+      `Ты — опытный менеджер (живой человек). Говори уверенно и по делу.\n` +
+      `ЯЗЫК: Всегда отвечай на том языке, на котором пишет клиент — определяй по его последнему сообщению.\n` +
+      `НИКОГДА не повторяй слова клиента в ответе. НИКОГДА не дублируй свои предыдущие сообщения.\n\n` +
+      sections.join("\n\n")
+    );
   }
 
   /**
@@ -364,9 +602,12 @@ export abstract class BaseAgent extends EventEmitter {
     const kbParts: string[] = [];
     for (const entry of entries) {
       if (!entry.pairs || entry.pairs.length === 0) continue;
+      // Show only the RESPONSE (the offer/script) — not the input question.
+      // The agent must use these as ready-made offer scripts to adapt and send,
+      // NOT as question templates to interrogate the client.
       const pairLines = entry.pairs
         .slice(0, 5)
-        .map((pr) => `  Q: ${pr.input}\n  A: ${pr.response} ${scoreLabel(pr.score)}`)
+        .map((pr) => `  ${scoreLabel(pr.score)} СКРИПТ (отправить клиенту): ${pr.response}`)
         .join("\n");
       kbParts.push(`### ${entry.nodeText}\n${pairLines}`);
     }
@@ -374,12 +615,14 @@ export abstract class BaseAgent extends EventEmitter {
 
     const scopeLabel = diagram.scope === "shared" ? "Shared" : "Personal";
     return (
-      `## Conversation Flow (${scopeLabel})\n` +
-      `Follow this flow strictly during the conversation:\n` +
+      `## Схема разговора (${scopeLabel})\n` +
+      `Следуй этой схеме строго в ходе беседы:\n` +
       nodeLines.join("\n") +
-      (edgeLines ? `\nTransitions:\n${edgeLines}` : "") +
-      `\n\n## Knowledge Base — Example Dialogues by Step\n` +
-      `Use these verified examples as a guide for your responses. Higher ★ = better outcome.\n\n` +
+      (edgeLines ? `\nПереходы:\n${edgeLines}` : "") +
+      `\n\n## База скриптов топ-менеджеров по шагам\n` +
+      `ВАЖНО: Это ГОТОВЫЕ ОФФЕРЫ которые нужно ОТПРАВИТЬ клиенту — это НЕ вопросы к клиенту.\n` +
+      `Возьми скрипт из нужного шага, переведи на язык клиента, адаптируй и отправь.\n` +
+      `Чем выше ★ — тем лучше результат. ЗАПРЕЩЕНО превращать скрипт в вопрос.\n\n` +
       kbParts.join("\n\n")
     );
   }
@@ -602,11 +845,67 @@ export abstract class BaseAgent extends EventEmitter {
       diagram.nodes.find((n: DiagramNode) => n.type === "start") ?? diagram.nodes[0];
     if (!startNode) return null;
 
-    // Resolve current position (null → first message → start node)
+    // Resolve current position in the schema.
+    // "__done__" = schema completed, run in free continuation mode (no node).
     const savedNodeId = this.storage.getConversationNodeId(this.id, chatId);
-    const currentNode: DiagramNode =
+    const schemaCompleted = savedNodeId === "__done__";
+
+    // ── FREE CONTINUATION after schema completion ──────────────────────────
+    // When all schema nodes are done but client keeps writing, continue the
+    // conversation naturally using the full script as background knowledge.
+    if (schemaCompleted) {
+      return this.runFreeMode(chatId, userText, chatKey, diagram);
+    }
+
+    let resolvedNode: DiagramNode =
       (savedNodeId ? diagram.nodes.find((n: DiagramNode) => n.id === savedNodeId) : null) ??
       startNode;
+
+    // ── Conversation history + time context ───────────────────────────────
+    const conversationHistory = this.storage.loadConversationHistory(chatKey);
+
+    // Compute time elapsed since the last message — injected into prompts so
+    // the agent can say "после нашего разговора вчера..." naturally.
+    const lastAt = this.storage.getConversationLastAt(chatKey);
+    let timeSinceLastMsg = "";
+    if (lastAt && conversationHistory.length > 0) {
+      const diffMs = Date.now() - new Date(lastAt).getTime();
+      const diffMin = Math.floor(diffMs / 60_000);
+      if (diffMin < 2) {
+        timeSinceLastMsg = "только что";
+      } else if (diffMin < 60) {
+        timeSinceLastMsg = `${diffMin} минут назад`;
+      } else if (diffMin < 1440) {
+        const h = Math.floor(diffMin / 60);
+        timeSinceLastMsg = `${h} ${h === 1 ? "час" : h < 5 ? "часа" : "часов"} назад`;
+      } else {
+        const d = Math.floor(diffMin / 1440);
+        timeSinceLastMsg = `${d} ${d === 1 ? "день" : d < 5 ? "дня" : "дней"} назад`;
+      }
+    }
+
+    // ── Off-schema question detection ────────────────────────────────────
+    // When client asks the AGENT something personal (name, who are you, etc.),
+    // answer it directly from identity context — don't ignore it and push script.
+    const offSchemaPatterns =
+      /\b(как.*тебя.*зовут|твоё?.*имя|кто.*ты|who are you|what.*your name|как тебя звать|ты кто)\b/i;
+    const isOffSchemaQuestion = offSchemaPatterns.test(userText);
+
+    // ── Flexible routing: jump to a better-matching node when the client's
+    // message is far more relevant to another node's KB than the current one.
+    // Only in non-strict mode; strict mode always follows the linear path.
+    let currentNode = resolvedNode;
+    if (!strict && !isOffSchemaQuestion) {
+      const flexNode = this.flexibleNodeRoute(userText, diagram, resolvedNode);
+      if (flexNode.id !== resolvedNode.id) {
+        this.logger.info(
+          `[TG:${this.name}] flex-route | chat=${chatId} ` +
+            `${resolvedNode.id}→${flexNode.id} "${flexNode.text.slice(0, 50)}"`,
+        );
+        this.storage.setConversationNodeId(this.id, chatId, flexNode.id);
+        currentNode = flexNode;
+      }
+    }
 
     const isDecision = currentNode.type === "decision";
     const isEnd = currentNode.type === "end";
@@ -616,10 +915,12 @@ export abstract class BaseAgent extends EventEmitter {
     );
 
     // ── KB top-response lookup ─────────────────────────────────────────────
-    // Top pairs (score ≥ 2) will be injected as explicit templates.
+    // All KB pairs for this node, sorted best-score first.
+    // ANY score (1–3) is now eligible for verbatim use — the user wants strict KB.
     const kbPairs = this.getNodeKbPairs(diagram, currentNode.id);
     const topPairs = kbPairs.filter((p) => p.score >= 2).slice(0, 4);
     const hasTemplates = topPairs.length > 0;
+    const scriptTemplate = topPairs.find((p) => p.score === 3);
 
     // ── Per-client long-term memory (survives restarts) ────────────────────
     const chatMemory = this.storage.getChatMemory(this.id, chatId);
@@ -638,35 +939,658 @@ export abstract class BaseAgent extends EventEmitter {
         }): x is { edge: DiagramEdge; node: DiagramNode } => x.node !== undefined,
       );
 
+    // ── Template selection — randomise among equally top-scored entries ──────
+    // Always using topPairs[0] makes every reply identical. Rotate among best
+    // options so the agent sounds natural across multiple turns.
+    const pickTemplate = (pool: typeof topPairs): (typeof topPairs)[0] | undefined => {
+      if (pool.length === 0) return undefined;
+      const topScore = pool[0].score;
+      const topTier = pool.filter((p) => p.score === topScore);
+      return topTier[Math.floor(Math.random() * topTier.length)];
+    };
+    const bestTemplate = pickTemplate(topPairs) ?? kbPairs[0];
+
+    // ── Extract known client facts from all their messages ────────────────
+    // Used to prevent re-asking for info already given (age, name, phone, etc.)
+    const extractClientFacts = (): string => {
+      const allMsgs = conversationHistory
+        .filter((m) => m.role === "user")
+        .map((m) => m.content)
+        .concat(userText)
+        .join(" ");
+
+      const facts: string[] = [];
+
+      // Name: "я Дима", "меня зовут Алексей", "my name is ...", "я — Иван"
+      const nameMatch = allMsgs.match(
+        /(?:я\s+[—-]?\s*|меня зовут\s+|my name is\s+|ben\s+)([А-ЯЁA-Z][а-яёa-z]{1,20})/i,
+      );
+      if (nameMatch) facts.push(`Имя: ${nameMatch[1]}`);
+
+      // Age: "мне 21", "мне 21 год", "21 лет", "21 yaş", "i'm 30"
+      const ageMatch =
+        allMsgs.match(
+          /(?:мне\s+|i(?:'m| am)\s+|age\s*[=:]\s*|yaş[ım]*\s*)(\d{1,3})(?:\s*(?:лет|год|года|years?|yaş))?/i,
+        ) ?? allMsgs.match(/\b(\d{1,3})\s*(?:лет|года?|years?)\b/i);
+      if (ageMatch) facts.push(`Возраст: ${ageMatch[1]}`);
+
+      // Phone: sequences of 7+ digits (with optional +, -, spaces)
+      const phoneMatch = allMsgs.match(/(?:\+?\d[\d\s\-()]{6,}\d)/);
+      if (phoneMatch) facts.push(`Телефон: ${phoneMatch[0].trim()}`);
+
+      // Profession/sphere: "я из айти", "работаю в IT", "занимаюсь"
+      const profMatch = allMsgs.match(
+        /(?:я из\s+|работаю\s+(?:в|на)\s+|занимаюсь\s+|сфера\s*[—:\-]\s*)([А-ЯЁA-Za-zа-яё\s]{2,25})/i,
+      );
+      if (profMatch) facts.push(`Сфера: ${profMatch[1].trim()}`);
+
+      return facts.join(" | ");
+    };
+
+    /**
+     * Adapt a KB script to the live conversation context.
+     *
+     * Core rules:
+     *  - Use the KB template as the main message body — do NOT invent content
+     *  - Add one bridge sentence reacting to client's last message
+     *  - Never re-ask for facts the client already provided
+     *  - Never hallucinate phone numbers, names, addresses
+     *  - Output two paragraphs separated by \n\n (splitMessage handles the split)
+     */
+    /**
+     * Strip phone-number-like sequences from a manager reply.
+     * Managers must never share phone numbers in their messages.
+     */
+    const stripPhoneNumbers = (text: string): string =>
+      text
+        .replace(/(?<!\d)(\+?\d[\d\s\-().]{5,}\d)(?!\d)/g, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+
+    const adaptScript = async (template: string): Promise<string> => {
+      // Last 50 messages — preserve as much context as possible.
+      const recentHistory = conversationHistory.slice(-50);
+
+      // All client text for language detection (history + current)
+      const allClientText = recentHistory
+        .filter((m) => m.role === "user")
+        .map((m) => m.content)
+        .join(" ")
+        .concat(" ", userText)
+        .slice(0, 600);
+
+      // Full history lines for context (last 20 turns)
+      const historyLines = recentHistory
+        .map((m) => `${m.role === "user" ? "Клиент" : "Менеджер"}: ${m.content.slice(0, 250)}`)
+        .join("\n");
+
+      // What was the LAST topic the manager raised? (for "не разбираюсь в этом" type replies)
+      const lastManagerMsg =
+        [...recentHistory]
+          .reverse()
+          .find((m) => m.role === "assistant")
+          ?.content.slice(0, 150) ?? "";
+
+      const greetingDone = recentHistory.some(
+        (m) =>
+          m.role === "assistant" && /привет|здравств|рад|добрый|merhaba|hello/i.test(m.content),
+      );
+
+      const prevPhrases = recentHistory
+        .filter((m) => m.role === "assistant")
+        .map((m) => m.content.slice(0, 100))
+        .join(" | ");
+
+      const knownFacts = extractClientFacts();
+
+      const endNode =
+        diagram.nodes.find((n: DiagramNode) => n.type === "end") ??
+        diagram.nodes[diagram.nodes.length - 1];
+      const goalText = endNode && endNode.id !== currentNode.id ? endNode.text : "";
+
+      // ── Off-schema: client asked the AGENT a personal question ────────────
+      if (isOffSchemaQuestion) {
+        const identityPrompt =
+          `Ты — менеджер по продажам (живой человек, не бот).\n` +
+          `Клиент спросил тебя: "${userText}"\n\n` +
+          `Язык клиента (определи по всем сообщениям): "${allClientText}"\n\n` +
+          (historyLines ? `История:\n${historyLines}\n\n` : "") +
+          `Абзац 1: Ответь на вопрос клиента — представься реалистичным именем менеджера.\n` +
+          `Абзац 2: Продолжи по теме шага: "${currentNode.text}".\n\n` +
+          `СТРОГО ЗАПРЕЩЕНО: придумывать телефоны, адреса, паспортные данные.\n` +
+          `Пиши на языке клиента. Два абзаца через пустую строку. Без заголовков.`;
+        try {
+          return (await analyzeOnceDirect(identityPrompt)).trim() || template;
+        } catch {
+          return template;
+        }
+      }
+
+      // Detect already-confirmed arrangements (call times, dates) in the
+      // last 10 turns so we never re-verify what's been agreed.
+      const confirmedAgreements = (() => {
+        const agreed: string[] = [];
+        const agreedPattern =
+          /(?:созвон|звонок|позвоним|созваниваемся|договорились|ок,?\s+до|хорошо,?\s+до|отлично,?\s+до|жду звонка|буду ждать)[^.!?\n]{0,80}/gi;
+        const timeWithConfirmation =
+          /(?:в\s+\d{1,2}[:\.]\d{2}|в\s+\d{1,2}\s*(?:утра|вечера|дня|ночи))[^.!?\n]{0,40}(?:договорились|ок|хорошо|отлично|принял)/gi;
+        for (const m of recentHistory) {
+          const m1 = m.content.match(agreedPattern);
+          if (m1) agreed.push(...m1.map((s) => s.trim().slice(0, 80)));
+          const m2 = m.content.match(timeWithConfirmation);
+          if (m2) agreed.push(...m2.map((s) => s.trim().slice(0, 80)));
+        }
+        return [...new Set(agreed)].slice(0, 3).join("; ");
+      })();
+
+      // Detect client language script for post-processing safety check.
+      // True = client uses Cyrillic (Russian/Ukrainian/etc); false = Latin/other.
+      const clientUsesCyrillic = /[а-яёА-ЯЁ]{3,}/.test(allClientText);
+
+      // Turkish-specific characters that must never appear in a Russian response.
+      // ç ş ğ ı İ Ğ Ş Ç are exclusive to Turkish/Azerbaijani — not in Russian alphabet.
+      const hasTurkishChars = (s: string) => /[çşğıİĞŞÇ]/.test(s);
+
+      // Known Turkish/foreign words that must never appear in a Russian response.
+      const foreignWordPattern =
+        /\b(?:değilim|değil|benim|senim|için|ama|fakat|şimdi|hayırsever|adım|yaşım|numaram|yatırım|deneyim|hakkında|nasıl|neden|teşekkür|müsaitim|müsait|uygun|tamam|tabii|efendim|buyurun|merhaba(?!\s+(?:arkadaş|dostum)))\b/i;
+
+      /**
+       * Ensure the response is in the client's language.
+       * Handles three cases:
+       *  A) Contains Turkish-exclusive chars (ç ş ğ ı) → full translate
+       *  B) Fully foreign text (no Cyrillic) → full translate
+       *  C) Mixed — strip sentences/lines that contain foreign words or Turkish chars
+       */
+      const ensureClientLanguage = async (text: string): Promise<string> => {
+        if (!clientUsesCyrillic) return text; // client not Cyrillic → pass through
+
+        const hasForeign = foreignWordPattern.test(text) || hasTurkishChars(text);
+        const cyrillicRatio = (text.match(/[а-яёА-ЯЁ]/g)?.length ?? 0) / Math.max(text.length, 1);
+
+        // Case A/B: Turkish chars present OR almost no Cyrillic → full translate
+        if (hasTurkishChars(text) || (cyrillicRatio < 0.3 && /[a-zA-Z]{4,}/.test(text))) {
+          try {
+            const translated = await analyzeOnceDirect(
+              `Переведи на русский язык, убери любые турецкие слова. Верни ТОЛЬКО перевод:\n\n${text}`,
+            );
+            return translated.trim() || text;
+          } catch {
+            return text;
+          }
+        }
+
+        // Case C: mixed — strip sentences/lines that contain foreign words or Turkish chars
+        if (hasForeign) {
+          const cleaned = text
+            .split(/\n/)
+            .map((line) => {
+              if (hasTurkishChars(line) || foreignWordPattern.test(line)) return "";
+              return line
+                .split(/(?<=[.!?])\s+/)
+                .filter((s) => !foreignWordPattern.test(s) && !hasTurkishChars(s))
+                .join(" ");
+            })
+            .filter(Boolean)
+            .join("\n")
+            .trim();
+          return cleaned || text;
+        }
+
+        return text;
+      };
+
+      // ── Normal path: KB script + bridge sentence ───────────────────────────
+      // Check greeting over the FULL conversation history (not just recent slice)
+      // so "Рад снова вас видеть" is never repeated even in long conversations.
+      const greetingInFullHistory = conversationHistory.some(
+        (m) =>
+          m.role === "assistant" &&
+          /привет|здравств|рад|добрый|merhaba|hello|hola|bonjour/i.test(m.content),
+      );
+
+      // Cliché phrases that professional managers avoid.
+      const clicheBlacklist = [
+        "Рад снова тебя слышать",
+        "Рад снова вас слышать",
+        "Рад снова вас видеть",
+        "Рад снова тебя видеть",
+        "Как дела",
+        "Чем могу помочь",
+        "Чем займёмся",
+        "Что сегодня обсудим",
+        "расскажите о себе",
+        "расскажи о себе",
+      ].join(", ");
+
+      // Detect if client just shared a phone number — use targeted acknowledgment
+      const clientSharedPhone = /(?:\+?\d[\d\s\-()]{6,}\d)/.test(userText);
+      const clientSharedName =
+        /^[А-ЯЁA-Z][а-яёa-z]{1,20}$/.test(userText.trim()) ||
+        /(?:я\s+[—-]?\s*|меня зовут\s+)([А-ЯЁA-Z][а-яёa-z]{1,20})/i.test(userText);
+      const clientGaveShortAnswer = userText.trim().split(/\s+/).length <= 3;
+
+      // ── Repeated-question detection ────────────────────────────────────────
+      // If the client asks essentially the same question ≥2 times in the last
+      // 8 turns, the previous answers didn't satisfy them. Signal this clearly
+      // so the AI changes approach instead of looping the same reply.
+      const repeatCount = (() => {
+        const currWords = userText
+          .toLowerCase()
+          .split(/\W+/)
+          .filter((w) => w.length > 2);
+        if (currWords.length === 0) return 0;
+        return recentHistory
+          .filter((m) => m.role === "user")
+          .slice(-20)
+          .filter((m) => {
+            const qWords = m.content
+              .toLowerCase()
+              .split(/\W+/)
+              .filter((w) => w.length > 2);
+            const overlap = qWords.filter((w) => currWords.includes(w)).length;
+            return overlap / currWords.length > 0.5;
+          }).length;
+      })();
+      const isLoopQuestion = repeatCount >= 2;
+
+      // ── Last 5 agent replies listed individually (NOT truncated) ──────────
+      // Used for the hard "already said — DO NOT repeat" block in the prompt.
+      const lastAgentReplies = recentHistory
+        .filter((m) => m.role === "assistant")
+        .slice(-5)
+        .map((m, i) => `  ${i + 1}. "${m.content}"`)
+        .join("\n");
+
+      // ── Repeated trailing phrase detection ────────────────────────────────
+      // E.g. agent ending 3 messages in a row with "Будем на связи в 8 вечера!"
+      // Extract the last sentence of each recent reply; if ≥2 are the same, ban it.
+      const trailingPhrases = recentHistory
+        .filter((m) => m.role === "assistant")
+        .slice(-8)
+        .map((m) => {
+          const sentences = m.content.split(/(?<=[.!?])\s+/);
+          return sentences[sentences.length - 1]?.trim() ?? "";
+        })
+        .filter(Boolean);
+      const bannedTrailing = (() => {
+        const counts = new Map<string, number>();
+        for (const p of trailingPhrases) counts.set(p, (counts.get(p) ?? 0) + 1);
+        return [...counts.entries()]
+          .filter(([, c]) => c >= 2)
+          .map(([p]) => `"${p}"`)
+          .join(", ");
+      })();
+
+      // Very first response ever for this client (no history at all).
+      // Always introduce by name regardless of what the client wrote.
+      const isFirstGreeting = conversationHistory.length === 0;
+
+      // Agent display name — strip tech suffixes like "(userbot)", capitalize first letter.
+      const rawDisplayName = this.name.replace(/\s*\(.*?\)\s*/g, "").trim();
+      const agentDisplayName =
+        rawDisplayName.charAt(0).toUpperCase() + rawDisplayName.slice(1) || rawDisplayName;
+
+      // Long-term memory from previous sessions — know the client over time.
+      const sessionMemoryText = chatMemory?.memoryText ?? "";
+      const sessionCount = chatMemory?.sessionsCount ?? 0;
+
+      // Is this a returning client (we've had sessions before)?
+      const isReturningClient = sessionCount > 0;
+
+      const prompt =
+        `Ты — живой менеджер по продажам, тебя зовут ${agentDisplayName}. НЕ бот, НЕ ИИ.\n` +
+        `Пишешь в Telegram — коротко, по-человечески, как настоящий человек.\n` +
+        (goalText ? `Твоя цель: ${goalText}\n` : "") +
+        (timeSinceLastMsg ? `Пауза в разговоре: ${timeSinceLastMsg}.\n` : "") +
+        `\n` +
+        (sessionMemoryText
+          ? `## ПАМЯТЬ О КЛИЕНТЕ (прошлые ${sessionCount} сессий — используй это!):\n${sessionMemoryText}\n` +
+            `Если уместно — ссылайся на прошлые разговоры: "как мы обсуждали", "помнишь, говорили о...", "ты тогда упоминал..." и т.п.\n\n`
+          : "") +
+        (historyLines
+          ? `## Текущий диалог (последние ${recentHistory.length} сообщений):\n${historyLines}\n\n`
+          : "") +
+        `## Клиент написал: "${userText.slice(0, 300)}"\n` +
+        (lastManagerMsg ? `(Ты только что писал: "${lastManagerMsg}")\n` : "") +
+        `\n` +
+        (knownFacts
+          ? `## Факты о клиенте из этого диалога (не переспрашивать): ${knownFacts}\n\n`
+          : "") +
+        `## Язык: ориентируйся на сообщения клиента: "${allClientText.slice(0, 150)}".\n` +
+        `Отвечай СТРОГО на том же языке — ни слова на другом.\n\n` +
+        `## Основа ответа (ПРИМЕР из базы — используй смысл, НЕ копируй имена/данные из примера):\n` +
+        `"${template}"\n\n` +
+        (isFirstGreeting
+          ? `## ПЕРВОЕ СООБЩЕНИЕ:\n` +
+            `Поздоровайся + представься: "Привет! Меня зовут ${agentDisplayName}." + 1 фраза о чём можешь помочь. Всё одной мыслью, без вопросов.\n\n`
+          : isReturningClient
+            ? `## ВОЗВРАЩАЮЩИЙСЯ КЛИЕНТ — используй память:\n` +
+              `Упомяни что-то из прошлых разговоров если это к месту. Продолжай как будто давно знакомы.\n\n`
+            : clientSharedPhone
+              ? `Клиент прислал номер — подтверди кратко и назови следующий шаг.\n\n`
+              : clientSharedName
+                ? `Клиент назвал имя — обратись по имени + двигай к сути.\n\n`
+                : clientGaveShortAnswer
+                  ? `Короткий ответ → 1–2 предложения: среагируй + двигай.\n\n`
+                  : `Развёрнутый ответ → 2–3 предложения по делу.\n\n`) +
+        (isLoopQuestion
+          ? `## ⚠️ ПЕТЛЯ ДИАЛОГА — ДЕЙСТВУЙ ИНАЧЕ:\n` +
+            `Клиент спрашивает одно и то же уже ${repeatCount + 1}-й раз подряд.\n` +
+            `Значит прошлые ответы его НЕ устраивают. КАРДИНАЛЬНО измени подход:\n` +
+            `— Спроси напрямую: "Что именно вас беспокоит?" или "Могу уточнить детали"\n` +
+            `— НЕ давай тот же ответ снова. Ни в каком виде.\n\n`
+          : "") +
+        `## ЗАПРЕЩЕНО (ЖЁСТКО):\n` +
+        (lastAgentReplies
+          ? `- Эти фразы уже были сказаны — НЕЛЬЗЯ ПОВТОРЯТЬ ни дословно, ни близко по смыслу:\n${lastAgentReplies}\n`
+          : "") +
+        (bannedTrailing
+          ? `- Особо запрещённые концовки (встречались 2+ раза подряд): ${bannedTrailing}\n`
+          : "") +
+        (greetingInFullHistory ? `- НЕ здоровайся снова\n` : "") +
+        `- НЕ пиши: ${clicheBlacklist}\n` +
+        (knownFacts ? `- НЕ спрашивай уже известное: ${knownFacts}\n` : "") +
+        (confirmedAgreements
+          ? `- УЖЕ ДОГОВОРИЛИСЬ: "${confirmedAgreements}" — это зафиксировано, не возвращайся к этому\n`
+          : "") +
+        `- НЕ отправлять "?" как отдельное сообщение\n` +
+        `- НЕ писать "я могу подстраиваться" — предложи 2–3 конкретных варианта\n` +
+        `- НИКАКИХ НОМЕРОВ ТЕЛЕФОНОВ\n` +
+        `- НЕ использовать имена/данные из KB-примера как реальные данные клиента\n` +
+        `- НЕ задавать два вопроса подряд\n` +
+        `- НЕ раскрывать что ты ИИ\n` +
+        `- НОЛЬ турецких/иностранных слов\n\n` +
+        `## ТОН:\n` +
+        `Деловой партнёр — уверенный, конкретный. НЕ "подстраивающийся".\n` +
+        `Одна чёткая мысль на сообщение. Без расплывчатых фраз.\n\n` +
+        `Пиши как живой человек в мессенджере. Без пустых строк. Без заголовков.`;
+
+      try {
+        const adapted = await analyzeOnceDirect(prompt);
+        // Strip phone numbers, clean [MSG] markers, ensure correct language
+        const noPhones = stripPhoneNumbers(adapted.trim());
+        let cleaned = noPhones.replace(/\[MSG\]/gi, " ").replace(/\n{2,}/g, "\n");
+
+        // Post-process: if the reply ends with a banned trailing phrase, cut it.
+        if (bannedTrailing) {
+          const bannedList = trailingPhrases.filter(
+            (p, _, arr) => arr.filter((x) => x === p).length >= 2,
+          );
+          for (const banned of bannedList) {
+            if (cleaned.endsWith(banned)) {
+              cleaned = cleaned.slice(0, cleaned.length - banned.length).trim();
+            }
+          }
+        }
+
+        return (await ensureClientLanguage(cleaned)) || template;
+      } catch {
+        return ensureClientLanguage(stripPhoneNumbers(template));
+      }
+    };
+
+    /**
+     * Advance the state machine to the next node after sending a reply.
+     *
+     * Rules:
+     *  - 0 exits or end node  → delete state (conversation finished)
+     *  - 1 exit               → trivially advance
+     *  - 2+ exits on decision → AI picks branch by analysing client's message
+     *  - 2+ exits on process  → AI picks the most contextually fitting path
+     *
+     * Logs the chosen transition for full observability.
+     */
+    const advanceNode = async (nodeType: string): Promise<void> => {
+      if (nextNodes.length === 0 || isEnd) {
+        // Mark as "__done__" instead of deleting — next client message will
+        // enter free continuation mode rather than restarting from the start node.
+        this.storage.setConversationNodeId(this.id, chatId, "__done__");
+        void this.saveSessionMemory(chatId, chatKey, chatMemory);
+        void this.extractAndSaveLead(chatId, chatKey); // auto-capture lead on schema completion
+        if (!isEnd) {
+          this.logger.warn(
+            `[TG:${this.name}] schema DEAD-END | chat=${chatId} node="${currentNode.text.slice(0, 40)}" type=${nodeType} — switching to free mode. Fix the diagram.`,
+          );
+        } else {
+          this.logger.info(
+            `[TG:${this.name}] schema END | chat=${chatId} — switching to free mode`,
+          );
+        }
+        return;
+      }
+
+      if (nextNodes.length === 1) {
+        this.storage.setConversationNodeId(this.id, chatId, nextNodes[0].node.id);
+        this.logger.info(
+          `[TG:${this.name}] schema advance | chat=${chatId} [${nodeType}] "${currentNode.text.slice(0, 30)}" → "${nextNodes[0].node.text.slice(0, 40)}"`,
+        );
+        return;
+      }
+
+      // Multiple exits — use AI to choose the best path.
+      // Build a compact history snippet (last 4 turns) for context.
+      const histSnippet = conversationHistory
+        .slice(-4)
+        .map((m) => `${m.role === "user" ? "К" : "М"}: ${m.content.slice(0, 150)}`)
+        .join("\n");
+
+      const exitList = nextNodes
+        .map(
+          (x: { edge: DiagramEdge; node: DiagramNode }, i: number) =>
+            `${i + 1}. ${x.edge.label ? `[${x.edge.label}] ` : ""}${x.node.text}`,
+        )
+        .join("\n");
+
+      const routePrompt =
+        `Ты — система маршрутизации диалога.\n\n` +
+        `Текущий шаг: [${nodeType.toUpperCase()}] "${currentNode.text}"\n` +
+        `Последнее сообщение клиента: "${userText.slice(0, 300)}"\n\n` +
+        (histSnippet ? `Контекст диалога:\n${histSnippet}\n\n` : "") +
+        `Возможные следующие шаги:\n${exitList}\n\n` +
+        `Выбери НАИБОЛЕЕ подходящий следующий шаг исходя из слов клиента и контекста.\n` +
+        `Ответь ТОЛЬКО числом (1, 2, 3...) — номером шага из списка выше. Без объяснений.`;
+
+      let chosenIdx = 0; // default: first exit
+      try {
+        const raw = await analyzeOnceDirect(routePrompt);
+        const num = parseInt(raw.trim(), 10);
+        if (!isNaN(num) && num >= 1 && num <= nextNodes.length) {
+          chosenIdx = num - 1;
+        }
+      } catch {
+        // swallow — fallback to index 0
+      }
+
+      const chosen = nextNodes[chosenIdx];
+      this.storage.setConversationNodeId(this.id, chatId, chosen.node.id);
+      this.logger.info(
+        `[TG:${this.name}] schema advance | chat=${chatId} [${nodeType}] "${currentNode.text.slice(0, 30)}" → [${chosenIdx + 1}/${nextNodes.length}] "${chosen.node.text.slice(0, 40)}"`,
+      );
+    };
+
+    /**
+     * Persist the exchange to conversation history so the next message
+     * has full context.  adaptScript paths use analyzeOnceDirect which
+     * does NOT touch history — we must save manually.
+     * The aiReply fallback path saves via AiReplyEngine automatically.
+     */
+    const persistHistory = (userMsg: string, agentReply: string): void => {
+      const hist = this.storage.loadConversationHistory(chatKey);
+      hist.push({ role: "user", content: userMsg });
+      hist.push({ role: "assistant", content: agentReply });
+      // Keep last 200 entries (~100 turns) — long dialogues need full context.
+      const trimmed = hist.slice(-200);
+      this.storage.saveConversationHistory(chatKey, trimmed);
+
+      // Periodically compress old exchanges into long-term memory so future
+      // sessions can say "как мы говорили раньше".
+      // Trigger every 10 turns (20 entries) once we have enough data.
+      if (trimmed.length > 0 && trimmed.length % 20 === 0) {
+        void this.saveSessionMemory(chatId, chatKey, chatMemory);
+      }
+    };
+
+    if (!isDecision && bestTemplate) {
+      // Run reply generation and node advancement in parallel where possible:
+      // adaptScript is I/O-bound (AI call), advanceNode may also need AI for
+      // multi-exit process nodes — start both simultaneously.
+      const [reply] = await Promise.all([
+        adaptScript(bestTemplate.response),
+        advanceNode(currentNode.type),
+      ]);
+      this.logger.info(
+        `[TG:${this.name}] schema reply | chat=${chatId} source=kb-adapted node="${currentNode.text.slice(0, 40)}"`,
+      );
+      const safeReply = stripPhoneNumbers(reply);
+      persistHistory(userText, safeReply);
+      return safeReply;
+    }
+
+    // ── Decision node with KB: adapt template, AI picks branch ───────────────
+    if (isDecision && bestTemplate && nextNodes.length > 1) {
+      // Run reply adaptation and branch routing in parallel.
+      const [reply] = await Promise.all([
+        adaptScript(bestTemplate.response),
+        advanceNode(currentNode.type),
+      ]);
+      this.logger.info(
+        `[TG:${this.name}] schema reply | chat=${chatId} source=kb-decision-adapted node="${currentNode.text.slice(0, 40)}"`,
+      );
+      const safeDecisionReply = stripPhoneNumbers(reply);
+      persistHistory(userText, safeDecisionReply);
+      return safeDecisionReply;
+    }
+
     // ── System prompt ──────────────────────────────────────────────────────
-    // Strict mode preamble is more explicit about the template-first rule.
-    let systemPrompt = strict
-      ? `Ты менеджер, который ведёт разговор СТРОГО по скрипту. ОБЯЗАТЕЛЬНЫЕ правила:\n` +
-        `• Отвечай только в рамках текущего шага — не перескакивай и не возвращайся назад.\n` +
-        `• Используй шаблонные ответы (если они есть) дословно или с минимальной адаптацией.\n` +
-        `• Не раскрывай, что ты ИИ или бот.\n` +
-        `• Не извиняйся и не отказывай без причины.\n` +
-        `• Ответ краткий и конкретный (не более 4–6 предложений).\n\n`
-      : `Ты ведёшь разговор строго по заданному скрипту. Не отклоняйся от него.\n\n`;
+    // Reached only when: decision node with no KB, OR end node with no KB.
+    // Collect language evidence from all client messages (more reliable than last msg alone).
+    const allClientMsgsFallback = conversationHistory
+      .filter((m) => m.role === "user")
+      .map((m) => m.content)
+      .join(" ")
+      .concat(" ", userText)
+      .slice(0, 400);
+    const greetingWasSentFallback = conversationHistory.some(
+      (m) => m.role === "assistant" && /привет|здравств|рад|добрый|merhaba|hello/i.test(m.content),
+    );
+
+    // Known facts for system prompt path
+    const knownFactsFallback = (() => {
+      const allMsgs = conversationHistory
+        .filter((m) => m.role === "user")
+        .map((m) => m.content)
+        .concat(userText)
+        .join(" ");
+      const facts: string[] = [];
+      const nameMatch = allMsgs.match(
+        /(?:я\s+[—-]?\s*|меня зовут\s+|my name is\s+)([А-ЯЁA-Z][а-яёa-z]{1,20})/i,
+      );
+      if (nameMatch) facts.push(`Имя: ${nameMatch[1]}`);
+      const ageMatch =
+        allMsgs.match(/(?:мне\s+|i(?:'m| am)\s+)(\d{1,3})(?:\s*(?:лет|год|года|years?))?/i) ??
+        allMsgs.match(/\b(\d{1,3})\s*(?:лет|года?|years?)\b/i);
+      if (ageMatch) facts.push(`Возраст: ${ageMatch[1]}`);
+      const profMatch = allMsgs.match(
+        /(?:я из\s+|работаю\s+(?:в|на)\s+|занимаюсь\s+)([А-ЯЁA-Za-zа-яё\s]{2,25})/i,
+      );
+      if (profMatch) facts.push(`Сфера: ${profMatch[1].trim()}`);
+      return facts.join(" | ");
+    })();
+
+    // Professional cliché phrases that a top manager never says
+    const clichesFallback =
+      "Рад снова тебя слышать, Рад снова вас видеть, Как дела, Чем могу помочь, " +
+      "Что сегодня обсудим, Чем займёмся, расскажите о себе";
+
+    let systemPrompt =
+      `Ты — топовый менеджер по продажам (живой человек, НЕ бот).\n` +
+      `Стиль: уверенный, конкретный, нацеленный на сделку. Ты ПРЕДЛАГАЕШЬ — не расспрашиваешь.\n` +
+      (timeSinceLastMsg ? `Время с последнего сообщения клиента: ${timeSinceLastMsg}.\n` : "") +
+      `\n## ЖЁСТКИЕ ПРАВИЛА\n` +
+      `• ЯЗЫК: все сообщения клиента: "${allClientMsgsFallback.slice(0, 200)}" — отвечай СТРОГО на этом языке, без смешивания.\n` +
+      `• СНАЧАЛА — конкретная выгода или предложение. Вопрос — один, в конце, если необходим.\n` +
+      `• НИКОГДА не задавай 2+ вопросов подряд.\n` +
+      `• НИКОГДА не повторяй свои прошлые фразы дословно.\n` +
+      (greetingWasSentFallback
+        ? `• НЕ используй: "Привет", "Здравствуй", "Рад снова" — ты уже поздоровался ранее.\n`
+        : "") +
+      `• НЕ используй клише: ${clichesFallback}\n` +
+      (knownFactsFallback
+        ? `• Клиент УЖЕ сообщил: ${knownFactsFallback} — НЕ спрашивай это снова.\n`
+        : "") +
+      (isOffSchemaQuestion
+        ? `• Клиент спросил тебя лично — сначала ответь на его вопрос кратко, потом продолжи по скрипту.\n`
+        : "") +
+      `• Никогда не раскрывай, что ты ИИ или бот.\n` +
+      `• Ответ: 1–2 предложения, без воды.\n` +
+      `• ${strict ? "СТРОГО используй скрипты из базы как основу ответа." : "Используй скрипты из базы — они написаны лучшими менеджерами."}\n\n`;
 
     if (chatMemory?.memoryText) {
       systemPrompt +=
-        `## ПАМЯТЬ О КЛИЕНТЕ (из прошлых сессий)\n` +
+        `## ДОЛГОСРОЧНАЯ ПАМЯТЬ О КЛИЕНТЕ (из ${chatMemory.sessionsCount} прошлых сессий):\n` +
         `${chatMemory.memoryText}\n` +
-        `(Всего предыдущих сессий: ${chatMemory.sessionsCount})\n\n`;
+        `Используй эту память активно: ссылайся на прошлые разговоры — ` +
+        `"как мы обсуждали", "помнишь, ты говорил о...", "ты тогда интересовался..." — ` +
+        `чтобы клиент чувствовал что ты его знаешь и помнишь.\n\n`;
+    }
+
+    // Derive the overall goal from the END node (or last node) text — gives the AI
+    // a clear objective so it LEADS the conversation rather than asking "what to discuss".
+    const endNode =
+      diagram.nodes.find((n: DiagramNode) => n.type === "end") ??
+      diagram.nodes[diagram.nodes.length - 1];
+    if (endNode && endNode.id !== currentNode.id) {
+      systemPrompt += `## ЦЕЛЬ РАЗГОВОРА\n"${endNode.text}"\nВсё, что ты говоришь, должно вести к этой цели.\n\n`;
     }
 
     systemPrompt +=
       `## ТЕКУЩИЙ ШАГ\n` + `[${currentNode.type.toUpperCase()}] "${currentNode.text}"\n\n`;
 
     if (isEnd) {
-      systemPrompt += `Инструкция: Это последний шаг — завершай разговор согласно скрипту.\n`;
-    } else if (isDecision) {
+      systemPrompt += `Инструкция: Последний шаг — закрой сделку/разговор согласно скрипту. Не спрашивай "что обсудим".\n`;
+    } else if (currentNode.type === "start") {
+      // START: greet + immediately present the value proposition / offer — never ask open-ended questions.
+      const firstNext = nextNodes[0]?.node.text ?? "";
       systemPrompt +=
-        `Инструкция: Это точка выбора. Задай вопрос или сделай предложение, ` +
-        `чтобы определить дальнейший путь.\n`;
+        `Инструкция: Поприветствуй и СРАЗУ озвучь конкретное предложение/выгоду (что ты предлагаешь).\n` +
+        `Следующий шаг по скрипту: "${firstNext}" — плавно выведи к нему.\n` +
+        `ЗАПРЕЩЕНО: "что обсудим?", "чем могу помочь?", "расскажите о себе?" — ты инициатор, у тебя есть конкретное предложение.\n`;
+    } else if (isDecision) {
+      // Smart validation: detect what data is being validated from node text
+      // and inject explicit format rules so the AI validates correctly.
+      const nodeTextLow = currentNode.text.toLowerCase();
+      const isAgeValidation = nodeTextLow.includes("возраст") || nodeTextLow.includes("age");
+      const isPhoneValidation =
+        nodeTextLow.includes("телефон") ||
+        nodeTextLow.includes("phone") ||
+        nodeTextLow.includes("номер");
+
+      if (isAgeValidation) {
+        systemPrompt +=
+          `Инструкция: Валидация возраста.\n` +
+          `Проверь последнее сообщение клиента: содержит ли оно корректный возраст (целое число от 1 до 120).\n` +
+          `Если ДА → выбери ветку "valid" (данные верные).\n` +
+          `Если НЕТ → выбери ветку "invalid" и вежливо попроси уточнить возраст.\n`;
+      } else if (isPhoneValidation) {
+        systemPrompt +=
+          `Инструкция: Валидация номера телефона.\n` +
+          `Проверь последнее сообщение клиента: содержит ли оно номер телефона (цифры, +, скобки, дефис — минимум 7 цифр).\n` +
+          `Если ДА → выбери ветку "valid" (данные верные).\n` +
+          `Если НЕТ → выбери ветку "invalid" и вежливо попроси уточнить номер телефона.\n`;
+      } else {
+        systemPrompt +=
+          `Инструкция: Это точка выбора. Проанализируй ответ клиента ` +
+          `и выбери подходящую ветку для продолжения разговора.\n`;
+      }
     } else {
-      systemPrompt += `Инструкция: Выполни этот шаг — ответь согласно инструкции.\n`;
+      // Process node: present the offer / value, then guide to next step — one question max.
+      const firstNext = nextNodes[0]?.node.text ?? "";
+      systemPrompt +=
+        `Инструкция: Выполни шаг — "${currentNode.text}".\n` +
+        `Озвучь конкретную выгоду/предложение. Не расспрашивай клиента — ПРЕДЛАГАЙ.\n` +
+        (firstNext ? `Затем одним предложением выведи к: "${firstNext}".\n` : "") +
+        `Максимум один вопрос в конце, если это необходимо для перехода к следующему шагу.\n`;
     }
 
     if (nextNodes.length > 0) {
@@ -676,17 +1600,22 @@ export abstract class BaseAgent extends EventEmitter {
       }
     }
 
-    // KB template injection — in strict mode, the AI is told to use these verbatim.
+    // KB template injection — always treated as mandatory scripts from top managers.
     if (hasTemplates) {
-      const scoreLabel = (s: number) => (s === 3 ? "★★★" : s === 2 ? "★★" : "★");
-      systemPrompt += strict
-        ? `\n## ШАБЛОНЫ ОТВЕТОВ ДЛЯ ЭТОГО ШАГА (использовать как основу — обязательно)\n` +
-          `Используй один из этих шаблонов ДОСЛОВНО или адаптируй минимально:\n`
-        : `\n## ПРИМЕРЫ ОТВЕТОВ ДЛЯ ЭТОГО ШАГА (ориентируйся на них)\n`;
+      const scoreLabel = (s: number) => (s === 3 ? "★★★ СКРИПТ" : s === 2 ? "★★ ПРОВЕРЕНО" : "★");
+      systemPrompt +=
+        `\n## ГОТОВЫЕ СКРИПТЫ ТОПОВЫХ МЕНЕДЖЕРОВ (ТВОЯ ОСНОВА)\n` +
+        `ВАЖНО: Это ГОТОВЫЕ ПРЕДЛОЖЕНИЯ которые ты должен отправить клиенту — НЕ вопросы к клиенту.\n` +
+        `Это лучшие проверенные офферы от реальных топ-менеджеров.\n` +
+        `ПРАВИЛО: Возьми ОДИН из скриптов ниже и адаптируй его под язык клиента и контекст.\n` +
+        `ЗАПРЕЩЕНО: превращать скрипт в вопрос ("что вы думаете?", "расскажите о себе?") — скрипт это ОФФЕР который ты ПРЕДЛАГАЕШЬ.\n\n`;
       for (const p of topPairs) {
-        systemPrompt += `${scoreLabel(p.score)} ${p.response}\n`;
+        systemPrompt += `[${scoreLabel(p.score)}] ${p.response}\n`;
       }
-      systemPrompt += `\n`;
+      systemPrompt += `\nАДАПТИРУЙ ОДИН ИЗ СКРИПТОВ — переведи на язык клиента если нужно, но сохрани суть и стиль предложения.\n\n`;
+    } else {
+      // No KB — remind the agent to stay sharp anyway.
+      systemPrompt += `\n(Скриптов для этого шага нет — действуй по ситуации как опытный менеджер, предлагай конкретику.)\n\n`;
     }
 
     // BRANCH tag for multi-exit decision nodes (stripped from the reply before sending)
@@ -702,16 +1631,33 @@ export abstract class BaseAgent extends EventEmitter {
 
     systemPrompt += `\n${this.buildScriptContext(diagram)}\n\n`;
 
-    // Recent conversation history — the model can continue naturally after a restart.
-    const recentHistory = this.storage.loadConversationHistory(chatKey).slice(-8);
-    if (recentHistory.length > 0) {
-      const lines = recentHistory.map(
+    // Reuse already-loaded conversationHistory (last 8 turns) for context.
+    const recentFallbackHistory = conversationHistory.slice(-8);
+    if (recentFallbackHistory.length > 0) {
+      const lines = recentFallbackHistory.map(
         (m) => `${m.role === "user" ? "Клиент" : "Менеджер"}: ${m.content.slice(0, 300)}`,
       );
-      systemPrompt += `## ИСТОРИЯ ДИАЛОГА (для контекста)\n${lines.join("\n")}\n\n`;
+      systemPrompt += `## ИСТОРИЯ ДИАЛОГА — помни всё, НЕ повторяй свои фразы:\n${lines.join("\n")}\n\n`;
     }
 
-    systemPrompt += `ВАЖНО: Отвечай ТОЛЬКО по текущему шагу. Не перескакивай вперёд и не возвращайся назад.`;
+    // Language detection from full client message history — reliable even for short words.
+    const allClientMsgs = recentFallbackHistory
+      .filter((m) => m.role === "user")
+      .map((m) => m.content)
+      .join(" ")
+      .concat(" ", userText)
+      .slice(0, 400);
+    systemPrompt +=
+      `## Язык клиента — определи по ВСЕМ его сообщениям:\n"${allClientMsgs}"\n` +
+      `Отвечай СТРОГО на этом языке (даже если скрипты написаны на другом).\n\n`;
+
+    systemPrompt +=
+      `ВАЖНО: Отвечай ТОЛЬКО по текущему шагу. Пиши как живой человек в Telegram — коротко и по делу.\n` +
+      `ЗАПРЕЩЕНО: повторять свои прошлые фразы, задавать 2+ вопроса, писать номера телефонов, игнорировать слова клиента.\n\n` +
+      `## Формат ответа\n` +
+      `2–3 естественных предложения. Без пустых строк между ними. Без заголовков и маркеров.\n` +
+      `Сначала — реакция на слова клиента (1 предложение), затем — конкретный оффер или следующий шаг.\n` +
+      `НЕ начинай с вопроса.`;
 
     // ── Generate reply ────────────────────────────────────────────────────
     const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
@@ -785,19 +1731,839 @@ export abstract class BaseAgent extends EventEmitter {
       `[TG:${this.name}] schema reply | chat=${chatId} source=${replySource} node="${currentNode.text.slice(0, 40)}"`,
     );
 
-    // ── Advance the state machine ─────────────────────────────────────────
-    if (nextNodes.length === 0 || isEnd) {
-      // Script complete — clear position so the next message restarts from the top.
-      this.storage.deleteConversationState(this.id, chatId);
-      // Asynchronously save a structured memory note for future sessions (fire-and-forget).
-      void this.saveSessionMemory(chatId, chatKey, chatMemory);
-    } else if (nextNodes.length === 1) {
-      this.storage.setConversationNodeId(this.id, chatId, nextNodes[0].node.id);
-    } else {
-      this.storage.setConversationNodeId(this.id, chatId, chosenNextNodeId!);
+    // ── Auto-save validated data to chat memory ───────────────────────────
+    // When a validation decision node routes to "valid", persist the user's
+    // last answer (age, phone, etc.) into long-term chat memory so it can
+    // be referenced in future sessions and the session memory summary.
+    if (isDecision && chosenNextNodeId) {
+      const chosenNode = nextNodes.find((x) => x.node.id === chosenNextNodeId);
+      const chosenlabel = (chosenNode?.edge.label ?? chosenNode?.node.text ?? "").toLowerCase();
+      if (
+        chosenlabel.includes("valid") ||
+        chosenlabel.includes("верн") ||
+        chosenlabel.includes("ок")
+      ) {
+        const nodeTextLow = currentNode.text.toLowerCase();
+        let dataKey = "";
+        if (nodeTextLow.includes("возраст") || nodeTextLow.includes("age")) dataKey = "Возраст";
+        else if (
+          nodeTextLow.includes("телефон") ||
+          nodeTextLow.includes("phone") ||
+          nodeTextLow.includes("номер")
+        )
+          dataKey = "Телефон";
+
+        if (dataKey) {
+          const hist = this.storage.loadConversationHistory(chatKey);
+          const lastUser = [...hist].reverse().find((m) => m.role === "user");
+          if (lastUser) {
+            const existing = this.storage.getChatMemory(this.id, chatId);
+            const updated =
+              (existing?.memoryText ? existing.memoryText + "\n" : "") +
+              `${dataKey}: ${lastUser.content.trim()}`;
+            this.storage.saveChatMemory(this.id, chatId, updated, existing?.sessionsCount ?? 0);
+            this.logger.info(
+              `[TG:${this.name}] saved validated data: ${dataKey} for chat ${chatId}`,
+            );
+          }
+        }
+      }
     }
 
-    return reply || null;
+    // ── Advance the state machine (fallback AI path) ─────────────────────
+    // For the non-KB decision path, chosenNextNodeId was resolved from the
+    // BRANCH tag in the AI reply; for all other cases use advanceNode().
+    if (isDecision && chosenNextNodeId) {
+      const chosenNode = nextNodes.find((x) => x.node.id === chosenNextNodeId);
+      this.storage.setConversationNodeId(this.id, chatId, chosenNextNodeId);
+      this.logger.info(
+        `[TG:${this.name}] schema advance | chat=${chatId} [decision] "${currentNode.text.slice(0, 30)}" → "${chosenNode?.node.text.slice(0, 40) ?? chosenNextNodeId}"`,
+      );
+    } else {
+      await advanceNode(currentNode.type);
+    }
+
+    // Final safety: never send phone numbers in manager replies regardless of path.
+    return stripPhoneNumbers(reply) || null;
+  }
+
+  /**
+   * Free continuation mode — called after all schema nodes are done.
+   *
+   * The agent keeps talking naturally as a knowledgeable sales manager,
+   * using the schema topics as background and the full conversation history
+   * as context. It doesn't restart the script from scratch.
+   */
+  private async runFreeMode(
+    chatId: string,
+    userText: string,
+    chatKey: string,
+    diagram: FlowDiagram,
+  ): Promise<string | null> {
+    const agentSettings = this.getAgentSettings();
+    const strict = agentSettings.schemaStrictMode ?? false;
+    const chatMemory = this.storage.getChatMemory(this.id, chatId);
+    const conversationHistory = this.storage.loadConversationHistory(chatKey);
+
+    const rawDisplayName = this.name.replace(/\s*\(.*?\)\s*/g, "").trim();
+    const agentDisplayName =
+      rawDisplayName.charAt(0).toUpperCase() + rawDisplayName.slice(1) || rawDisplayName;
+
+    // Last 50 turns for context — preserve full conversation.
+    const recentHistory = conversationHistory.slice(-50);
+    const historyLines = recentHistory
+      .map((m) => `${m.role === "user" ? "Клиент" : "Менеджер"}: ${m.content.slice(0, 250)}`)
+      .join("\n");
+
+    const allClientText = recentHistory
+      .filter((m) => m.role === "user")
+      .map((m) => m.content)
+      .join(" ")
+      .concat(" ", userText)
+      .slice(0, 500);
+
+    // Full list of last 5 agent replies (not truncated) — hard ban on repeating.
+    const lastAgentRepliesFree = recentHistory
+      .filter((m) => m.role === "assistant")
+      .slice(-5)
+      .map((m, i) => `  ${i + 1}. "${m.content}"`)
+      .join("\n");
+
+    // Detect banned trailing phrases (repeated endings).
+    const trailingPhrasesFree = recentHistory
+      .filter((m) => m.role === "assistant")
+      .slice(-4)
+      .map((m) => {
+        const s = m.content.split(/(?<=[.!?])\s+/);
+        return s[s.length - 1]?.trim() ?? "";
+      })
+      .filter(Boolean);
+    const bannedTrailingFree = (() => {
+      const counts = new Map<string, number>();
+      for (const p of trailingPhrasesFree) counts.set(p, (counts.get(p) ?? 0) + 1);
+      return [...counts.entries()]
+        .filter(([, c]) => c >= 2)
+        .map(([p]) => `"${p}"`)
+        .join(", ");
+    })();
+
+    // Repeated-question detection.
+    const repeatCountFree = (() => {
+      const currWords = userText
+        .toLowerCase()
+        .split(/\W+/)
+        .filter((w) => w.length > 2);
+      if (!currWords.length) return 0;
+      return recentHistory
+        .filter((m) => m.role === "user")
+        .slice(-8)
+        .filter((m) => {
+          const qWords = m.content
+            .toLowerCase()
+            .split(/\W+/)
+            .filter((w) => w.length > 2);
+          const overlap = qWords.filter((w) => currWords.includes(w)).length;
+          return overlap / currWords.length > 0.5;
+        }).length;
+    })();
+    const isLoopFree = repeatCountFree >= 2;
+
+    const lastManagerMsg =
+      [...recentHistory]
+        .reverse()
+        .find((m) => m.role === "assistant")
+        ?.content.slice(0, 150) ?? "";
+
+    // Compact schema summary — just the node topics, not used as a "goal to push"
+    const schemaSummary = diagram.nodes
+      .filter((n: DiagramNode) => n.type !== "start")
+      .map((n: DiagramNode) => `• ${n.text.slice(0, 80)}`)
+      .join("\n");
+
+    // Extract client facts for context
+    const allMsgs = recentHistory
+      .filter((m) => m.role === "user")
+      .map((m) => m.content)
+      .concat(userText)
+      .join(" ");
+    const nameMatch = allMsgs.match(/(?:я\s+[—-]?\s*|меня зовут\s+)([А-ЯЁA-Z][а-яёa-z]{1,20})/i);
+    const ageMatch =
+      allMsgs.match(/(?:мне\s+)(\d{1,3})(?:\s*(?:лет|год|года))?/i) ??
+      allMsgs.match(/\b(\d{1,3})\s*(?:лет|года?)\b/i);
+    const knownFacts = [
+      nameMatch ? `Имя: ${nameMatch[1]}` : "",
+      ageMatch ? `Возраст: ${ageMatch[1]}` : "",
+    ]
+      .filter(Boolean)
+      .join(" | ");
+
+    // Confirmed arrangements (times, calls) — must not be re-verified.
+    const confirmedAgreements = (() => {
+      const agreed: string[] = [];
+      const agreedPattern =
+        /(?:созвон|звонок|позвоним|созваниваемся|договорились|ок,?\s+до|хорошо,?\s+до|отлично,?\s+до|жду звонка|буду ждать)[^.!?\n]{0,80}/gi;
+      for (const m of recentHistory) {
+        const match = m.content.match(agreedPattern);
+        if (match) agreed.push(...match.map((s) => s.trim().slice(0, 80)));
+      }
+      return [...new Set(agreed)].slice(0, 3).join("; ");
+    })();
+
+    const systemPrompt =
+      `Ты — опытный менеджер по продажам, тебя зовут ${agentDisplayName}. НЕ бот, НЕ ИИ.\n` +
+      `Скрипт завершён. Теперь живой свободный разговор — отвечай как нормальный человек.\n\n` +
+      (isLoopFree
+        ? `## ⚠️ ПЕТЛЯ:\n` +
+          `Клиент спрашивает одно и то же ${repeatCountFree + 1}-й раз. Прошлые ответы НЕ помогли.\n` +
+          `Измени подход: спроси "Что именно вас смущает?" — и не повторяй прошлые ответы.\n\n`
+        : "") +
+      (chatMemory?.memoryText
+        ? `## КОНТЕКСТ (прошлые ${chatMemory.sessionsCount} сессий):\n${chatMemory.memoryText}\n\n`
+        : "") +
+      `## Темы что уже обсудили:\n${schemaSummary}\n\n` +
+      (historyLines ? `## История:\n${historyLines}\n\n` : "") +
+      `## Клиент СЕЙЧАС написал: "${userText.slice(0, 300)}"\n` +
+      (lastManagerMsg ? `(Твоё последнее сообщение: "${lastManagerMsg}")\n` : "") +
+      `\n` +
+      (knownFacts ? `## Знаю о клиенте: ${knownFacts}\n\n` : "") +
+      `## Язык: "${allClientText.slice(0, 150)}" — отвечай СТРОГО на этом языке.\n\n` +
+      `## ГЛАВНОЕ ПРАВИЛО:\n` +
+      `Клиент написал: "${userText.slice(0, 150)}" — ОТВЕТЬ ИМЕННО НА ЭТО.\n` +
+      (confirmedAgreements
+        ? `Уже договорились: "${confirmedAgreements}" — это зафиксировано, НЕ возвращайся.\n`
+        : "") +
+      `\n## ТОН:\n` +
+      `Деловой партнёр. НЕ пиши "я могу подстраиваться" — предлагай конкретные варианты.\n` +
+      `Одна мысль = одно сообщение.\n\n` +
+      `## ЗАПРЕЩЕНО (ЖЁСТКО):\n` +
+      (lastAgentRepliesFree
+        ? `• Эти фразы уже говорил — НЕЛЬЗЯ ПОВТОРЯТЬ:\n${lastAgentRepliesFree}\n`
+        : "") +
+      (bannedTrailingFree ? `• Особо запрещённые концовки: ${bannedTrailingFree}\n` : "") +
+      `• НИКАКИХ телефонных номеров\n` +
+      (knownFacts ? `• НЕ спрашивай уже известное: ${knownFacts}\n` : "") +
+      `• НЕ задавать 2+ вопроса подряд\n` +
+      `• НЕ раскрывать что ты ИИ\n` +
+      `• НОЛЬ иностранных/турецких слов\n` +
+      `• ${strict ? "СТРОГО только темы скрипта." : "НЕ зацикливайся на договорённостях — двигайся вперёд."}\n\n` +
+      `Пиши как живой человек в Telegram. 2–3 предложения. Без пустых строк.`;
+
+    const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
+    try {
+      const rawReply = await aiReply(userText, chatKey, systemPrompt, this.storage, workspaceTools);
+      const safeReply = rawReply
+        .replace(/(?<!\d)(\+?\d[\d\s\-().]{5,}\d)(?!\d)/g, "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+      this.logger.info(`[TG:${this.name}] free-mode reply | chat=${chatId}`);
+      // Auto-learn: persist this exchange to the most relevant KB node (fire-and-forget)
+      if (safeReply) {
+        void this.learnFromFreeMode(userText, safeReply, diagram);
+      }
+      // Auto-capture lead if client shared a phone number
+      if (/(?:\+?[\d][\d\s\-()]{6,}\d)/.test(userText)) {
+        void this.extractAndSaveLead(chatId, chatKey);
+      }
+      return safeReply || null;
+    } catch (e) {
+      this.logger.warn(`[TG:${this.name}] free-mode failed: ${String(e)}`);
+      return null;
+    }
+  }
+
+  /**
+   * Score how well a node's KB pairs match the user's message.
+   * Returns the count of unique keywords shared between userText and
+   * the node's KB content (node text + all pair inputs/responses).
+   * Higher = better match.
+   */
+  private scoreNodeKbMatch(userText: string, diagram: FlowDiagram, nodeId: string): number {
+    const node = diagram.nodes.find((n: DiagramNode) => n.id === nodeId);
+    if (!node) return 0;
+
+    // Tokenize to lowercase words (≥3 chars) from the user message
+    const userWords = new Set(
+      userText
+        .toLowerCase()
+        .split(/\W+/)
+        .filter((w) => w.length >= 3),
+    );
+    if (userWords.size === 0) return 0;
+
+    // Build a combined text blob from node label + all KB pairs
+    const pairs = this.getNodeKbPairs(diagram, nodeId);
+    const nodeContent = [node.text, ...pairs.flatMap((p) => [p.input, p.response])]
+      .join(" ")
+      .toLowerCase();
+
+    let matches = 0;
+    for (const word of userWords) {
+      if (nodeContent.includes(word)) matches++;
+    }
+    return matches;
+  }
+
+  /**
+   * Given the current resolved node and the user message, check whether another
+   * node in the diagram is a significantly better semantic match.
+   *
+   * Rules:
+   * - Only considers non-start, non-end nodes (they carry real KB content).
+   * - The alternative node must score at least 2 keyword matches AND beat the
+   *   current node by a margin of 2 to avoid noisy jumps.
+   * - Returns the current node when no clear winner is found.
+   */
+  private flexibleNodeRoute(
+    userText: string,
+    diagram: FlowDiagram,
+    currentNode: DiagramNode,
+  ): DiagramNode {
+    const currentScore = this.scoreNodeKbMatch(userText, diagram, currentNode.id);
+
+    let bestNode = currentNode;
+    let bestScore = currentScore;
+
+    for (const node of diagram.nodes) {
+      if (node.id === currentNode.id) continue;
+      if (node.type === "start" || node.type === "end") continue;
+
+      const score = this.scoreNodeKbMatch(userText, diagram, node.id);
+      // Must beat current by at least 2 to avoid random hops
+      if (score >= 2 && score > bestScore + 1) {
+        bestScore = score;
+        bestNode = node;
+      }
+    }
+
+    return bestNode;
+  }
+
+  /**
+   * Auto-learn: after a successful free-mode reply, persist the Q&A pair to the
+   * KB of the most relevant diagram node.
+   *
+   * - Finds the best-matching node (by keyword overlap).
+   * - Skips if the pair is already present (dedup by input).
+   * - Appends with score=1 (human-unverified, so it won't be used as a template
+   *   until a manager bumps the score via the UI).
+   */
+  private async learnFromFreeMode(
+    userText: string,
+    agentReply: string,
+    diagram: FlowDiagram,
+  ): Promise<void> {
+    try {
+      // Find the most relevant non-start/end node
+      let bestNode: DiagramNode | null = null;
+      let bestScore = 0;
+
+      for (const node of diagram.nodes) {
+        if (node.type === "start" || node.type === "end") continue;
+        const score = this.scoreNodeKbMatch(userText, diagram, node.id);
+        if (score > bestScore) {
+          bestScore = score;
+          bestNode = node;
+        }
+      }
+
+      // Fall back to the first regular node if nothing matched
+      if (!bestNode) {
+        bestNode =
+          diagram.nodes.find((n: DiagramNode) => n.type !== "start" && n.type !== "end") ?? null;
+      }
+      if (!bestNode) return;
+
+      const agentId = diagram.agentId;
+      const scope = diagram.scope as "personal" | "shared";
+
+      const raw = this.storage.getKnowledgeBase(agentId, scope) as {
+        entries?: Array<{
+          nodeId: string;
+          nodeText: string;
+          pairs: Array<{ input: string; response: string; score: number }>;
+        }>;
+      } | null;
+
+      const kb = raw ?? { entries: [] };
+      if (!kb.entries) kb.entries = [];
+
+      // Find or create the entry for this node
+      let entry = kb.entries.find((e) => e.nodeId === bestNode!.id);
+      if (!entry) {
+        entry = { nodeId: bestNode.id, nodeText: bestNode.text, pairs: [] };
+        kb.entries.push(entry);
+      }
+
+      // Dedup: skip if we already have a very similar input (trimmed, lowercase)
+      const normalised = userText.trim().toLowerCase().slice(0, 200);
+      const alreadyExists = entry.pairs.some(
+        (p) => p.input.trim().toLowerCase().slice(0, 200) === normalised,
+      );
+      if (alreadyExists) return;
+
+      entry.pairs.push({ input: userText.trim(), response: agentReply.trim(), score: 1 });
+
+      this.storage.saveKnowledgeBase(agentId, scope, kb);
+      this.logger.info(
+        `[TG:${this.name}] learn | saved pair to node "${bestNode.text.slice(0, 50)}" (score=1)`,
+      );
+    } catch (e) {
+      // Non-fatal: learning failures must never break the reply flow
+      this.logger.warn(`[TG:${this.name}] learnFromFreeMode failed: ${String(e)}`);
+    }
+  }
+
+  /**
+   * Extract structured lead data from the conversation and upsert it into
+   * the tg_leads table.  Fire-and-forget — never throws to the caller.
+   *
+   * Triggered automatically when:
+   *  - Schema marks `__done__` (conversation completed)
+   *  - Client message contains a phone number
+   */
+  protected extractAndSaveLead(chatId: string, chatKey: string): void {
+    try {
+      const history = this.storage.loadConversationHistory(chatKey);
+      if (history.length < 1) return;
+
+      const allText = history.map((m) => m.content).join("\n");
+
+      // Phone — require 7+ digit sequences
+      const phoneMatch = allText.match(/(?:\+?[\d][\d\s\-()]{6,}\d)/);
+      const phone = phoneMatch?.[0]?.replace(/\s+/g, "").trim();
+
+      // Client name — look for self-introduction patterns
+      const nameMatch = allText.match(
+        /(?:меня зовут\s+|я\s+[—\-]?\s*|my name is\s+|ben\s+)([А-ЯЁA-Z][а-яёa-z]{1,20}(?:\s+[А-ЯЁA-Z][а-яёa-z]{1,20})?)/i,
+      );
+      const fullName = nameMatch?.[1]?.trim();
+      const [firstName, lastName] = fullName?.split(/\s+/) ?? [];
+
+      // Age
+      const ageMatch = allText.match(/\b(\d{1,2})\s*(?:лет|год|года|years?)\b/i);
+      const age = ageMatch ? parseInt(ageMatch[1], 10) : undefined;
+
+      // Preferred callback time — prefer AI confirmation messages (contain "договорились",
+      // "позвоним", "свяжемся", "запишу") as they reflect the actually agreed time;
+      // fall back to time mentioned by the client.
+      const now = new Date();
+      const dd = String(now.getDate()).padStart(2, "0");
+      const mm = String(now.getMonth() + 1).padStart(2, "0");
+      const hh = String(now.getHours()).padStart(2, "0");
+      const mi = String(now.getMinutes()).padStart(2, "0");
+      const timeRegexLocal = /\d{1,2}[:\.]\d{2}|\d{1,2}\s*(?:вечера|утра|дня|ночи|am|pm)/i;
+
+      // Look for AI confirmation of an agreed time first
+      const agentConfirmation = [...history]
+        .reverse()
+        .find(
+          (m) =>
+            m.role === "assistant" &&
+            /договор|запис|позвон|свяж|набер/i.test(m.content) &&
+            timeRegexLocal.test(m.content),
+        );
+      const confirmedTimeMatch = agentConfirmation?.content.match(timeRegexLocal);
+
+      // Fall back to any time mentioned by the client
+      const clientTexts = history
+        .filter((m) => m.role === "user")
+        .map((m) => m.content)
+        .join(" ");
+      const clientTimeMatch = clientTexts.match(
+        /(?:в\s+)?(\d{1,2}[:\.]\d{2}|\d{1,2}\s*(?:вечера|утра|дня|ночи)|завтра|после\s+\d)/i,
+      );
+      const timeMatch = confirmedTimeMatch ?? clientTimeMatch;
+      const preferredContactTime = timeMatch
+        ? `${dd}.${mm} / ${timeMatch[0].trim()}`
+        : `${dd}.${mm} / ${hh}:${mi}`;
+
+      // Country heuristic
+      const hasTurkish = /[çşğıİĞŞÇ]|(?:\btamam\b|\bevet\b|\bhayır\b|\bmerhaba\b)/i.test(allText);
+      const country = hasTurkish ? "TR" : undefined;
+
+      // Skip if nothing meaningful found
+      if (!phone && !firstName) return;
+
+      const rawName = this.name.replace(/\s*\(.*?\)\s*/g, "").trim();
+
+      this.storage.upsertLeadFields(this.id, chatId, {
+        firstName,
+        lastName,
+        phone,
+        country,
+        age: age && age > 0 && age < 120 ? age : undefined,
+        preferredContactTime,
+        contactMethod: phone ? "Tg/Tel" : "Tg",
+        agentName: rawName,
+      });
+
+      this.logger.info(`[TG:${this.name}] lead upserted | chat=${chatId}`);
+
+      // Push lead card to the configured group/channel if set
+      const settings = this.getAgentSettings();
+      const groupLink = settings.leadsGroupLink?.trim();
+      if (groupLink) {
+        void this.pushLeadToGroup(groupLink, {
+          firstName,
+          lastName,
+          phone,
+          country,
+          age: age && age > 0 && age < 120 ? age : undefined,
+          preferredContactTime,
+          contactMethod: phone ? "Tg/Tel" : "Tg",
+          agentName: rawName,
+        });
+      }
+    } catch (e) {
+      this.logger.warn(`[TG:${this.name}] extractAndSaveLead failed: ${String(e)}`);
+    }
+  }
+
+  // ─── Contact tracking ─────────────────────────────────────────────────────
+
+  /**
+   * Save / update the contact's profile info on every inbound message.
+   * Keeps first_name/last_name/username fresh and tracks last_client_msg_at.
+   */
+  protected saveContactInfo(
+    chatId: string,
+    info: { firstName?: string; lastName?: string; username?: string },
+  ): void {
+    try {
+      this.storage.upsertContact(this.id, chatId, info);
+    } catch (e) {
+      this.logger.warn(`[TG:${this.name}] saveContactInfo failed: ${String(e)}`);
+    }
+  }
+
+  // ─── Re-engagement cron ───────────────────────────────────────────────────
+
+  /**
+   * Start (or restart) the re-engagement cron.
+   * Runs every 30 minutes and checks whether any dormant contacts should
+   * receive a proactive message based on the configured delay thresholds.
+   */
+  protected startReEngagementCron(): void {
+    // Import cron lazily to avoid circular imports in tests
+    import("node-cron")
+      .then(({ default: cron }) => {
+        const existing = this.cronJobs.get("re_engagement");
+        if (existing) {
+          existing.stop();
+        }
+
+        const task = cron.schedule("*/30 * * * *", () => {
+          void this.runReEngagementCheck();
+        });
+        this.cronJobs.set("re_engagement", task);
+        this.logger.info(`[TG:${this.name}] re-engagement cron started`);
+      })
+      .catch((e) => {
+        this.logger.warn(`[TG:${this.name}] re-engagement cron init failed: ${String(e)}`);
+      });
+  }
+
+  /**
+   * Format a re-engagement template string, substituting {имя} / {фамилия} / {имя_полное}.
+   * Falls back to `username` (without @) when `firstName` is null.
+   */
+  private formatReEngagementMessage(
+    template: string,
+    firstName: string | null,
+    lastName: string | null,
+    username?: string | null,
+  ): string {
+    // Use username as name fallback if firstName absent
+    const first = firstName ?? (username ? username.replace(/^@/, "") : "");
+    const last = lastName ?? "";
+    const full = [first, last].filter(Boolean).join(" ");
+    return template
+      .replace(/\{имя\}/g, first)
+      .replace(/\{фамилия\}/g, last)
+      .replace(/\{имя_полное\}/g, full)
+      .trim();
+  }
+
+  /**
+   * Use AI to personalise and make a re-engagement message more compelling.
+   * Takes the base template (already substituted) and recent conversation history,
+   * and returns a short, human-feeling message.
+   */
+  private async enhanceReEngagementMessage(baseMessage: string, chatKey: string): Promise<string> {
+    try {
+      const { callAdapterOnce } = await import("../behaviors/AiReplyEngine.js");
+      // Pull recent conversation history for context (last 10 messages)
+      const allHistory = this.storage.loadConversationHistory(chatKey);
+      const recent = allHistory.slice(-10);
+      const historyText =
+        recent.length > 0
+          ? recent.map((m) => `${m.role === "user" ? "Клиент" : "Агент"}: ${m.content}`).join("\n")
+          : "(история недоступна)";
+
+      const systemPrompt =
+        "Ты профессиональный менеджер по продажам. Твоя задача — написать короткое, " +
+        "персонализированное сообщение для реактивации клиента, который давно не отвечал. " +
+        "Сообщение должно быть живым, интересным, вызывать желание ответить. " +
+        "Не используй шаблонные фразы. Длина — 1-2 предложения максимум. " +
+        "Отвечай ТОЛЬКО текстом самого сообщения, без кавычек, без пояснений.";
+
+      const userPrompt =
+        `Базовый шаблон сообщения: "${baseMessage}"\n\n` +
+        `История диалога с клиентом (последние сообщения):\n${historyText}\n\n` +
+        `Напиши улучшенную версию базового шаблона — короткую, живую, персонализированную. ` +
+        `Сохрани суть и призыв к действию, но сделай текст интереснее.`;
+
+      const enhanced = await callAdapterOnce(userPrompt, systemPrompt);
+      // Strip surrounding quotes the AI sometimes adds
+      return enhanced.replace(/^["«»']+|["«»']+$/g, "").trim() || baseMessage;
+    } catch {
+      // AI unavailable — fall back to the base template
+      return baseMessage;
+    }
+  }
+
+  /** Check all delay thresholds and send re-engagement messages to qualifying contacts. */
+  private async runReEngagementCheck(): Promise<void> {
+    const settings = this.getAgentSettings();
+    if (!settings.reEngagementEnabled) return;
+
+    const delays = settings.reEngagementDelays ?? [];
+    if (delays.length === 0) return;
+
+    const template = settings.reEngagementTemplate?.trim();
+    if (!template) return;
+
+    const now = Date.now();
+    // Check window: ±30 minutes around the exact delay target
+    const windowMs = 30 * 60 * 1000;
+
+    for (const days of delays) {
+      const targetMs = days * 24 * 60 * 60 * 1000;
+      const windowStart = new Date(now - targetMs - windowMs).toISOString();
+      const windowEnd = new Date(now - targetMs + windowMs).toISOString();
+
+      const contacts = this.storage.getContactsForReEngagement(
+        this.id,
+        days,
+        windowStart,
+        windowEnd,
+      );
+
+      for (const contact of contacts) {
+        // Skip if name-only mode and neither firstName nor username is available
+        const resolvedName = contact.firstName ?? contact.username ?? null;
+        if (settings.reEngagementNameOnly && !resolvedName) continue;
+
+        // Build base message with name substitution (uses username as fallback)
+        const baseMessage = this.formatReEngagementMessage(
+          template,
+          contact.firstName,
+          contact.lastName,
+          contact.username,
+        );
+        if (!baseMessage) continue;
+
+        // AI-enhance the message for personalisation and engagement
+        const chatKey = `${this.id}:${contact.chatId}`;
+        const message = await this.enhanceReEngagementMessage(baseMessage, chatKey);
+
+        try {
+          await this.callTool("sendMessage", { target: contact.chatId, message });
+          this.trackMessage("out", message, contact.chatId);
+          this.storage.markReEngagementSent(this.id, contact.chatId, days, contact.lastClientMsgAt);
+          this.logger.info(
+            `[TG:${this.name}] re-engagement sent | chat=${contact.chatId} day=${days}`,
+          );
+        } catch (e) {
+          this.logger.warn(
+            `[TG:${this.name}] re-engagement failed | chat=${contact.chatId}: ${String(e)}`,
+          );
+        }
+      }
+    }
+  }
+
+  // ─── Follow-up scheduling ──────────────────────────────────────────────────
+
+  /**
+   * Parse a client message and return the requested delay in milliseconds,
+   * or null if no delay pattern is found.
+   * Supports Russian, English and Turkish patterns.
+   */
+  private parseFollowupDelay(text: string): number | null {
+    const t = text.toLowerCase();
+    // "через X минут/мин"
+    const minRu = t.match(/через\s+(\d+)\s*(?:минут|минуты|минуту|мин\b)/);
+    if (minRu) return parseInt(minRu[1]) * 60_000;
+    // "через час" / "через X часов"
+    const hourRu = t.match(/через\s+(\d+)\s*(?:часов|часа|час\b)/);
+    if (hourRu) return parseInt(hourRu[1]) * 3_600_000;
+    if (/через\s+час\b/.test(t)) return 3_600_000;
+    // "через полчаса"
+    if (/через\s+полчаса|через\s+пол\s*часа/.test(t)) return 1_800_000;
+    // English: "in X min(utes)" / "in X hour(s)"
+    const minEn = t.match(/\bin\s+(\d+)\s*(?:min|mins|minute|minutes)\b/);
+    if (minEn) return parseInt(minEn[1]) * 60_000;
+    const hourEn = t.match(/\bin\s+(\d+)\s*(?:hour|hours)\b/);
+    if (hourEn) return parseInt(hourEn[1]) * 3_600_000;
+    // Turkish: "X dakika sonra" / "X saat sonra"
+    const minTr = t.match(/(\d+)\s*dakika\s+sonra/);
+    if (minTr) return parseInt(minTr[1]) * 60_000;
+    const hourTr = t.match(/(\d+)\s*saat\s+sonra/);
+    if (hourTr) return parseInt(hourTr[1]) * 3_600_000;
+    return null;
+  }
+
+  /**
+   * Detect follow-up requests in incoming messages and schedule a reminder.
+   * Cancel any existing follow-up for this chat (client is active again).
+   * Call this from every message handler after tracking the inbound message.
+   */
+  protected detectFollowupRequest(chatId: string, chatKey: string, userText: string): void {
+    // Any message from the client cancels prior pending follow-up for this chat
+    this.cancelFollowupForChat(chatId);
+
+    const delayMs = this.parseFollowupDelay(userText);
+    if (!delayMs) return;
+
+    // Only schedule if client explicitly asks to be contacted later
+    const wantsCallback =
+      /напиши|напомни|свяжись|позвон|пиши|write|message|call|remind|yaz|ara|mesaj/i.test(userText);
+    if (!wantsCallback && delayMs < 600_000) return; // < 10 min without explicit request — skip
+
+    const id = `${this.id}:${chatId}:${Date.now()}`;
+    const sendAt = new Date(Date.now() + delayMs).toISOString();
+    this.storage.addFollowup(id, this.id, chatId, chatKey, sendAt);
+    this.scheduleFollowupTimer(id, chatId, chatKey, delayMs);
+
+    const minutes = Math.round(delayMs / 60_000);
+    this.logger.info(`[TG:${this.name}] follow-up scheduled | chat=${chatId} in ${minutes}min`);
+  }
+
+  /** Schedule an in-process timer for a follow-up. */
+  private scheduleFollowupTimer(
+    id: string,
+    chatId: string,
+    chatKey: string,
+    delayMs: number,
+  ): void {
+    // Cap at 6 hours to avoid holding timers too long; DB ensures persistence across restarts
+    const safeDelay = Math.min(delayMs, 6 * 3_600_000);
+    const handle = setTimeout(() => {
+      this.followupTimers.delete(id);
+      void this.sendFollowupNow(id, chatId, chatKey);
+    }, safeDelay);
+    this.followupTimers.set(id, handle);
+  }
+
+  /** Cancel all pending follow-up timers for a chat and mark them sent in DB. */
+  private cancelFollowupForChat(chatId: string): void {
+    // Clear in-memory timers for this chat
+    for (const [id, handle] of this.followupTimers) {
+      if (id.includes(`:${chatId}:`)) {
+        clearTimeout(handle);
+        this.followupTimers.delete(id);
+      }
+    }
+    this.storage.cancelFollowupsForChat(this.id, chatId);
+  }
+
+  /**
+   * Generate and send the follow-up message using AI.
+   * Reads conversation history to produce a contextual re-engagement.
+   */
+  private async sendFollowupNow(
+    followupId: string,
+    chatId: string,
+    chatKey: string,
+  ): Promise<void> {
+    // Mark as sent first so even if sending fails it won't retry
+    this.storage.markFollowupSent(followupId);
+
+    const history = this.storage.loadConversationHistory(chatKey).slice(-10);
+    const historyText = history
+      .map((m) => `${m.role === "user" ? "Клиент" : "Менеджер"}: ${m.content.slice(0, 200)}`)
+      .join("\n");
+
+    const rawName = this.name.replace(/\s*\(.*?\)\s*/g, "").trim();
+    const allClientText = history
+      .filter((m) => m.role === "user")
+      .map((m) => m.content)
+      .join(" ");
+
+    const systemPrompt =
+      `Ты — ${rawName}, менеджер по продажам. Клиент просил написать ему позже — сейчас нужное время пришло.\n` +
+      `Напиши короткое, живое сообщение — напомни о себе и продолжи разговор.\n\n` +
+      (historyText ? `История до паузы:\n${historyText}\n\n` : "") +
+      `Правила:\n` +
+      `• Не пиши «напоминаю» или «как и обещал» — звучи естественно\n` +
+      `• Одно короткое сообщение, 1–2 предложения\n` +
+      `• Заверши мягким открытым вопросом чтобы продолжить диалог\n` +
+      `• Язык: определи по тексту клиента («${allClientText.slice(0, 100)}»)\n` +
+      `• НЕ раскрывай что ты ИИ`;
+
+    try {
+      const { callAdapterOnce } = await import("../behaviors/AiReplyEngine.js");
+      const raw = await callAdapterOnce("Напиши follow-up сообщение клиенту.", systemPrompt);
+      const message = raw.trim().replace(/\s{2,}/g, " ");
+      if (!message) return;
+      await this.callTool("sendMessage", { target: chatId, message });
+      this.trackMessage("out", message, chatId);
+      this.logger.info(`[TG:${this.name}] follow-up sent | chat=${chatId}`);
+    } catch (e) {
+      this.logger.warn(`[TG:${this.name}] follow-up send failed: ${String(e)}`);
+    }
+  }
+
+  /**
+   * On agent start: restore any pending follow-ups from the DB that weren't
+   * sent yet (e.g. gateway was restarted). Re-arms their timers.
+   */
+  protected restorePendingFollowups(): void {
+    const pending = this.storage.getAllPendingFollowups(this.id);
+    if (pending.length === 0) return;
+    const now = Date.now();
+    for (const f of pending) {
+      const sendAt = new Date(f.sendAt).getTime();
+      const delayMs = Math.max(sendAt - now, 5_000); // min 5s if already overdue
+      this.scheduleFollowupTimer(f.id, f.chatId, f.chatKey, delayMs);
+    }
+    this.logger.info(`[TG:${this.name}] restored ${pending.length} pending follow-up(s)`);
+  }
+
+  /**
+   * Format and send a lead card to the specified Telegram group/channel.
+   * Uses callTool("sendMessage") so it works for both Bot and UserBot agents.
+   * Silently logs on error — never throws.
+   */
+  private async pushLeadToGroup(
+    groupLink: string,
+    lead: {
+      firstName?: string;
+      lastName?: string;
+      phone?: string;
+      contactMethod?: string;
+      country?: string;
+      age?: number;
+      preferredContactTime?: string;
+      agentName?: string;
+    },
+  ): Promise<void> {
+    try {
+      const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "—";
+      const lines: string[] = [`🎯 Новый лид`, `👤 ${name}`];
+      if (lead.phone) lines.push(`📞 ${lead.phone}`);
+      if (lead.contactMethod) lines.push(`📱 ${lead.contactMethod}`);
+      if (lead.country) lines.push(`🌍 ${lead.country}`);
+      if (lead.age) lines.push(`👤 ${lead.age} лет`);
+      if (lead.preferredContactTime) lines.push(`🕐 Время связи: ${lead.preferredContactTime}`);
+      if (lead.agentName) lines.push(`🤖 Агент: ${lead.agentName}`);
+      const message = lines.join("\n");
+      await this.callTool("sendMessage", { target: groupLink, message });
+      this.logger.info(`[TG:${this.name}] lead pushed to group ${groupLink}`);
+    } catch (e) {
+      this.logger.warn(`[TG:${this.name}] pushLeadToGroup failed: ${String(e)}`);
+    }
   }
 
   /**

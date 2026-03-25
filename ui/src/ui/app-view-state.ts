@@ -223,6 +223,12 @@ export type AppViewState = {
   /** Knowledge base: training pairs distributed to diagram nodes. */
   telegramKnowledgeBase: import("./controllers/telegram.ts").DiagramKnowledgeBase | null;
   telegramKnowledgeBaseLoading: boolean;
+  /** Live schema conversation states: chatId → nodeId or "__done__". */
+  telegramConversationStates: Record<string, string>;
+  /** Collected leads for the selected agent. */
+  telegramLeads: import("./controllers/telegram.ts").TelegramLead[];
+  telegramLeadsLoading: boolean;
+  telegramLeadsError: string | null;
   /** AI coaching tips per chatId — fetched on demand, persisted to DB. */
   telegramCoachingTips: Record<string, import("./controllers/telegram.ts").CoachingTips>;
   telegramCoachingLoading: Set<string>;

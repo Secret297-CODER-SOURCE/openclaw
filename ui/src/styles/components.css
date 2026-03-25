@@ -4161,3 +4161,238 @@
     padding-top: 0;
   }
 }
+
+/* ── Re-engagement day chips ── */
+.tg-reeng-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.tg-reeng-day {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.tg-reeng-day:hover {
+  border-color: var(--accent, #4a9eff);
+  color: var(--text);
+}
+
+.tg-reeng-day--active {
+  background: var(--accent, #4a9eff);
+  border-color: var(--accent, #4a9eff);
+  color: #fff;
+}
+
+.tg-reeng-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.tg-reeng-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent, #4a9eff);
+}
+
+/* Re-engagement panel card */
+.tg-reeng-header {
+  margin-bottom: 0;
+}
+
+.tg-reeng-panel {
+  background: var(--card-hover, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tg-reeng-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tg-reeng-badge-ai {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  background: linear-gradient(135deg, rgba(138, 43, 226, 0.2), rgba(74, 158, 255, 0.2));
+  border: 1px solid rgba(138, 43, 226, 0.35);
+  color: #b47fff;
+  padding: 2px 7px;
+  border-radius: 10px;
+}
+
+.tg-reeng-textarea {
+  width: 100%;
+  max-width: 420px;
+  resize: vertical;
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: inherit;
+}
+
+.tg-reeng-placeholders {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.tg-reeng-hint-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.tg-reeng-code {
+  background: var(--bg-muted, rgba(255,255,255,0.07));
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--accent, #4a9eff);
+  font-family: monospace;
+}
+
+.tg-reeng-ai-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: linear-gradient(135deg, rgba(74, 158, 255, 0.06), rgba(138, 43, 226, 0.06));
+  border: 1px solid rgba(74, 158, 255, 0.2);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary, var(--text-muted));
+}
+
+.tg-reeng-ai-tip-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* ── Leads panel ── */
+.tg-leads-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tg-lead-card {
+  background: var(--card-hover, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tg-lead-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+.tg-lead-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tg-lead-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+  background: color-mix(in srgb, var(--accent, #4a9eff) 12%, transparent);
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--accent, #4a9eff) 25%, transparent);
+  white-space: nowrap;
+}
+
+.tg-lead-row {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.tg-lead-link {
+  color: var(--accent, #4a9eff);
+  text-decoration: none;
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.tg-lead-link:hover {
+  text-decoration: underline;
+}
+
+.tg-lead-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.tg-lead-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+
+.btn-xs {
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 4px;
+  line-height: 1.5;
+}
+
+.btn-danger {
+  background: transparent;
+  color: var(--danger, #e05c5c);
+  border: 1px solid var(--danger, #e05c5c);
+}
+
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--danger, #e05c5c) 15%, transparent);
+}
+
+.tg-lead-footer .btn-xs {
+  margin-left: auto;
+}
+

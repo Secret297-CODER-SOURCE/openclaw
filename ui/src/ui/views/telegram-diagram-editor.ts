@@ -144,6 +144,11 @@ function uid(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
+/** Returns true if chatStates has at least one entry. */
+function _hasAnyStates(states: Record<string, string>): boolean {
+  return Object.keys(states).length > 0;
+}
+
 // ─── Default starter diagram ──────────────────────────────────────────────────
 
 export function makeDefaultDiagram(agentId: string, scope: TrainingScope): FlowDiagram {
@@ -343,6 +348,27 @@ export class TgDiagramEditor extends LitElement {
       opacity: 0.6;
       cursor: wait;
     }
+    .tool-btn.tb-export-json {
+      color: #86efac;
+      border-color: rgba(134, 239, 172, 0.3);
+    }
+    .tool-btn.tb-export-json:hover:not(:disabled) {
+      background: rgba(134, 239, 172, 0.1);
+    }
+    .tool-btn.tb-export-json:disabled {
+      opacity: 0.4;
+    }
+    .tool-btn.tb-import-json {
+      color: #fcd34d;
+      border-color: rgba(252, 211, 77, 0.3);
+    }
+    .tool-btn.tb-import-json:hover:not(:disabled) {
+      background: rgba(252, 211, 77, 0.1);
+    }
+    .tool-btn.tb-import-json:disabled {
+      opacity: 0.6;
+      cursor: wait;
+    }
     .tool-btn.tb-knowledge {
       color: #a78bfa;
       border-color: rgba(167, 139, 250, 0.3);
@@ -381,6 +407,113 @@ export class TgDiagramEditor extends LitElement {
       display: flex;
       gap: 6px;
     }
+    /* ── Anthropic key modal ───────────────────────────── */
+    .anthropic-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(2px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+    }
+    .anthropic-modal {
+      background: #1e2130;
+      border: 1px solid rgba(167, 139, 250, 0.35);
+      border-radius: 14px;
+      padding: 28px 28px 24px;
+      width: 380px;
+      max-width: 95vw;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+      position: relative;
+    }
+    .anthropic-modal-close {
+      position: absolute;
+      top: 12px;
+      right: 14px;
+      background: transparent;
+      border: none;
+      color: #6b7280;
+      font-size: 20px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .anthropic-modal-close:hover {
+      color: #e5e7eb;
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .anthropic-modal h3 {
+      margin: 0 0 6px;
+      font-size: 15px;
+      font-weight: 600;
+      color: #e5e7eb;
+    }
+    .anthropic-modal p {
+      margin: 0 0 16px;
+      font-size: 12px;
+      color: #9ca3af;
+      line-height: 1.5;
+    }
+    .anthropic-modal input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 9px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(167, 139, 250, 0.3);
+      background: rgba(255, 255, 255, 0.05);
+      color: #e5e7eb;
+      font-size: 13px;
+      font-family: monospace;
+      margin-bottom: 8px;
+      outline: none;
+    }
+    .anthropic-modal input:focus {
+      border-color: rgba(167, 139, 250, 0.7);
+    }
+    .anthropic-key-error {
+      font-size: 11px;
+      color: #f87171;
+      margin-bottom: 12px;
+      min-height: 16px;
+    }
+    .anthropic-modal-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .anthropic-btn-save {
+      padding: 8px 18px;
+      border-radius: 8px;
+      border: none;
+      background: linear-gradient(135deg, #7c3aed, #4f46e5);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .anthropic-btn-save:disabled {
+      opacity: 0.55;
+      cursor: wait;
+    }
+    .anthropic-btn-save:hover:not(:disabled) {
+      opacity: 0.9;
+    }
+    .anthropic-btn-cancel {
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: transparent;
+      color: #9ca3af;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .anthropic-btn-cancel:hover {
+      color: #e5e7eb;
+    }
+
     .kb-btn-distribute {
       font-size: 10px;
       padding: 3px 8px;
@@ -832,6 +965,27 @@ export class TgDiagramEditor extends LitElement {
       animation: edit-dash 0.6s linear infinite;
     }
 
+    /* ── Active chat pulse ring ── */
+    @keyframes active-pulse {
+      0% {
+        opacity: 0.55;
+        transform: scale(1);
+      }
+      50% {
+        opacity: 0.2;
+        transform: scale(1.06);
+      }
+      100% {
+        opacity: 0.55;
+        transform: scale(1);
+      }
+    }
+    .node-active-pulse {
+      animation: active-pulse 1.8s ease-in-out infinite;
+      transform-origin: center;
+      transform-box: fill-box;
+    }
+
     /* ── Inline text editor overlay ── */
     .edit-overlay {
       position: absolute;
@@ -872,12 +1026,40 @@ export class TgDiagramEditor extends LitElement {
   @property({ attribute: false }) diagram: FlowDiagram | null = null;
   @property() agentId = "";
   @property() scope: TrainingScope = "personal";
+  /**
+   * Live conversation states: maps chatId → nodeId (or "__done__" = free-mode continuation).
+   * When provided, each node renders a count badge showing how many active chats are there.
+   * "__done__" states are attributed to the diagram's END node.
+   */
+  @property({ attribute: false }) chatStates: Record<string, string> = {};
   @property({ attribute: false }) onSave: (d: FlowDiagram) => void = () => {};
   @property({ attribute: false }) onScopeChange: (agentId: string, scope: TrainingScope) => void =
     () => {};
   /** Called with base64 image data + MIME type; returns a promise that resolves to the new diagram. */
   @property({ attribute: false })
   onImportImage: ((base64: string, mime: string) => Promise<FlowDiagram | null>) | null = null;
+
+  /** Check whether Anthropic API key is configured on the gateway. */
+  @property({ attribute: false })
+  onCheckAnthropicKey: (() => Promise<boolean>) | null = null;
+
+  /** Save Anthropic API key to the gateway. Returns true on success. */
+  @property({ attribute: false })
+  onSaveAnthropicKey: ((key: string) => Promise<{ ok: boolean; error?: string }>) | null = null;
+
+  // ── Anthropic key modal state ──────────────────────────────────────────────
+  @state() private _anthropicModalOpen = false;
+  @state() private _anthropicKeyInput = "";
+  @state() private _anthropicKeySaving = false;
+  @state() private _anthropicKeyError = "";
+
+  /** Called to export the current diagram as a JSON file. */
+  @property({ attribute: false })
+  onExportJson: ((diagram: FlowDiagram) => void) | null = null;
+
+  /** Called with a JSON File; returns imported diagram or null on error. */
+  @property({ attribute: false })
+  onImportJson: ((file: File) => Promise<FlowDiagram | null>) | null = null;
 
   /** Called to load existing knowledge base for the current agent+scope. */
   @property({ attribute: false })
@@ -942,6 +1124,8 @@ export class TgDiagramEditor extends LitElement {
   @state() private saveStatus: "saved" | "saving" | "" = "";
   @state() private importing = false;
   @state() private importError: string | null = null;
+  @state() private importingJson = false;
+  @state() private importJsonError: string | null = null;
   @state() private kbPanelOpen = false;
   @state() private collectionsOpen = false;
   @state() private renamingId: string | null = null;
@@ -1049,8 +1233,92 @@ export class TgDiagramEditor extends LitElement {
     }
   };
 
-  private _triggerImport() {
+  private async _triggerImport() {
+    // Before opening the file picker, verify Anthropic key is configured.
+    if (this.onCheckAnthropicKey) {
+      const hasKey = await this.onCheckAnthropicKey().catch(() => false);
+      if (!hasKey) {
+        // Show the key-entry modal instead of the file picker.
+        this._anthropicModalOpen = true;
+        this._anthropicKeyInput = "";
+        this._anthropicKeyError = "";
+        return;
+      }
+    }
     const input = this.shadowRoot?.querySelector(".import-file-input") as HTMLInputElement | null;
+    input?.click();
+  }
+
+  private async _saveAnthropicKey() {
+    const key = this._anthropicKeyInput.trim();
+    if (!key) {
+      this._anthropicKeyError = "Введите ключ";
+      return;
+    }
+    if (!key.startsWith("sk-ant-")) {
+      this._anthropicKeyError = "Ключ должен начинаться с «sk-ant-»";
+      return;
+    }
+    if (!this.onSaveAnthropicKey) {
+      return;
+    }
+    this._anthropicKeySaving = true;
+    this._anthropicKeyError = "";
+    try {
+      const res = await this.onSaveAnthropicKey(key);
+      if (res.ok) {
+        this._anthropicModalOpen = false;
+        // Now open the file picker
+        const input = this.shadowRoot?.querySelector(
+          ".import-file-input",
+        ) as HTMLInputElement | null;
+        input?.click();
+      } else {
+        this._anthropicKeyError = res.error ?? "Не удалось сохранить ключ";
+      }
+    } catch (e) {
+      this._anthropicKeyError = String(e);
+    } finally {
+      this._anthropicKeySaving = false;
+    }
+  }
+
+  // ── JSON import/export ────────────────────────────────────────────────────
+
+  private _onImportJsonChange = async (e: Event) => {
+    if (!this.onImportJson) {
+      return;
+    }
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) {
+      return;
+    }
+
+    this.importingJson = true;
+    this.importJsonError = null;
+    try {
+      const diagram = await this.onImportJson(file);
+      if (diagram) {
+        this.diagram = diagram;
+        const b = this._bounds();
+        this.vb = { x: b.x, y: b.y, w: b.w, h: b.h };
+      }
+    } catch (err) {
+      this.importJsonError = err instanceof Error ? err.message : String(err);
+      setTimeout(() => {
+        this.importJsonError = null;
+      }, 5000);
+    } finally {
+      this.importingJson = false;
+    }
+  };
+
+  private _triggerImportJson() {
+    const input = this.shadowRoot?.querySelector(
+      ".import-json-file-input",
+    ) as HTMLInputElement | null;
     input?.click();
   }
 
@@ -1659,6 +1927,60 @@ export class TgDiagramEditor extends LitElement {
             : "tool-select";
 
     return html`
+      ${
+        this._anthropicModalOpen
+          ? html`
+        <div class="anthropic-overlay" @click=${(e: Event) => {
+          if ((e.target as HTMLElement).classList.contains("anthropic-overlay")) {
+            this._anthropicModalOpen = false;
+          }
+        }}>
+          <div class="anthropic-modal">
+            <button class="anthropic-modal-close"
+              @click=${() => {
+                this._anthropicModalOpen = false;
+              }}
+              title="Закрыть">✕</button>
+            <h3>🔑 Anthropic API ключ</h3>
+            <p>
+              Для анализа фото нужен Anthropic API ключ (Claude Vision).<br>
+              Получите его на <a href="https://console.anthropic.com/settings/keys"
+                target="_blank" style="color:#a78bfa;">console.anthropic.com</a>
+            </p>
+            <input
+              type="password"
+              placeholder="sk-ant-api03-..."
+              .value=${this._anthropicKeyInput}
+              @input=${(e: Event) => {
+                this._anthropicKeyInput = (e.target as HTMLInputElement).value;
+                this._anthropicKeyError = "";
+              }}
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key === "Enter") {
+                  void this._saveAnthropicKey();
+                }
+              }}
+              autocomplete="off"
+            />
+            <div class="anthropic-key-error">${this._anthropicKeyError}</div>
+            <div class="anthropic-modal-actions">
+              <button class="anthropic-btn-cancel"
+                @click=${() => {
+                  this._anthropicModalOpen = false;
+                }}>
+                Отмена
+              </button>
+              <button class="anthropic-btn-save"
+                ?disabled=${this._anthropicKeySaving || !this._anthropicKeyInput.trim()}
+                @click=${() => void this._saveAnthropicKey()}>
+                ${this._anthropicKeySaving ? "Сохранение…" : "Сохранить и продолжить"}
+              </button>
+            </div>
+          </div>
+        </div>
+      `
+          : ""
+      }
       ${this._renderScopeRow()}
       ${this._renderToolbar()}
       ${this.kbPanelOpen ? this._renderKbPanel() : nothing}
@@ -2093,7 +2415,7 @@ export class TgDiagramEditor extends LitElement {
           }"
           ?disabled=${this.importing || !this.onImportImage}
           @click=${() => {
-            this._triggerImport();
+            void this._triggerImport();
           }}>
           ${this.importing ? "⏳ Анализ…" : "🖼 Из фото"}
         </button>
@@ -2103,6 +2425,32 @@ export class TgDiagramEditor extends LitElement {
         ${
           this.importError
             ? html`<span class="import-error" title="${this.importError}">⚠ ${this.importError}</span>`
+            : nothing
+        }
+        <button class="tool-btn tb-export-json"
+          title="${this.diagram ? "Экспорт схемы в JSON файл" : "Нет схемы для экспорта"}"
+          ?disabled=${!this.diagram || !this.onExportJson}
+          @click=${() => {
+            if (this.diagram && this.onExportJson) {
+              this.onExportJson(this.diagram);
+            }
+          }}>
+          ↓ JSON
+        </button>
+        <button class="tool-btn tb-import-json"
+          title="${this.onImportJson ? "Импорт схемы из JSON файла" : "Выберите агента чтобы импортировать"}"
+          ?disabled=${this.importingJson || !this.onImportJson}
+          @click=${() => {
+            this._triggerImportJson();
+          }}>
+          ${this.importingJson ? "⏳…" : "↑ JSON"}
+        </button>
+        <input type="file" accept="application/json,.json" class="import-json-file-input"
+          style="display:none"
+          @change=${this._onImportJsonChange} />
+        ${
+          this.importJsonError
+            ? html`<span class="import-error" title="${this.importJsonError}">⚠ ${this.importJsonError}</span>`
             : nothing
         }
         <button class="tool-btn tb-knowledge ${this.kbPanelOpen ? "active" : ""}"
@@ -2297,6 +2645,28 @@ export class TgDiagramEditor extends LitElement {
     `;
   }
 
+  /**
+   * Build a map from nodeId → count of active chats at that node.
+   * "__done__" values are attributed to the END node of the diagram.
+   */
+  private _buildNodeCounts(d: FlowDiagram): Map<string, { count: number; hasDone: boolean }> {
+    const endNode = d.nodes.find((n) => n.type === "end");
+    const counts = new Map<string, { count: number; hasDone: boolean }>();
+    for (const nodeId of Object.values(this.chatStates)) {
+      if (nodeId === "__done__") {
+        // Attribute to the END node with a special "done" marker
+        if (endNode) {
+          const cur = counts.get(endNode.id) ?? { count: 0, hasDone: false };
+          counts.set(endNode.id, { count: cur.count + 1, hasDone: true });
+        }
+      } else {
+        const cur = counts.get(nodeId) ?? { count: 0, hasDone: false };
+        counts.set(nodeId, { count: cur.count + 1, hasDone: cur.hasDone });
+      }
+    }
+    return counts;
+  }
+
   private _renderNodes(d: FlowDiagram) {
     const glowFilterMap: Record<DiagramNodeType, string> = {
       start: "glow-blue",
@@ -2304,6 +2674,7 @@ export class TgDiagramEditor extends LitElement {
       process: "glow-teal",
       decision: "glow-amber",
     };
+    const nodeCounts = _hasAnyStates(this.chatStates) ? this._buildNodeCounts(d) : null;
     return svg`
       ${d.nodes.map((node) => {
         const isSelected = this.selectedIds.has(node.id);
@@ -2313,7 +2684,13 @@ export class TgDiagramEditor extends LitElement {
         const hh = nodeHeight(node.type) / 2;
         const cx = node.x + hw;
         const cy = node.y + hh;
-        const glowFilter = isSelected || isEditing ? glowFilterMap[node.type] : "";
+        // Determine active chat counts for this node
+        const nodeActivity = nodeCounts?.get(node.id) ?? null;
+        const activeCount = nodeActivity?.count ?? 0;
+        const hasDone = nodeActivity?.hasDone ?? false;
+        const isActive = activeCount > 0;
+        // Active nodes get a pulsing glow in addition to any selection glow
+        const glowFilter = isSelected || isEditing || isActive ? glowFilterMap[node.type] : "";
         // Cursor hint: "text" when selected (hinting dblclick to edit), otherwise "move"
         const cursor = this.tool === "connect" ? "crosshair" : isSelected ? "text" : "move";
 
@@ -2397,6 +2774,41 @@ export class TgDiagramEditor extends LitElement {
                 x="0" y="0"
               >${node.text}</text>
             `
+            }
+            <!-- Active chat badge — shown when chats are tracked at this node -->
+            ${
+              isActive
+                ? svg`
+              <!-- Pulse ring — animated when active chats are present -->
+              ${
+                node.type === "start" || node.type === "end"
+                  ? svg`<ellipse cx="0" cy="0" rx="${OVAL_RX + 8}" ry="${OVAL_RY + 8}"
+                      fill="none" stroke="${hasDone ? "#22c55e" : "#f97316"}"
+                      stroke-width="2" opacity="0.5" class="node-active-pulse" />`
+                  : node.type === "decision"
+                    ? svg`<polygon
+                        points="0,${-(DIAMOND_RY + 9)} ${DIAMOND_RX + 9},0 0,${DIAMOND_RY + 9} ${-(DIAMOND_RX + 9)},0"
+                        fill="none" stroke="${hasDone ? "#22c55e" : "#f97316"}"
+                        stroke-width="2" opacity="0.5" class="node-active-pulse" />`
+                    : svg`<rect x="${-hw - 9}" y="${-hh - 9}" width="${NODE_W + 18}" height="${NODE_H + 18}" rx="14"
+                        fill="none" stroke="${hasDone ? "#22c55e" : "#f97316"}"
+                        stroke-width="2" opacity="0.5" class="node-active-pulse" />`
+              }
+              <!-- Count badge pill (top-right corner) -->
+              <g transform="translate(${hw - 2}, ${-hh + 2})" style="pointer-events:none;">
+                <rect x="-16" y="-9" width="32" height="18" rx="9"
+                  fill="${hasDone ? "#166534" : "#7c2d12"}"
+                  stroke="${hasDone ? "#22c55e" : "#f97316"}"
+                  stroke-width="1.5" opacity="0.95" />
+                <text text-anchor="middle" dominant-baseline="middle"
+                  font-size="10" font-weight="800"
+                  fill="${hasDone ? "#86efac" : "#fed7aa"}"
+                  style="user-select:none; font-family:inherit;"
+                  x="0" y="0"
+                >${hasDone ? `✓${activeCount}` : `●${activeCount}`}</text>
+              </g>
+            `
+                : nothing
             }
           </g>
         `;
