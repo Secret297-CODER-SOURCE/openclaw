@@ -933,6 +933,47 @@ export class TelegramStorage {
     }>;
   }
 
+  /**
+   * Returns contacts silent for MORE than `olderThanDays` days who haven't
+   * received an "и более" re-engagement (delay_days=9999) in the past
+   * `olderThanDays` days.
+   */
+  getContactsForReEngagementMore(
+    agentId: string,
+    olderThanDays: number,
+  ): Array<{
+    chatId: string;
+    firstName: string | null;
+    lastName: string | null;
+    username: string | null;
+    lastClientMsgAt: string;
+  }> {
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+    const cooloffStart = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+    return this.db
+      .prepare(
+        `SELECT c.chat_id as chatId, c.first_name as firstName, c.last_name as lastName,
+                c.username as username, c.last_client_msg_at as lastClientMsgAt
+         FROM tg_contacts c
+         WHERE c.agent_id = ?
+           AND c.last_client_msg_at < ?
+           AND NOT EXISTS (
+             SELECT 1 FROM tg_reengagement r
+             WHERE r.agent_id = c.agent_id
+               AND r.chat_id = c.chat_id
+               AND r.delay_days = 9999
+               AND r.sent_at >= ?
+           )`,
+      )
+      .all(agentId, cutoff, cooloffStart) as Array<{
+      chatId: string;
+      firstName: string | null;
+      lastName: string | null;
+      username: string | null;
+      lastClientMsgAt: string;
+    }>;
+  }
+
   /** Record that a re-engagement message was sent for this contact+delay. */
   markReEngagementSent(
     agentId: string,

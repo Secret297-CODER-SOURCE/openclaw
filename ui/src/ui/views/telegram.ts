@@ -277,6 +277,10 @@ export type TelegramProps = {
     agentId: string,
     settings: import("../controllers/telegram.ts").AgentSettings,
   ) => void;
+  /** Pending (unsaved) work-mode patches — null means no changes yet. */
+  workModePending: Partial<import("../controllers/telegram.ts").AgentSettings> | null;
+  onWorkModePatch: (patch: Partial<import("../controllers/telegram.ts").AgentSettings>) => void;
+  onWorkModeApply: (agentId: string) => void;
   onInitLeadsGroup: (agentId: string) => void;
   telegramTemplateGenerating: boolean;
   onGenerateTemplate: (agentId: string) => void;
@@ -486,17 +490,29 @@ function renderPanelTabs(props: TelegramProps, agent: TelegramAgentRecord) {
 
 function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
   const busy = isBusy(props, agent.id);
-  const settings = props.agentSettings ?? {
+  const savedSettings = props.agentSettings ?? {
     useSchema: false,
     scheduleMode: "always" as const,
     replyTo: "all" as const,
   };
+  // Merge pending work-mode edits into displayed settings.
+  const settings = props.workModePending
+    ? { ...savedSettings, ...props.workModePending }
+    : savedSettings;
+  const workModeDirty =
+    props.workModePending !== null && Object.keys(props.workModePending).length > 0;
   const settingsSaving = props.agentSettingsSaving;
   const settingsLoading = props.agentSettingsLoading;
   const diagramList = props.diagramList ?? [];
 
-  /** Emit updated settings to the backend. */
-  const saveSettings = (patch: Partial<typeof settings>) => {
+  /** Stage a work-mode change locally (shown immediately, saved on "Применить"). */
+  const patchWorkMode = (patch: Partial<typeof savedSettings>) => {
+    console.log("[workMode] patch:", patch, "dirty:", workModeDirty);
+    props.onWorkModePatch(patch);
+  };
+
+  /** Save non-work-mode settings immediately (re-engagement, leads group, etc). */
+  const saveSettings = (patch: Partial<typeof savedSettings>) => {
     props.onSaveAgentSettings(agent.id, { ...settings, ...patch });
   };
 
@@ -585,7 +601,20 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
 
     <!-- ── Work mode settings ─────────────────────────────────────────── -->
     <section class="card" style="margin-top: 16px;">
-      <div class="card-title">⚙️ Режим работы</div>
+      <div class="card-title" style="display:flex;align-items:center;gap:10px;">
+        <span>⚙️ Режим работы</span>
+        ${
+          workModeDirty
+            ? html`<button
+                type="button"
+                class="btn primary"
+                style="font-size:12px;padding:4px 16px;margin-left:auto;animation:fadeIn .15s ease;"
+                ?disabled=${settingsSaving}
+                @click=${() => props.onWorkModeApply(agent.id)}
+              >${settingsSaving ? "⏳ Сохраняю…" : "✅ Применить"}</button>`
+            : nothing
+        }
+      </div>
 
       ${
         settingsLoading
@@ -610,7 +639,7 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                   .value=${settings.activeDiagramId ?? ""}
                   @change=${(e: Event) => {
                     const v = (e.target as HTMLSelectElement).value;
-                    saveSettings({ activeDiagramId: v || undefined });
+                    patchWorkMode({ activeDiagramId: v || undefined });
                   }}
                 >
                   <option value="">— Не выбрана —</option>
@@ -632,12 +661,12 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
           <div class="tg-toggle-group">
             <label class="tg-toggle-option ${settings.useSchema ? "tg-toggle-option--active" : ""}">
               <input type="radio" name="useSchema-${agent.id}" ?checked=${settings.useSchema}
-                @change=${() => saveSettings({ useSchema: true })} style="display:none;" />
+                @change=${() => patchWorkMode({ useSchema: true })} style="display:none;" />
               По схеме
             </label>
             <label class="tg-toggle-option ${!settings.useSchema ? "tg-toggle-option--active" : ""}">
               <input type="radio" name="useSchema-${agent.id}" ?checked=${!settings.useSchema}
-                @change=${() => saveSettings({ useSchema: false })} style="display:none;" />
+                @change=${() => patchWorkMode({ useSchema: false })} style="display:none;" />
               Свободно
             </label>
           </div>
@@ -668,14 +697,14 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                     <label class="tg-toggle-option ${settings.schemaStrictMode ? "tg-toggle-option--active" : ""}">
                       <input type="radio" name="schemaStrictMode-${agent.id}"
                         ?checked=${!!settings.schemaStrictMode}
-                        @change=${() => saveSettings({ schemaStrictMode: true })}
+                        @change=${() => patchWorkMode({ schemaStrictMode: true })}
                         style="display:none;" />
                       Строгий
                     </label>
                     <label class="tg-toggle-option ${!settings.schemaStrictMode ? "tg-toggle-option--active" : ""}">
                       <input type="radio" name="schemaStrictMode-${agent.id}"
                         ?checked=${!settings.schemaStrictMode}
-                        @change=${() => saveSettings({ schemaStrictMode: false })}
+                        @change=${() => patchWorkMode({ schemaStrictMode: false })}
                         style="display:none;" />
                       Гибкий
                     </label>
@@ -704,12 +733,12 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
           <div class="tg-toggle-group">
             <label class="tg-toggle-option ${settings.scheduleMode === "always" ? "tg-toggle-option--active" : ""}">
               <input type="radio" name="scheduleMode-${agent.id}" ?checked=${settings.scheduleMode === "always"}
-                @change=${() => saveSettings({ scheduleMode: "always" })} style="display:none;" />
+                @change=${() => patchWorkMode({ scheduleMode: "always" })} style="display:none;" />
               Всегда
             </label>
             <label class="tg-toggle-option ${settings.scheduleMode === "schedule" ? "tg-toggle-option--active" : ""}">
               <input type="radio" name="scheduleMode-${agent.id}" ?checked=${settings.scheduleMode === "schedule"}
-                @change=${() => saveSettings({ scheduleMode: "schedule" })} style="display:none;" />
+                @change=${() => patchWorkMode({ scheduleMode: "schedule" })} style="display:none;" />
               По расписанию
             </label>
           </div>
@@ -720,12 +749,12 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                   <input type="time" class="input" style="width:110px;"
                     .value=${settings.scheduleFrom ?? "09:00"}
                     @change=${(e: Event) =>
-                      saveSettings({ scheduleFrom: (e.target as HTMLInputElement).value })} />
+                      patchWorkMode({ scheduleFrom: (e.target as HTMLInputElement).value })} />
                   <span style="font-size:13px;color:var(--text-muted);">до</span>
                   <input type="time" class="input" style="width:110px;"
                     .value=${settings.scheduleTo ?? "18:00"}
                     @change=${(e: Event) =>
-                      saveSettings({ scheduleTo: (e.target as HTMLInputElement).value })} />
+                      patchWorkMode({ scheduleTo: (e.target as HTMLInputElement).value })} />
                   <span class="tg-setting-hint">(время сервера)</span>
                 </div>`
               : html`
@@ -742,12 +771,12 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
           <div class="tg-toggle-group">
             <label class="tg-toggle-option ${settings.replyTo === "all" ? "tg-toggle-option--active" : ""}">
               <input type="radio" name="replyTo-${agent.id}" ?checked=${settings.replyTo === "all"}
-                @change=${() => saveSettings({ replyTo: "all" })} style="display:none;" />
+                @change=${() => patchWorkMode({ replyTo: "all" })} style="display:none;" />
               Всем
             </label>
             <label class="tg-toggle-option ${settings.replyTo === "tasks" ? "tg-toggle-option--active" : ""}">
               <input type="radio" name="replyTo-${agent.id}" ?checked=${settings.replyTo === "tasks"}
-                @change=${() => saveSettings({ replyTo: "tasks" })} style="display:none;" />
+                @change=${() => patchWorkMode({ replyTo: "tasks" })} style="display:none;" />
               Только из Tasks
             </label>
           </div>
@@ -797,26 +826,55 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
               ? html`
             <div class="tg-reeng-panel">
 
-              <!-- Day chips -->
-              <div class="tg-reeng-section-title">Интервалы молчания (дней)</div>
-              <div class="tg-reeng-days">
-                ${[1, 2, 3, 5, 7, 14].map((d) => {
-                  const active = (settings.reEngagementDelays ?? [1, 2, 3, 5]).includes(d);
-                  return html`
-                    <button
-                      type="button"
-                      class="tg-reeng-day ${active ? "tg-reeng-day--active" : ""}"
-                      title="${d} ${d === 1 ? "день" : d < 5 ? "дня" : "дней"} без ответа"
-                      @click=${() => {
-                        const cur = settings.reEngagementDelays ?? [1, 2, 3, 5];
-                        const next = active
-                          ? cur.filter((x) => x !== d)
-                          : [...cur, d].toSorted((a, b) => a - b);
-                        saveSettings({ reEngagementDelays: next });
-                      }}
-                    >${d}д</button>
-                  `;
-                })}
+              <!-- Day range -->
+              <div class="tg-reeng-section-title">Интервал молчания (дней)</div>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+                <span style="font-size:13px;color:var(--text-muted);">от</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="365"
+                  class="input"
+                  style="width:64px;font-size:13px;text-align:center;"
+                  .value=${String(settings.reEngagementDelayFrom ?? 1)}
+                  @change=${(e: Event) => {
+                    const v = parseInt((e.target as HTMLInputElement).value, 10);
+                    if (v > 0) {
+                      saveSettings({ reEngagementDelayFrom: v });
+                    }
+                  }}
+                />
+                <span style="font-size:13px;color:var(--text-muted);">до</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="365"
+                  class="input"
+                  style="width:64px;font-size:13px;text-align:center;"
+                  .value=${String(settings.reEngagementDelayTo ?? 7)}
+                  @change=${(e: Event) => {
+                    const v = parseInt((e.target as HTMLInputElement).value, 10);
+                    if (v > 0) {
+                      saveSettings({ reEngagementDelayTo: v });
+                    }
+                  }}
+                />
+                <span style="font-size:13px;color:var(--text-muted);">дней</span>
+                <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;margin-left:4px;">
+                  <input
+                    type="checkbox"
+                    ?checked=${!!settings.reEngagementDelayMore}
+                    @change=${(e: Event) =>
+                      saveSettings({
+                        reEngagementDelayMore: (e.target as HTMLInputElement).checked,
+                      })}
+                  />
+                  <span style="color:var(--text-muted);">и более</span>
+                </label>
+              </div>
+              <div class="tg-setting-hint" style="margin-bottom:6px;">
+                Агент пишет контактам, молчавшим от <b>${settings.reEngagementDelayFrom ?? 1}</b>
+                до <b>${settings.reEngagementDelayTo ?? 7}</b> дней${settings.reEngagementDelayMore ? `, а также всем кто молчит дольше` : ""}.
               </div>
 
               <!-- Template -->
@@ -990,10 +1048,8 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
               <input type="radio" name="offlineReply-${agent.id}"
                 ?checked=${!!settings.offlineReplyEnabled}
                 @change=${() =>
-                  saveSettings({
+                  patchWorkMode({
                     offlineReplyEnabled: true,
-                    // Persist defaults immediately so enforceWorkingHours
-                    // has values even if the user never touches the time inputs.
                     managerWorkFrom: settings.managerWorkFrom ?? "09:00",
                     managerWorkTo: settings.managerWorkTo ?? "18:00",
                   })}
@@ -1003,7 +1059,7 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
             <label class="tg-toggle-option ${!settings.offlineReplyEnabled ? "tg-toggle-option--active" : ""}">
               <input type="radio" name="offlineReply-${agent.id}"
                 ?checked=${!settings.offlineReplyEnabled}
-                @change=${() => saveSettings({ offlineReplyEnabled: false })}
+                @change=${() => patchWorkMode({ offlineReplyEnabled: false })}
                 style="display:none;" />
               Молчать
             </label>
@@ -1027,7 +1083,7 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                       style="width:120px;font-size:13px;"
                       .value=${settings.managerWorkFrom ?? settings.scheduleFrom ?? "09:00"}
                       @change=${(e: Event) =>
-                        saveSettings({ managerWorkFrom: (e.target as HTMLInputElement).value })}
+                        patchWorkMode({ managerWorkFrom: (e.target as HTMLInputElement).value })}
                     />
                     <span style="font-size:13px;color:var(--text-muted);">до</span>
                     <input
@@ -1036,7 +1092,7 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                       style="width:120px;font-size:13px;"
                       .value=${settings.managerWorkTo ?? settings.scheduleTo ?? "18:00"}
                       @change=${(e: Event) =>
-                        saveSettings({ managerWorkTo: (e.target as HTMLInputElement).value })}
+                        patchWorkMode({ managerWorkTo: (e.target as HTMLInputElement).value })}
                     />
                   </div>
                   <div class="tg-setting-hint" style="margin-bottom:10px;">
@@ -1054,7 +1110,7 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                     placeholder="Например: уточни какой продукт интересует, предложи записаться на демо в {от}–{до}"
                     .value=${settings.offlineReplyTemplate ?? ""}
                     @input=${(e: Event) =>
-                      saveSettings({
+                      patchWorkMode({
                         offlineReplyTemplate: (e.target as HTMLTextAreaElement).value || undefined,
                       })}
                   ></textarea>

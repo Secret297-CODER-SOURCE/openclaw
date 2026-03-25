@@ -238,6 +238,8 @@ export type AppViewState = {
   telegramAgentSettings: import("./controllers/telegram.ts").AgentSettings | null;
   telegramAgentSettingsLoading: boolean;
   telegramAgentSettingsSaving: boolean;
+  /** Unsaved work-mode changes pending "Применить" click (null = no pending edits). */
+  telegramWorkModePending: Partial<import("./controllers/telegram.ts").AgentSettings> | null;
   /** Whether an AI re-engagement template generation is in progress. */
   telegramTemplateGenerating: boolean;
   telegramTrainingPairs: import("./controllers/telegram.ts").TrainingPair[];

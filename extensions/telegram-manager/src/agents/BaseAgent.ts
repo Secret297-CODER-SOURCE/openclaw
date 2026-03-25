@@ -2529,6 +2529,7 @@ export abstract class BaseAgent extends EventEmitter {
         "персонализированное сообщение для реактивации клиента, который давно не отвечал. " +
         "Сообщение должно быть живым, интересным, вызывать желание ответить. " +
         "Не используй шаблонные фразы. Длина — 1-2 предложения максимум. " +
+        "ВАЖНО: определи язык, на котором клиент писал в истории диалога, и пиши на том же языке. " +
         "Отвечай ТОЛЬКО текстом самого сообщения, без кавычек, без пояснений.";
 
       const userPrompt =
@@ -2551,16 +2552,68 @@ export abstract class BaseAgent extends EventEmitter {
     const settings = this.getAgentSettings();
     if (!settings.reEngagementEnabled) return;
 
-    const delays = settings.reEngagementDelays ?? [];
-    if (delays.length === 0) return;
-
     const template = settings.reEngagementTemplate?.trim();
     if (!template) return;
+
+    // Build delays array: prefer range (from/to) over legacy chips array.
+    const fromDay = settings.reEngagementDelayFrom ?? null;
+    const toDay = settings.reEngagementDelayTo ?? null;
+    const delays: number[] =
+      fromDay !== null && toDay !== null
+        ? Array.from({ length: Math.max(0, toDay - fromDay + 1) }, (_, i) => fromDay + i)
+        : (settings.reEngagementDelays ?? []);
+
+    if (delays.length === 0 && !settings.reEngagementDelayMore) return;
 
     const now = Date.now();
     // Check window: ±30 minutes around the exact delay target
     const windowMs = 30 * 60 * 1000;
 
+    // Helper: send a re-engagement message to a contact.
+    const sendReEngagement = async (
+      contact: {
+        chatId: string;
+        firstName: string | null;
+        lastName: string | null;
+        username: string | null;
+        lastClientMsgAt: string;
+      },
+      dayLabel: number,
+    ) => {
+      const resolvedName = contact.firstName ?? contact.username ?? null;
+      if (settings.reEngagementNameOnly && !resolvedName) return;
+
+      const baseMessage = this.formatReEngagementMessage(
+        template,
+        contact.firstName,
+        contact.lastName,
+        contact.username,
+      );
+      if (!baseMessage) return;
+
+      const chatKey = `${this.id}:${contact.chatId}`;
+      const message = await this.enhanceReEngagementMessage(baseMessage, chatKey);
+
+      try {
+        await this.callTool("sendMessage", { target: contact.chatId, message });
+        this.trackMessage("out", message, contact.chatId);
+        this.storage.markReEngagementSent(
+          this.id,
+          contact.chatId,
+          dayLabel,
+          contact.lastClientMsgAt,
+        );
+        this.logger.info(
+          `[TG:${this.name}] re-engagement sent | chat=${contact.chatId} day=${dayLabel}`,
+        );
+      } catch (e) {
+        this.logger.warn(
+          `[TG:${this.name}] re-engagement failed | chat=${contact.chatId}: ${String(e)}`,
+        );
+      }
+    };
+
+    // Process each specific day in the range.
     for (const days of delays) {
       const targetMs = days * 24 * 60 * 60 * 1000;
       const windowStart = new Date(now - targetMs - windowMs).toISOString();
@@ -2572,37 +2625,18 @@ export abstract class BaseAgent extends EventEmitter {
         windowStart,
         windowEnd,
       );
-
       for (const contact of contacts) {
-        // Skip if name-only mode and neither firstName nor username is available
-        const resolvedName = contact.firstName ?? contact.username ?? null;
-        if (settings.reEngagementNameOnly && !resolvedName) continue;
+        await sendReEngagement(contact, days);
+      }
+    }
 
-        // Build base message with name substitution (uses username as fallback)
-        const baseMessage = this.formatReEngagementMessage(
-          template,
-          contact.firstName,
-          contact.lastName,
-          contact.username,
-        );
-        if (!baseMessage) continue;
-
-        // AI-enhance the message for personalisation and engagement
-        const chatKey = `${this.id}:${contact.chatId}`;
-        const message = await this.enhanceReEngagementMessage(baseMessage, chatKey);
-
-        try {
-          await this.callTool("sendMessage", { target: contact.chatId, message });
-          this.trackMessage("out", message, contact.chatId);
-          this.storage.markReEngagementSent(this.id, contact.chatId, days, contact.lastClientMsgAt);
-          this.logger.info(
-            `[TG:${this.name}] re-engagement sent | chat=${contact.chatId} day=${days}`,
-          );
-        } catch (e) {
-          this.logger.warn(
-            `[TG:${this.name}] re-engagement failed | chat=${contact.chatId}: ${String(e)}`,
-          );
-        }
+    // "И более": contacts silent for longer than the range end, re-engaged at
+    // most once per `toDay` days (uses delay_days=9999 as dedup marker).
+    if (settings.reEngagementDelayMore) {
+      const moreDay = toDay ?? Math.max(...delays, 1);
+      const contacts = this.storage.getContactsForReEngagementMore(this.id, moreDay);
+      for (const contact of contacts) {
+        await sendReEngagement(contact, 9999);
       }
     }
   }

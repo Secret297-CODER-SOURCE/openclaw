@@ -277,8 +277,21 @@ export interface AgentSettings {
   /**
    * Days-after-last-client-message thresholds at which to send a re-engagement message.
    * Example: [1, 2, 3, 5] sends at day 1, day 2, day 3, and day 5 of silence.
+   * @deprecated prefer reEngagementDelayFrom / reEngagementDelayTo
    */
   reEngagementDelays?: number[];
+
+  /** Start of the silence-range in days (inclusive). Default 1. */
+  reEngagementDelayFrom?: number;
+
+  /** End of the silence-range in days (inclusive). Default 7. */
+  reEngagementDelayTo?: number;
+
+  /**
+   * When true, also send to contacts who have been silent for MORE than
+   * reEngagementDelayTo days (once per contact, after the range ends).
+   */
+  reEngagementDelayMore?: boolean;
 
   /**
    * Message template. Supports placeholders:

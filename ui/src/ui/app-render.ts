@@ -994,6 +994,21 @@ export function renderApp(state: AppViewState) {
                 onSaveAgentSettings: (agentId, settings) => {
                   void saveAgentSettings(state, agentId, settings);
                 },
+                workModePending: state.telegramWorkModePending,
+                onWorkModePatch: (patch) => {
+                  state.telegramWorkModePending = { ...state.telegramWorkModePending, ...patch };
+                },
+                onWorkModeApply: (agentId) => {
+                  if (!state.telegramWorkModePending || !state.telegramAgentSettings) {
+                    return;
+                  }
+                  const merged = {
+                    ...state.telegramAgentSettings,
+                    ...state.telegramWorkModePending,
+                  };
+                  state.telegramWorkModePending = null;
+                  void saveAgentSettings(state, agentId, merged);
+                },
                 onInitLeadsGroup: (agentId: string) => {
                   void saveAgentSettings(
                     state,
