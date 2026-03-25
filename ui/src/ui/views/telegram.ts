@@ -277,6 +277,9 @@ export type TelegramProps = {
     agentId: string,
     settings: import("../controllers/telegram.ts").AgentSettings,
   ) => void;
+  onInitLeadsGroup: (agentId: string) => void;
+  telegramTemplateGenerating: boolean;
+  onGenerateTemplate: (agentId: string) => void;
   // Leads tab
   leads: import("../controllers/telegram.ts").TelegramLead[];
   leadsLoading: boolean;
@@ -817,9 +820,16 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
               </div>
 
               <!-- Template -->
-              <div class="tg-reeng-section-title" style="margin-top:14px;">
-                Шаблон сообщения
+              <div class="tg-reeng-section-title" style="margin-top:14px;display:flex;align-items:center;gap:8px;">
+                <span>Шаблон сообщения</span>
                 <span class="tg-reeng-badge-ai">✨ AI улучшает</span>
+                <button
+                  type="button"
+                  class="btn"
+                  style="font-size:11px;padding:2px 10px;margin-left:auto;"
+                  ?disabled=${props.telegramTemplateGenerating}
+                  @click=${() => props.onGenerateTemplate(agent.id)}
+                >${props.telegramTemplateGenerating ? "⏳ Генерация..." : "✨ Сгенерировать"}</button>
               </div>
               <textarea
                 class="input tg-reeng-textarea"
@@ -831,6 +841,57 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                     reEngagementTemplate: (e.target as HTMLTextAreaElement).value || undefined,
                   })}
               ></textarea>
+
+              <!-- Save template + saved templates list -->
+              <div style="display:flex;gap:8px;margin-top:6px;">
+                <button
+                  type="button"
+                  class="btn"
+                  style="font-size:11px;padding:2px 10px;"
+                  ?disabled=${!settings.reEngagementTemplate}
+                  @click=${() => {
+                    const tpl = settings.reEngagementTemplate;
+                    if (!tpl) {
+                      return;
+                    }
+                    const existing = settings.reEngagementSavedTemplates ?? [];
+                    if (!existing.includes(tpl)) {
+                      saveSettings({ reEngagementSavedTemplates: [...existing, tpl] });
+                    }
+                  }}
+                >💾 Сохранить шаблон</button>
+              </div>
+              ${
+                (settings.reEngagementSavedTemplates ?? []).length > 0
+                  ? html`
+                    <div class="tg-reeng-templates">
+                      ${(settings.reEngagementSavedTemplates ?? []).map(
+                        (tpl) => html`
+                        <div class="tg-reeng-template-item">
+                          <span class="tg-reeng-template-text" title="${tpl}">${tpl}</span>
+                          <button
+                            type="button"
+                            class="tg-reeng-template-select"
+                            @click=${() => saveSettings({ reEngagementTemplate: tpl })}
+                          >← выбрать</button>
+                          <button
+                            type="button"
+                            class="tg-reeng-template-delete"
+                            title="Удалить шаблон"
+                            @click=${() => {
+                              const existing = settings.reEngagementSavedTemplates ?? [];
+                              saveSettings({
+                                reEngagementSavedTemplates: existing.filter((t) => t !== tpl),
+                              });
+                            }}
+                          >🗑</button>
+                        </div>
+                      `,
+                      )}
+                    </div>
+                  `
+                  : nothing
+              }
 
               <!-- Placeholders hint -->
               <div class="tg-reeng-placeholders">
@@ -871,19 +932,50 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
       <div class="tg-setting-row">
         <div class="tg-setting-label">🎯 Группа лидов</div>
         <div class="tg-setting-right">
-          <input
-            type="text"
-            class="input"
-            style="width:100%;max-width:420px;font-size:13px;"
-            placeholder="https://t.me/+xxxx или @groupname"
-            .value=${settings.leadsGroupLink ?? ""}
-            @input=${(e: Event) =>
-              saveSettings({
-                leadsGroupLink: (e.target as HTMLInputElement).value.trim() || undefined,
-              })}
-          />
+          <div style="display:flex;gap:8px;align-items:center;width:100%;max-width:520px;">
+            <input
+              type="text"
+              class="input"
+              style="flex:1;font-size:13px;"
+              placeholder="https://t.me/+xxxx или @groupname"
+              .value=${settings.leadsGroupLink ?? ""}
+              @input=${(e: Event) => {
+                // Local update only — saved when button is clicked
+                (e.target as HTMLInputElement).dataset["pendingValue"] = (
+                  e.target as HTMLInputElement
+                ).value;
+              }}
+              @change=${(e: Event) => {
+                (e.target as HTMLInputElement).dataset["pendingValue"] = (
+                  e.target as HTMLInputElement
+                ).value;
+              }}
+              id="leads-group-input-${agent.id}"
+            />
+            <button
+              type="button"
+              class="btn btn-primary"
+              style="white-space:nowrap;font-size:12px;"
+              @click=${() => {
+                const input = document.getElementById(
+                  `leads-group-input-${agent.id}`,
+                ) as HTMLInputElement | null;
+                const val = (input?.value ?? "").trim() || undefined;
+                saveSettings({ leadsGroupLink: val });
+                if (val) {
+                  props.onInitLeadsGroup(agent.id);
+                }
+              }}
+            >💾 Сохранить и подключить</button>
+          </div>
+          ${
+            settings.leadsGroupLink
+              ? html`<div class="tg-setting-hint" style="color:var(--ok,#4caf50);margin-top:4px;">✓ Подключено: ${settings.leadsGroupLink}</div>`
+              : nothing
+          }
           <div class="tg-setting-hint">
-            Агент будет автоматически отправлять карточку лида в эту группу/канал при каждом новом контакте.
+            Агент вступит в группу и отправит приветственное сообщение при первом подключении.
+            Карточки лидов будут автоматически публиковаться при каждом новом контакте.
             Работает с закрытыми группами (ссылка-приглашение) и публичными (<code style="background:var(--bg-muted);padding:1px 4px;border-radius:3px;">@username</code>).
           </div>
         </div>

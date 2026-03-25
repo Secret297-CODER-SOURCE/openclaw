@@ -948,6 +948,23 @@ export class TelegramStorage {
       .run(agentId, chatId, delayDays, periodRef, new Date().toISOString());
   }
 
+  /**
+   * Returns true if a re-engagement message was sent to this chat within the
+   * last `withinDays` days. Used to decide whether to respond to incoming
+   * messages in "silent" offline mode.
+   */
+  wasRecentlyReEngaged(agentId: string, chatId: string, withinDays: number): boolean {
+    const since = new Date(Date.now() - withinDays * 24 * 60 * 60 * 1000).toISOString();
+    const row = this.db
+      .prepare(
+        `SELECT 1 FROM tg_reengagement
+         WHERE agent_id = ? AND chat_id = ? AND sent_at >= ?
+         LIMIT 1`,
+      )
+      .get(agentId, chatId, since);
+    return !!row;
+  }
+
   // ─── Follow-up queue ─────────────────────────────────────────────────────
 
   /** Save a scheduled follow-up message to the queue. */

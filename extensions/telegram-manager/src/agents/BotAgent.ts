@@ -50,6 +50,7 @@ export class BotAgent extends BaseAgent {
       await this.registerBehaviors(this.record.behaviors);
       this.setupBaseHandlers();
       this.restorePendingFollowups();
+      void this.initLeadsGroup();
       this.startReEngagementCron();
 
       this.bot
@@ -261,6 +262,9 @@ export class BotAgent extends BaseAgent {
   }
 
   private async handleText(ctx: Context) {
+    // Never reply to other bots.
+    if (ctx.from?.is_bot) return;
+
     const text = ctx.message?.text ?? "";
     const chatId = String(ctx.chat?.id ?? "");
     this.trackMessage("in", text, chatId);
@@ -372,7 +376,30 @@ export class BotAgent extends BaseAgent {
         } catch (e) {
           this.logger.warn(`[TG:${this.name}] offline-lead reply failed: ${String(e)}`);
         }
+      } else if (this.isReEngagementReply(chatId, agentSettings)) {
+        // Silent mode, but this contact replied to our re-engagement message —
+        // continue the conversation so the outreach doesn't go to waste.
+        try {
+          await ctx.replyWithChatAction("typing");
+          const diagram = agentSettings.activeDiagramId
+            ? (this.storage.getDiagramById(agentSettings.activeDiagramId) ?? undefined)
+            : undefined;
+          const reply = await this.runOfflineLeadMode(
+            chatId,
+            text,
+            chatKey,
+            agentSettings,
+            diagram,
+          );
+          if (reply) {
+            await ctx.reply(reply);
+            this.trackMessage("out", reply, chatId);
+          }
+        } catch (e) {
+          this.logger.warn(`[TG:${this.name}] re-engagement reply failed: ${String(e)}`);
+        }
       }
+      // All other contacts: stay silent (Молчать mode).
       return;
     }
 

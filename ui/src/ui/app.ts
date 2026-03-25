@@ -317,6 +317,7 @@ export class OpenClawApp extends LitElement {
   @state() telegramAgentSettings: import("./controllers/telegram.ts").AgentSettings | null = null;
   @state() telegramAgentSettingsLoading = false;
   @state() telegramAgentSettingsSaving = false;
+  @state() telegramTemplateGenerating = false;
   @state() telegramTrainingPairs: import("./controllers/telegram.ts").TrainingPair[] = [];
   @state() telegramTrainingGroups: import("./controllers/telegram.ts").TrainingGroup[] = [];
   @state() telegramTrainingGroupsLimit = 100;

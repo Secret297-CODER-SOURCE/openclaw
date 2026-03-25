@@ -126,6 +126,8 @@ const TELEGRAM_METHODS = [
   "telegram.leads.list",
   "telegram.leads.save",
   "telegram.leads.delete",
+  "telegram.agent.initLeadsGroup",
+  "telegram.agent.generateReEngagementTemplate",
 ] as const;
 
 const plugin = {

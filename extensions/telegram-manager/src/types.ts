@@ -266,6 +266,9 @@ export interface AgentSettings {
    */
   leadsGroupLink?: string;
 
+  /** Links that have already received the one-time welcome message. */
+  leadsGroupWelcomedLinks?: string[];
+
   // ── Re-engagement (cold outreach to dormant contacts) ──────────────────────
 
   /** When true, the agent periodically writes to contacts who haven't replied in N days. */
@@ -288,6 +291,9 @@ export interface AgentSettings {
 
   /** When true, only send re-engagement if the contact's first name is known. */
   reEngagementNameOnly?: boolean;
+
+  /** Previously saved re-engagement templates the user can pick from. */
+  reEngagementSavedTemplates?: string[];
 }
 
 // ─── Lead record ──────────────────────────────────────────────────────────────

@@ -801,6 +801,21 @@ export type AgentSettings = {
    * When false/absent: standard AI generation with KB context (flexible).
    */
   schemaStrictMode?: boolean;
+  // ── Re-engagement ───────────────────────────────────────────────────────────
+  reEngagementEnabled?: boolean;
+  reEngagementDelays?: number[];
+  reEngagementTemplate?: string;
+  reEngagementNameOnly?: boolean;
+  /** Previously saved re-engagement templates the user can pick from. */
+  reEngagementSavedTemplates?: string[];
+  // ── Leads group ─────────────────────────────────────────────────────────────
+  leadsGroupLink?: string;
+  leadsGroupWelcomedLinks?: string[];
+  // ── Offline mode ────────────────────────────────────────────────────────────
+  offlineReplyEnabled?: boolean;
+  offlineReplyTemplate?: string;
+  managerWorkFrom?: string;
+  managerWorkTo?: string;
 };
 
 // ─── Scenario controller ──────────────────────────────────────────────────────
@@ -2743,6 +2758,33 @@ export async function saveAgentSettings(
     // non-fatal
   } finally {
     state.telegramAgentSettingsSaving = false;
+  }
+}
+
+/** Join leads group and send one-time welcome message. */
+export async function initLeadsGroup(state: TelegramScenarioState, agentId: string): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  await state.client!.request("telegram.agent.initLeadsGroup", { agentId }).catch(() => {});
+}
+
+/** AI-generate a re-engagement template. Returns the template string or null on error. */
+export async function generateReEngagementTemplate(
+  state: TelegramScenarioState,
+  agentId: string,
+): Promise<string | null> {
+  if (!isReady(state)) {
+    return null;
+  }
+  try {
+    const result = await state.client!.request<{ template: string }>(
+      "telegram.agent.generateReEngagementTemplate",
+      { agentId },
+    );
+    return result.template ?? null;
+  } catch {
+    return null;
   }
 }
 

@@ -170,6 +170,133 @@ export class UserBotAgent extends BaseAgent {
     }
   }
 
+  // ── AI folder (Telegram dialog filter) ────────────────────────────────────
+
+  /** In-memory cache: filter ID of the "AI" folder, null = not yet created. */
+  private aiFolderFilterId: number | null = null;
+
+  /**
+   * Ensure the "AI" Telegram folder (dialog filter) exists.
+   * Creates it if absent, caches its ID for subsequent peer additions.
+   * Called once on registerBehaviors — silently no-ops on error.
+   */
+  private async initAiFolder(): Promise<void> {
+    const c = this.client;
+    if (!c) return;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const tl = require("telegram/tl") as any;
+      const result = await c.invoke(new tl.functions.messages.GetDialogFilters());
+      const filters: any[] = Array.isArray(result) ? result : ((result as any).filters ?? []);
+
+      // Find existing "AI" folder.
+      const existing = filters.find(
+        (f: any) => f.className === "DialogFilter" && f.title?.trim() === "AI",
+      );
+      if (existing) {
+        this.aiFolderFilterId = existing.id as number;
+        this.logger.info(`[TG:${this.name}] AI folder found (id=${existing.id})`);
+        return;
+      }
+
+      // Pick an unused filter ID in the 2–255 range.
+      const usedIds = new Set<number>(filters.map((f: any) => f.id as number));
+      let newId = 2;
+      while (usedIds.has(newId) && newId < 255) newId++;
+
+      await c.invoke(
+        new tl.functions.messages.UpdateDialogFilter({
+          id: newId,
+          filter: new tl.types.DialogFilter({
+            id: newId,
+            title: "AI",
+            pinnedPeers: [],
+            includedPeers: [],
+            excludedPeers: [],
+            contacts: false,
+            nonContacts: false,
+            groups: false,
+            broadcasts: false,
+            bots: false,
+            excludeArchived: false,
+            excludeMuted: false,
+            excludeRead: false,
+          }),
+        }),
+      );
+      this.aiFolderFilterId = newId;
+      this.logger.info(`[TG:${this.name}] AI folder created (id=${newId})`);
+    } catch (e) {
+      this.logger.warn(`[TG:${this.name}] initAiFolder failed: ${String(e)}`);
+    }
+  }
+
+  /**
+   * Add a chat to the "AI" folder if it isn't already there.
+   * Reads the current filter, appends the peer, and writes it back.
+   * Silently no-ops on any error.
+   */
+  private async addChatToAiFolder(chatId: string): Promise<void> {
+    const c = this.client;
+    if (!c || this.aiFolderFilterId === null) return;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const tl = require("telegram/tl") as any;
+      const result = await c.invoke(new tl.functions.messages.GetDialogFilters());
+      const filters: any[] = Array.isArray(result) ? result : ((result as any).filters ?? []);
+
+      const filter = filters.find(
+        (f: any) => f.className === "DialogFilter" && f.id === this.aiFolderFilterId,
+      );
+      if (!filter) return; // folder was deleted externally
+
+      // Resolve the InputPeer for this chatId.
+      let inputPeer: any;
+      try {
+        inputPeer = await c.getInputEntity(chatId);
+      } catch {
+        return; // cannot resolve peer, skip silently
+      }
+
+      // Check if already in the folder (compare serialised peer).
+      const included: any[] = filter.includedPeers ?? [];
+      const alreadyIn = included.some(
+        (p: any) => String(p.userId ?? p.channelId ?? p.chatId ?? "") === String(chatId),
+      );
+      if (alreadyIn) return;
+
+      // Append and update.
+      await c.invoke(
+        new tl.functions.messages.UpdateDialogFilter({
+          id: this.aiFolderFilterId,
+          filter: new tl.types.DialogFilter({
+            id: filter.id,
+            title: filter.title,
+            pinnedPeers: filter.pinnedPeers ?? [],
+            includedPeers: [...included, inputPeer],
+            excludedPeers: filter.excludedPeers ?? [],
+            contacts: filter.contacts ?? false,
+            nonContacts: filter.nonContacts ?? false,
+            groups: filter.groups ?? false,
+            broadcasts: filter.broadcasts ?? false,
+            bots: filter.bots ?? false,
+            excludeArchived: filter.excludeArchived ?? false,
+            excludeMuted: filter.excludeMuted ?? false,
+            excludeRead: filter.excludeRead ?? false,
+          }),
+        }),
+      );
+      this.logger.info(`[TG:${this.name}] chat ${chatId} added to AI folder`);
+    } catch (e) {
+      this.logger.warn(`[TG:${this.name}] addChatToAiFolder failed: ${String(e)}`);
+    }
+  }
+
+  /** Hook: called by BaseAgent.trackMessage on every outgoing message. */
+  protected override onOutgoingMessage(chatId: string): void {
+    void this.addChatToAiFolder(chatId);
+  }
+
   // --- Lifecycle ------------------------------------------------------------
 
   async start(): Promise<void> {
@@ -566,6 +693,10 @@ export class UserBotAgent extends BaseAgent {
     this.setupInactivityFollowup();
     // Restore any scheduled follow-ups that survived a gateway restart.
     this.restorePendingFollowups();
+    // Initialize leads group (join + one-time welcome) if configured.
+    void this.initLeadsGroup();
+    // Create or find the "AI" Telegram folder for chats the agent works with.
+    void this.initAiFolder();
     // Start periodic re-engagement outreach to dormant contacts.
     this.startReEngagementCron();
     for (const b of behaviors) {
@@ -594,6 +725,8 @@ export class UserBotAgent extends BaseAgent {
       async (event: any) => {
         const msg = event.message;
         if (!msg || msg.out) return;
+        // Never reply to other bots (gramjs User.bot flag).
+        if ((msg as any).sender?.bot) return;
         const chatId = String(msg.chatId || "");
 
         // Skip master_control chats — handled by setupMasterControl.
@@ -624,9 +757,14 @@ export class UserBotAgent extends BaseAgent {
         const text = msg.message || "";
         if (!text) return;
 
-        // Outside schedule: AI continues lead-processing in offline mode.
+        // Outside schedule: AI continues lead-processing in offline mode,
+        // OR silent mode but this chat replied to a re-engagement message.
         if (!this.isWithinSchedule(agentSettings)) {
-          if (this.isOfflineLeadMode(agentSettings)) {
+          const shouldReply =
+            this.isOfflineLeadMode(agentSettings) ||
+            this.isReEngagementReply(chatId, agentSettings);
+
+          if (shouldReply) {
             const key = `${this.id}:${chatId}`;
             const msgKey = `${this.id}:${chatId}:${msg.id}`;
             if (processedMsgIds.has(msgKey)) return;
@@ -649,10 +787,13 @@ export class UserBotAgent extends BaseAgent {
                   this.trackMessage("out", reply, chatId);
                 }
               } catch (e) {
-                this.logger.warn(`[TG:${this.name}] offline-lead (schema) failed: ${String(e)}`);
+                this.logger.warn(
+                  `[TG:${this.name}] offline-lead/re-engagement reply failed: ${String(e)}`,
+                );
               }
             });
           }
+          // All other contacts: stay silent.
           return;
         }
 
@@ -761,6 +902,8 @@ export class UserBotAgent extends BaseAgent {
       async (event: any) => {
         const msg = event.message;
         if (!msg || msg.out) return;
+        // Never reply to other bots.
+        if ((msg as any).sender?.bot) return;
         const chatId = String(msg.chatId || "");
 
         // Skip master_control authorized chats — handled by setupMasterControl.
@@ -865,6 +1008,8 @@ export class UserBotAgent extends BaseAgent {
       async (event: any) => {
         const msg = event.message;
         if (!msg || msg.out) return;
+        // Never reply to other bots.
+        if ((msg as any).sender?.bot) return;
         const text = msg.message || "";
         const chatId = String(msg.chatId || "");
         // Skip master_control authorized chats and active task sessions.
@@ -896,9 +1041,14 @@ export class UserBotAgent extends BaseAgent {
           /* will fall back to BigInt in sendWithFloodGuard */
         }
 
-        // Outside schedule: AI continues lead-processing in offline mode.
+        // Outside schedule: AI continues lead-processing in offline mode,
+        // OR silent mode but this chat replied to a re-engagement message.
         if (!this.isWithinSchedule(agentSettings)) {
-          if (this.isOfflineLeadMode(agentSettings)) {
+          const shouldReply2 =
+            this.isOfflineLeadMode(agentSettings) ||
+            this.isReEngagementReply(chatId, agentSettings);
+
+          if (shouldReply2) {
             const msgKey2 = `${this.id}:${chatId}:${msg.id}`;
             if (processedMsgIds.has(msgKey2)) return;
             processedMsgIds.add(msgKey2);
@@ -922,11 +1072,12 @@ export class UserBotAgent extends BaseAgent {
                 }
               } catch (e) {
                 this.logger.warn(
-                  `[TG:${this.name}] offline-lead (auto_reply) failed: ${String(e)}`,
+                  `[TG:${this.name}] offline-lead/re-engagement (auto_reply) failed: ${String(e)}`,
                 );
               }
             });
           }
+          // All other contacts: stay silent.
           return;
         }
 

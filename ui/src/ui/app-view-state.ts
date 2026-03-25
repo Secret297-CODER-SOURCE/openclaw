@@ -238,6 +238,8 @@ export type AppViewState = {
   telegramAgentSettings: import("./controllers/telegram.ts").AgentSettings | null;
   telegramAgentSettingsLoading: boolean;
   telegramAgentSettingsSaving: boolean;
+  /** Whether an AI re-engagement template generation is in progress. */
+  telegramTemplateGenerating: boolean;
   telegramTrainingPairs: import("./controllers/telegram.ts").TrainingPair[];
   telegramTrainingGroups: import("./controllers/telegram.ts").TrainingGroup[];
   telegramTrainingGroupsLimit: number;

@@ -112,6 +112,8 @@ import {
   loadCoachingTips,
   loadAgentSettings,
   saveAgentSettings,
+  initLeadsGroup,
+  generateReEngagementTemplate,
   buildFlatPairs,
   applyTrainingEditorSave,
   loadWebchatDialogs,
@@ -991,6 +993,35 @@ export function renderApp(state: AppViewState) {
                 agentSettingsSaving: state.telegramAgentSettingsSaving,
                 onSaveAgentSettings: (agentId, settings) => {
                   void saveAgentSettings(state, agentId, settings);
+                },
+                onInitLeadsGroup: (agentId: string) => {
+                  void saveAgentSettings(
+                    state,
+                    agentId,
+                    state.telegramAgentSettings ?? {
+                      useSchema: false,
+                      scheduleMode: "always",
+                      replyTo: "all",
+                    },
+                  ).then(() => initLeadsGroup(state, agentId));
+                },
+                telegramTemplateGenerating: state.telegramTemplateGenerating,
+                onGenerateTemplate: (agentId: string) => {
+                  state.telegramTemplateGenerating = true;
+                  generateReEngagementTemplate(state, agentId)
+                    .then((t) => {
+                      state.telegramTemplateGenerating = false;
+                      if (t && state.telegramAgentSettings) {
+                        state.telegramAgentSettings = {
+                          ...state.telegramAgentSettings,
+                          reEngagementTemplate: t,
+                        };
+                        void saveAgentSettings(state, agentId, state.telegramAgentSettings);
+                      }
+                    })
+                    .catch(() => {
+                      state.telegramTemplateGenerating = false;
+                    });
                 },
                 trainingPairs: state.telegramTrainingPairs,
                 trainingGroups: state.telegramTrainingGroups,

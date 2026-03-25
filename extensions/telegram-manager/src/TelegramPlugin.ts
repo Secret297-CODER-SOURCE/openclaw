@@ -240,25 +240,65 @@ export class TelegramPlugin implements GatewayPlugin {
             fail("invalid replyTo");
             break;
           }
+          // Merge with existing settings — preserves all fields including new ones
+          const existing = this.storage.getAgentSettings(String(p.agentId));
           const settings: AgentSettings = {
-            useSchema: Boolean(incoming.useSchema),
+            ...existing,
+            ...(incoming as Partial<AgentSettings>),
             scheduleMode,
             replyTo,
-            ...(incoming.activeDiagramId
-              ? { activeDiagramId: String(incoming.activeDiagramId) }
-              : {}),
-            ...(incoming.scheduleFrom !== undefined
-              ? { scheduleFrom: String(incoming.scheduleFrom) }
-              : {}),
-            ...(incoming.scheduleTo !== undefined
-              ? { scheduleTo: String(incoming.scheduleTo) }
-              : {}),
-            ...(incoming.schemaStrictMode !== undefined
-              ? { schemaStrictMode: Boolean(incoming.schemaStrictMode) }
-              : {}),
           };
           this.storage.saveAgentSettings(String(p.agentId), settings);
           respond({ ok: true, settings });
+          break;
+        }
+
+        case "telegram.agent.initLeadsGroup": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          const agent = (this.manager as any).pool?.get(String(p.agentId));
+          if (!agent) {
+            fail("agent not found or not running");
+            break;
+          }
+          await (agent as any).initLeadsGroup();
+          respond({ ok: true });
+          break;
+        }
+
+        case "telegram.agent.generateReEngagementTemplate": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          const agentRecord = this.manager.get(String(p.agentId));
+          const agentName = agentRecord?.name ?? "AI-менеджер";
+
+          const systemPrompt =
+            "Ты эксперт по продажам и копирайтингу. Создай короткий, живой и цепляющий шаблон " +
+            "сообщения для реактивации клиента, который давно молчал. " +
+            "Шаблон должен: быть персонализированным (используй плейсхолдер {имя}), " +
+            "создавать срочность или интерес, быть 1-2 предложения максимум, " +
+            "содержать эмодзи для оживления. " +
+            "Отвечай ТОЛЬКО текстом шаблона, без кавычек, без пояснений, без markdown.";
+
+          const userPrompt =
+            `Агент называется: ${agentName}\n` +
+            `Создай цепляющий шаблон реактивации. Используй плейсхолдер {имя} в начале.\n` +
+            `Примеры хороших шаблонов:\n` +
+            `- "Привет {имя}! 🔥 Горит сделка с профитом 37%, последние места — ты с нами?"\n` +
+            `- "{имя}, привет! Помнишь наш разговор? Сегодня особые условия — только сегодня 🎯"\n` +
+            `- "Эй {имя}! Пока ты думал, 5 человек уже зашли 💸 Успеваешь?"`;
+
+          try {
+            const template = await callAdapterOnce(userPrompt, systemPrompt);
+            const cleaned = template.replace(/^["«»']+|["«»']+$/g, "").trim();
+            respond({ template: cleaned });
+          } catch (e) {
+            fail(`AI generation failed: ${String(e)}`);
+          }
           break;
         }
 

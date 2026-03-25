@@ -155,6 +155,24 @@ export abstract class BaseAgent extends EventEmitter {
   }
 
   /**
+   * Returns true when the agent is in "silent" offline mode (offlineReplyEnabled
+   * is false / not set) BUT re-engagement is active AND this specific chat
+   * recently received a re-engagement message from us.
+   *
+   * In this case we should reply to keep the conversation alive — the whole
+   * point of re-engagement is to get a response and then handle it.
+   */
+  protected isReEngagementReply(chatId: string, settings: AgentSettings): boolean {
+    if (!settings.reEngagementEnabled) return false;
+    // Already handled by offline lead mode — no need to double-handle.
+    if (settings.offlineReplyEnabled) return false;
+    // Look back max delay + 7-day buffer so slow replies still get handled.
+    const delays = settings.reEngagementDelays ?? [1, 2, 3, 5];
+    const maxDays = Math.max(...delays) + 7;
+    return this.storage.wasRecentlyReEngaged(this.id, chatId, maxDays);
+  }
+
+  /**
    * AI-driven offline mode: the manager is unavailable, but the AI continues
    * chatting, qualifies the lead, and collects a convenient callback time.
    *
@@ -190,6 +208,32 @@ export abstract class BaseAgent extends EventEmitter {
     // Manager working hours: explicit fields take priority, fallback to schedule times.
     const from = settings.managerWorkFrom ?? settings.scheduleFrom ?? "?";
     const to = settings.managerWorkTo ?? settings.scheduleTo ?? "?";
+
+    // Check if right now falls within manager working hours so the AI can offer
+    // a call today vs. "завтра" (tomorrow only when outside hours).
+    const toMinutes = (hhmm: string): number => {
+      const [h, m] = hhmm.split(":").map(Number);
+      return (h ?? 0) * 60 + (m ?? 0);
+    };
+    const now = new Date();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    const isWithinManagerHours =
+      from !== "?" && to !== "?" ? nowMin >= toMinutes(from) && nowMin < toMinutes(to) : false;
+
+    // When within hours: propose the nearest 30-min slot from now.
+    // When outside hours: propose 30 min after opening (not the very edge of the window).
+    const proposalTimeWithin = (() => {
+      const slot = Math.ceil((nowMin + 15) / 30) * 30; // round up to next 30-min
+      const h = Math.floor(slot / 60);
+      const m = slot % 60;
+      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    })();
+    const proposalTimeOutside = (() => {
+      if (from === "?") return "10:00";
+      const [h] = from.split(":").map(Number);
+      const mid = (h ?? 10) + 1;
+      return `${String(mid).padStart(2, "0")}:00`;
+    })();
 
     // Custom task instructions from settings (optional), placeholders replaced.
     const customTask = settings.offlineReplyTemplate
@@ -252,13 +296,8 @@ export abstract class BaseAgent extends EventEmitter {
       (m) => m.role === "user" && timeRegex.test(m.content),
     );
 
-    // Propose middle of the work window as the default (not the very start)
-    const proposalTime = (() => {
-      if (from === "?") return "10:00";
-      const [h] = from.split(":").map(Number);
-      const mid = h + 1; // one hour after opening
-      return `${String(mid).padStart(2, "0")}:00`;
-    })();
+    // Alias: use within-hours slot if manager is available now, otherwise next-day slot.
+    const proposalTime = isWithinManagerHours ? proposalTimeWithin : proposalTimeOutside;
 
     // Last few agent replies to prevent repeating the same phrasing
     const lastAgentReplies = recentHistory
@@ -268,35 +307,67 @@ export abstract class BaseAgent extends EventEmitter {
       .join(" | ");
 
     // ── Determine what to do about scheduling ────────────────────────────────
+    // "Tomorrow" phrasing depends on whether manager is working right now.
+    // Within hours → call can happen today; outside → strictly tomorrow within window.
+    const callWhen = isWithinManagerHours
+      ? `сегодня (рабочее время до ${to})`
+      : `завтра с ${from} до ${to}`;
+    const callWhenShort = isWithinManagerHours
+      ? `сегодня в ${proposalTime}`
+      : `завтра в ${proposalTime}`;
+
+    // All instructions use first person — the agent IS the manager on the same account.
     let callbackInstruction: string;
     if (timeAgreed) {
       const agreedTime = lastAgentWithTime!.content.match(timeRegex)?.[0] ?? proposalTime;
+      const whenLabel = isWithinManagerHours ? "сегодня" : "завтра";
       callbackInstruction =
-        `ВРЕМЯ ДОГОВОРЕНО (${agreedTime}). Подтверди одной фразой: ` +
-        `«Договорились! Менеджер позвонит вам завтра в ${agreedTime} 👍» — и тепло заверши разговор. ` +
-        `Больше не возвращайся к теме звонка.`;
+        `ВРЕМЯ ДОГОВОРЕНО (${agreedTime}). Подтверди одной фразой от первого лица: ` +
+        `«Договорились, позвоню тебе ${whenLabel} в ${agreedTime} 👍» — и тепло заверши разговор. ` +
+        `Больше не возвращайся к теме звонка. НЕ говори "менеджер".`;
     } else if (clientMentionedTime && !timeProposed) {
+      const strictWindow =
+        from !== "?" && to !== "?"
+          ? `Моё доступное время для звонка: строго с ${from} до ${to}${isWithinManagerHours ? " сегодня" : " завтра"}. ` +
+            `Если клиент назвал время вне этого окна — вежливо поправь: ` +
+            `«Я работаю с ${from} до ${to}, давай запишемся на [ближайшее время в этом окне]?»`
+          : "";
       callbackInstruction =
-        `Клиент сам назвал время — прими без лишних слов: ` +
-        `«Отлично, запишу! Менеджер свяжется с вами в [время]» и продолжи разговор.`;
+        `Клиент сам назвал время. ${strictWindow} ` +
+        `Прими (или скорректируй) и подтверди от первого лица: «Отлично, записал! Позвоню в [время]».`;
     } else if (timeProposed) {
       callbackInstruction =
-        `Время уже предложено, ответа нет. Не навязывай — сначала ответь по существу, ` +
-        `затем мягко: «Кстати, то время вам ещё актуально, или скорректируем?»`;
-    } else if (interestLevel === "high" || turnCount >= 3) {
-      // Client is engaged — time to propose a call naturally
+        `Время уже предложено (${callWhenShort}), ответа нет. Не навязывай — сначала ответь по существу, ` +
+        `затем мягко: «Кстати, то время тебе ещё актуально, или скорректируем?»`;
+    } else if (isWithinManagerHours && (interestLevel === "high" || turnCount >= 3)) {
       callbackInstruction =
-        `Интерес клиента высокий. Предложи звонок органично, в конце ответа: ` +
-        `«Давайте созвонимся с менеджером завтра в ${proposalTime}? Обсудим детали — ` +
-        `займёт 10 минут. Удобно?» НЕ задавай открытый вопрос про время.`;
+        `🟢 Сейчас рабочее время (до ${to}). Интерес клиента высокий — предложи созвон СЕГОДНЯ от первого лица: ` +
+        `«Кстати, я сейчас свободен — давай созвонимся в ${proposalTime}? Обсудим детали, ` +
+        `минут 10 займёт. Удобно?» НЕ говори "завтра", НЕ упоминай "менеджер".`;
+    } else if (!isWithinManagerHours && (interestLevel === "high" || turnCount >= 3)) {
+      callbackInstruction =
+        `🔴 Сейчас нерабочее время. Предложи созвон ЗАВТРА строго в окне ${from}–${to} от первого лица: ` +
+        `«Давай созвонимся завтра в ${proposalTime}? Обсудим детали — минут 10. Удобно?» ` +
+        `НЕЛЬЗЯ предлагать время вне диапазона ${from}–${to}. НЕЛЬЗЯ говорить "сейчас". НЕ говори "менеджер".`;
     } else {
-      // First exchanges — build interest first, don't rush to scheduling
+      const whenHint = isWithinManagerHours
+        ? `Если разговор идёт хорошо, можно упомянуть что ты доступен сегодня до ${to}.`
+        : `Если разговор идёт хорошо, можно упомянуть созвон завтра (строго с ${from} до ${to}).`;
       callbackInstruction =
-        `Диалог только начался (${turnCount} реплики). Главная задача — заинтересовать. ` +
-        `НЕ предлагай звонок прямо сейчас — сначала покажи ценность. ` +
-        `Если разговор идёт хорошо, в конце можно упомянуть: «Если хотите подробнее — ` +
-        `могу договориться о звонке с менеджером».`;
+        `Диалог только начался (${turnCount} реплик). Главная задача — заинтересовать. ` +
+        `НЕ предлагай созвон прямо сейчас — сначала покажи ценность. ${whenHint}`;
     }
+
+    // Safety reminder injected into the prompt to enforce schedule and first-person voice.
+    const hoursGuard =
+      from !== "?" && to !== "?"
+        ? `СТРОГО: я доступен для звонков только ${callWhen}. ` +
+          `Никогда не предлагай время вне диапазона ${from}–${to}. ` +
+          `Всегда говори от первого лица ("я", "позвоню", "созвонимся") — никогда "менеджер". ` +
+          (isWithinManagerHours
+            ? `Я работаю СЕЙЧАС — не говори "завтра" если клиент готов созвониться сегодня.`
+            : `Сейчас нерабочее время — не говори что я доступен прямо сейчас.`)
+        : "";
 
     // ── Objection-handling context ────────────────────────────────────────────
     const objectionContext =
@@ -312,10 +383,15 @@ export abstract class BaseAgent extends EventEmitter {
           `→ Клиент заинтересован — развивай тему, конкретизируй выгоды.\n\n`
         : "";
 
+    // The agent IS the manager — same account, first-person throughout.
+    const workStatusLine = isWithinManagerHours
+      ? `🟢 Сейчас рабочее время (${from}–${to}). Ты доступен — можешь выйти на звонок сегодня.`
+      : `🔴 Сейчас нерабочее время. Ты доступен для звонков завтра с ${from} до ${to}.`;
+
     const systemPrompt =
-      `Ты — ${agentDisplayName}, опытный менеджер по продажам. НЕ бот, НЕ ИИ — живой человек.\n` +
-      `Сейчас нерабочее время. Менеджер доступен для звонков с ${from} до ${to}.\n` +
-      `Ты ведёшь переписку самостоятельно и профессионально — как лучший продажник компании.\n\n` +
+      `Ты — ${agentDisplayName}, менеджер по продажам. Это ТВОЙ личный аккаунт Telegram — ты и есть тот человек, с кем клиент общается. НЕ бот, НЕ ИИ.\n` +
+      `${workStatusLine}\n` +
+      `Говори от первого лица: "я позвоню", "я свободен", "давай созвонимся" — НЕ "менеджер позвонит", НЕ "менеджер свяжется".\n\n` +
       (topicContext ? `## Продукт / услуга (темы для разговора):\n${topicContext}\n\n` : "") +
       objectionContext +
       signalContext +
@@ -329,9 +405,13 @@ export abstract class BaseAgent extends EventEmitter {
       `• Будь уверен, дружелюбен, без навязчивости. Задавай максимум ОДИН вопрос за раз.\n` +
       `• Уровень интереса клиента сейчас: ${interestLevel === "high" ? "🔥 высокий" : interestLevel === "medium" ? "🟡 средний" : "❄️ низкий"}.\n\n` +
       `## СЛЕДУЮЩИЙ ШАГ (звонок):\n${callbackInstruction}\n` +
+      (hoursGuard ? `\n## РАСПИСАНИЕ (строго соблюдать):\n${hoursGuard}\n` : "") +
       (customTask ? `\n## Доп. инструкции от компании:\n${customTask}\n` : "") +
       `\n## СТРОГО ЗАПРЕЩЕНО:\n` +
-      `• Говорить что менеджер сейчас онлайн или перезвонит прямо сейчас\n` +
+      (isWithinManagerHours
+        ? `• Говорить что ты недоступен или предлагать только завтра — ты работаешь СЕЙЧАС\n`
+        : `• Говорить что ты сейчас онлайн или можешь позвонить прямо сейчас\n`) +
+      `• Использовать слово "менеджер" в третьем лице — ты и есть менеджер, говори "я"\n` +
       `• Давать телефонные номера клиенту\n` +
       `• Раскрывать что ты ИИ или бот\n` +
       `• Повторять фразы из последних ответов: "${lastAgentReplies.slice(0, 150)}"\n` +
@@ -708,6 +788,18 @@ export abstract class BaseAgent extends EventEmitter {
       text: text.slice(0, 500),
       chat,
     });
+    // Hook for subclasses — called on every outgoing message with a known chatId.
+    if (direction === "out" && chat) {
+      this.onOutgoingMessage(chat);
+    }
+  }
+
+  /**
+   * Called whenever the agent sends a message to a chat.
+   * Subclasses can override to perform side effects (e.g. folder management).
+   */
+  protected onOutgoingMessage(_chatId: string): void {
+    // no-op in base class
   }
 
   protected shouldAutoReply(cfg: AutoReplyBehavior, text: string, chatId?: string): boolean {
@@ -2529,6 +2621,47 @@ export abstract class BaseAgent extends EventEmitter {
       this.scheduleFollowupTimer(f.id, f.chatId, f.chatKey, delayMs);
     }
     this.logger.info(`[TG:${this.name}] restored ${pending.length} pending follow-up(s)`);
+  }
+
+  /**
+   * Join the configured leads group and send a one-time welcome message.
+   * Idempotent — tracks welcomed links in settings so it won't repeat on restart.
+   * Called on agent start and when the group link is first configured.
+   */
+  public async initLeadsGroup(): Promise<void> {
+    const settings = this.getAgentSettings();
+    const groupLink = settings.leadsGroupLink?.trim();
+    if (!groupLink) return;
+
+    const welcomed = settings.leadsGroupWelcomedLinks ?? [];
+    if (welcomed.includes(groupLink)) return; // Already initialized
+
+    try {
+      // Try to join first (succeeds for UserBot; Bot agents will fail silently)
+      try {
+        await this.callTool("joinChat", { target: groupLink });
+        this.logger.info(`[TG:${this.name}] joined leads group: ${groupLink}`);
+      } catch {
+        // Bot agents don't have joinChat — silently continue
+      }
+
+      const welcomeMessage =
+        `👋 Привет! Я — AI-менеджер *${this.name}*.\n\n` +
+        `Буду автоматически отправлять сюда карточки новых лидов 🎯\n\n` +
+        `Канал готов к работе — жду первых контактов!`;
+
+      await this.callTool("sendMessage", { target: groupLink, message: welcomeMessage });
+
+      // Mark as welcomed so we don't repeat on restart
+      const updatedSettings = {
+        ...settings,
+        leadsGroupWelcomedLinks: [...welcomed, groupLink],
+      };
+      this.storage.saveAgentSettings(this.id, updatedSettings);
+      this.logger.info(`[TG:${this.name}] leads group welcome sent: ${groupLink}`);
+    } catch (e) {
+      this.logger.warn(`[TG:${this.name}] initLeadsGroup failed: ${String(e)}`);
+    }
   }
 
   /**
