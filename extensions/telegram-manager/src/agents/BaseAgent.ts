@@ -173,6 +173,74 @@ export abstract class BaseAgent extends EventEmitter {
   }
 
   /**
+   * Hard post-processing guard: if the generated reply contains ANY time that
+   * falls outside the configured working window, replace it with a firm redirect.
+   *
+   * This runs AFTER AI generation so no prompt trick can bypass it.
+   * Returns the original reply unchanged when no working hours are configured
+   * or when all mentioned times are within the window.
+   */
+  protected enforceWorkingHours(reply: string, settings: AgentSettings): string {
+    const from = settings.managerWorkFrom ?? "?";
+    const to = settings.managerWorkTo ?? "?";
+    if (from === "?" || to === "?") return reply;
+
+    const toMinutes = (t: string) => {
+      const [h, m] = t.split(":").map(Number);
+      return (h ?? 0) * 60 + (m ?? 0);
+    };
+    const fromMin = toMinutes(from);
+    const toMin = toMinutes(to);
+
+    // Match explicit clock times (20:00, 20.00) and bare hour mentions
+    // preceded by prepositions (после 20, в 21, к 22, около 19).
+    const timeRe =
+      /(?:после|в|к|около|после\s+\d{1,2}|\b)(\d{1,2})[:\.]\d{2}|(?:после|в|к|около)\s+(\d{1,2})(?!\d)/gi;
+
+    let m: RegExpExecArray | null;
+    let outsideFound = false;
+    while ((m = timeRe.exec(reply)) !== null) {
+      const rawHour = parseInt(m[1] ?? m[2] ?? "-1", 10);
+      if (rawHour < 0) continue;
+      const mentionedMin = rawHour * 60;
+      // Consider anything >= toHour as clearly outside window.
+      // Also catch times before fromHour (e.g. "в 7 утра" when from=09:00).
+      if (mentionedMin >= toMin || mentionedMin < fromMin) {
+        outsideFound = true;
+        break;
+      }
+    }
+
+    if (!outsideFound) return reply;
+
+    // Replace with a hardcoded, concrete redirect — no AI involved.
+    const now = new Date();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    const within = nowMin >= fromMin && nowMin < toMin;
+    const whenLabel = within ? "сегодня" : "завтра";
+
+    // Propose the first available slot: if within hours, nearest 30-min mark;
+    // otherwise the opening time.
+    let proposalTime = from;
+    if (within) {
+      const slot = Math.ceil((nowMin + 15) / 30) * 30;
+      const slotH = Math.floor(slot / 60);
+      const slotM = slot % 60;
+      if (slot < toMin) {
+        proposalTime = `${String(slotH).padStart(2, "0")}:${String(slotM).padStart(2, "0")}`;
+      }
+    }
+
+    this.logger.warn(
+      `[TG:${this.name}] enforceWorkingHours: blocked out-of-hours reply, redirecting to ${proposalTime} ${whenLabel}`,
+    );
+    return (
+      `Эх, после ${to} я уже не работаю — рабочий день заканчивается в ${to}. ` +
+      `Давай лучше созвонимся ${whenLabel} в ${proposalTime}? Удобно?`
+    );
+  }
+
+  /**
    * AI-driven offline mode: the manager is unavailable, but the AI continues
    * chatting, qualifies the lead, and collects a convenient callback time.
    *
@@ -274,7 +342,9 @@ export abstract class BaseAgent extends EventEmitter {
           : "medium";
 
     // ── Callback-time negotiation state ─────────────────────────────────────
-    const timeRegex = /\d{1,2}[:\.]\d{2}|\d{1,2}\s*(?:утра|вечера|дня|ночи|am|pm)/i;
+    // Matches explicit times (14:30, 14.30) OR bare hour with preposition (после 20, в 9, к 10, около 18)
+    const timeRegex =
+      /\d{1,2}[:\.]\d{2}|\d{1,2}\s*(?:утра|вечера|дня|ночи|am|pm)|(?:после|в|к|около)\s+(\d{1,2})(?!\d)/i;
 
     const lastAgentWithTime = [...recentHistory]
       .reverse()
@@ -292,9 +362,32 @@ export abstract class BaseAgent extends EventEmitter {
           .some((m) => m.role === "user" && positiveReply.test(m.content));
       })();
 
-    const clientMentionedTime = recentHistory.some(
+    const clientTimeMessages = recentHistory.filter(
       (m) => m.role === "user" && timeRegex.test(m.content),
     );
+    const clientMentionedTime = clientTimeMessages.length > 0;
+
+    // Detect if the client's proposed time falls outside the working window.
+    // Used to give a much stronger rejection instruction instead of "accept or correct".
+    let clientTimeOutsideWindow = false;
+    if (clientMentionedTime && from !== "?" && to !== "?") {
+      const fromMin = toMinutes(from);
+      const toMin = toMinutes(to);
+      // Extract the best-guess hour from the client message.
+      const hourExtractRe =
+        /(?:после|в|к|около)\s+(\d{1,2})(?!\d)|(\d{1,2})[:\.]\d{2}|(\d{1,2})\s*(?:вечера|ночи)/i;
+      for (const msg of clientTimeMessages) {
+        const m = msg.content.match(hourExtractRe);
+        if (m) {
+          const rawHour = parseInt(m[1] ?? m[2] ?? m[3] ?? "0", 10);
+          const clientMinutes = rawHour * 60; // treat as HH:00 — good enough for window check
+          if (clientMinutes < fromMin || clientMinutes >= toMin) {
+            clientTimeOutsideWindow = true;
+            break;
+          }
+        }
+      }
+    }
 
     // Alias: use within-hours slot if manager is available now, otherwise next-day slot.
     const proposalTime = isWithinManagerHours ? proposalTimeWithin : proposalTimeOutside;
@@ -326,15 +419,25 @@ export abstract class BaseAgent extends EventEmitter {
         `«Договорились, позвоню тебе ${whenLabel} в ${agreedTime} 👍» — и тепло заверши разговор. ` +
         `Больше не возвращайся к теме звонка. НЕ говори "менеджер".`;
     } else if (clientMentionedTime && !timeProposed) {
-      const strictWindow =
-        from !== "?" && to !== "?"
-          ? `Моё доступное время для звонка: строго с ${from} до ${to}${isWithinManagerHours ? " сегодня" : " завтра"}. ` +
-            `Если клиент назвал время вне этого окна — вежливо поправь: ` +
-            `«Я работаю с ${from} до ${to}, давай запишемся на [ближайшее время в этом окне]?»`
-          : "";
-      callbackInstruction =
-        `Клиент сам назвал время. ${strictWindow} ` +
-        `Прими (или скорректируй) и подтверди от первого лица: «Отлично, записал! Позвоню в [время]».`;
+      if (clientTimeOutsideWindow && from !== "?" && to !== "?") {
+        // Client named a time OUTSIDE the working window — must reject, not just "correct".
+        const whenLabel = isWithinManagerHours ? "сегодня" : "завтра";
+        callbackInstruction =
+          `🚫 КЛИЕНТ ПРЕДЛОЖИЛ ВРЕМЯ ВНЕ РАБОЧЕГО ОКНА (${from}–${to}). ` +
+          `ЗАПРЕЩЕНО соглашаться или писать «могу после X» — ни намёком. ` +
+          `Ответь твёрдо, но дружелюбно от первого лица: ` +
+          `«Эх, в это время я уже не работаю — мой рабочий день до ${to}. ` +
+          `Давай лучше созвонимся ${whenLabel} в ${proposalTime}? Удобно?»`;
+      } else {
+        // Client named a time that IS within the working window — accept it.
+        const strictWindow =
+          from !== "?" && to !== "?"
+            ? `Моё доступное время для звонка: строго с ${from} до ${to}${isWithinManagerHours ? " сегодня" : " завтра"}. `
+            : "";
+        callbackInstruction =
+          `Клиент назвал время, которое входит в рабочее окно. ${strictWindow}` +
+          `Подтверди от первого лица: «Отлично, записал! Позвоню в [время]». НЕ говори "менеджер".`;
+      }
     } else if (timeProposed) {
       callbackInstruction =
         `Время уже предложено (${callWhenShort}), ответа нет. Не навязывай — сначала ответь по существу, ` +
@@ -362,7 +465,9 @@ export abstract class BaseAgent extends EventEmitter {
     const hoursGuard =
       from !== "?" && to !== "?"
         ? `СТРОГО: я доступен для звонков только ${callWhen}. ` +
-          `Никогда не предлагай время вне диапазона ${from}–${to}. ` +
+          `Никогда не предлагай и не принимай время вне диапазона ${from}–${to} — ` +
+          `даже если клиент сам просит «после 20», «в 21» и т.п. ` +
+          `Если клиент назвал время вне окна — ОТКАЗАТЬ и немедленно предложить ${proposalTime} ${isWithinManagerHours ? "сегодня" : "завтра"}. ` +
           `Всегда говори от первого лица ("я", "позвоню", "созвонимся") — никогда "менеджер". ` +
           (isWithinManagerHours
             ? `Я работаю СЕЙЧАС — не говори "завтра" если клиент готов созвониться сегодня.`
@@ -436,7 +541,8 @@ export abstract class BaseAgent extends EventEmitter {
       if (/(?:\+?[\d][\d\s\-()]{6,}\d)/.test(userText) || timeAgreed) {
         void this.extractAndSaveLead(chatId, chatKey);
       }
-      return reply || null;
+      // Hard guard: replace any reply that mentions out-of-hours time.
+      return this.enforceWorkingHours(reply, settings) || null;
     } catch (e) {
       this.logger.warn(`[TG:${this.name}] offline-lead mode failed: ${String(e)}`);
       return null;
@@ -915,6 +1021,30 @@ export abstract class BaseAgent extends EventEmitter {
       this.logger.warn(`[TG:${this.name}] runScriptStep: schema mode on but no activeDiagramId`);
       return null;
     }
+
+    // Working-hours context — injected into adaptScript prompt so KB replies
+    // also refuse times outside the configured window.
+    const schemaWorkFrom = settings.managerWorkFrom ?? "?";
+    const schemaWorkTo = settings.managerWorkTo ?? "?";
+    const schemaHoursGuard = (() => {
+      if (schemaWorkFrom === "?" || schemaWorkTo === "?") return "";
+      const toMin = (t: string) => {
+        const [h, m] = t.split(":").map(Number);
+        return (h ?? 0) * 60 + (m ?? 0);
+      };
+      const now = new Date();
+      const nowMin = now.getHours() * 60 + now.getMinutes();
+      const within = nowMin >= toMin(schemaWorkFrom) && nowMin < toMin(schemaWorkTo);
+      const whenLabel = within ? "сегодня" : "завтра";
+      return (
+        `\n## РАБОЧИЕ ЧАСЫ (СТРОГО):\n` +
+        `Я доступен для звонков только с ${schemaWorkFrom} до ${schemaWorkTo} ${whenLabel}. ` +
+        `ЗАПРЕЩЕНО соглашаться на любое время вне этого окна — даже если клиент сам называет его. ` +
+        `Если клиент предлагает время вне окна (например, «после 20», «в 21», «в 22»), ` +
+        `немедленно вежливо откажи и предложи время внутри окна ${schemaWorkFrom}–${schemaWorkTo}. ` +
+        `Никогда не пиши «могу после X» если X > ${schemaWorkTo}.\n`
+      );
+    })();
 
     const diagram = this.storage.getDiagramById(settings.activeDiagramId);
     if (!diagram) {
@@ -1396,7 +1526,8 @@ export abstract class BaseAgent extends EventEmitter {
         `## ТОН:\n` +
         `Деловой партнёр — уверенный, конкретный. НЕ "подстраивающийся".\n` +
         `Одна чёткая мысль на сообщение. Без расплывчатых фраз.\n\n` +
-        `Пиши как живой человек в мессенджере. Без пустых строк. Без заголовков.`;
+        `Пиши как живой человек в мессенджере. Без пустых строк. Без заголовков.` +
+        schemaHoursGuard;
 
       try {
         const adapted = await analyzeOnceDirect(prompt);
@@ -1534,7 +1665,7 @@ export abstract class BaseAgent extends EventEmitter {
       this.logger.info(
         `[TG:${this.name}] schema reply | chat=${chatId} source=kb-adapted node="${currentNode.text.slice(0, 40)}"`,
       );
-      const safeReply = stripPhoneNumbers(reply);
+      const safeReply = this.enforceWorkingHours(stripPhoneNumbers(reply), settings);
       persistHistory(userText, safeReply);
       return safeReply;
     }
@@ -1549,7 +1680,7 @@ export abstract class BaseAgent extends EventEmitter {
       this.logger.info(
         `[TG:${this.name}] schema reply | chat=${chatId} source=kb-decision-adapted node="${currentNode.text.slice(0, 40)}"`,
       );
-      const safeDecisionReply = stripPhoneNumbers(reply);
+      const safeDecisionReply = this.enforceWorkingHours(stripPhoneNumbers(reply), settings);
       persistHistory(userText, safeDecisionReply);
       return safeDecisionReply;
     }
@@ -1875,8 +2006,8 @@ export abstract class BaseAgent extends EventEmitter {
       await advanceNode(currentNode.type);
     }
 
-    // Final safety: never send phone numbers in manager replies regardless of path.
-    return stripPhoneNumbers(reply) || null;
+    // Final safety: never send phone numbers; block out-of-hours times.
+    return this.enforceWorkingHours(stripPhoneNumbers(reply), settings) || null;
   }
 
   /**
@@ -2056,7 +2187,8 @@ export abstract class BaseAgent extends EventEmitter {
       if (/(?:\+?[\d][\d\s\-()]{6,}\d)/.test(userText)) {
         void this.extractAndSaveLead(chatId, chatKey);
       }
-      return safeReply || null;
+      // Hard guard: block any out-of-hours time reference.
+      return this.enforceWorkingHours(safeReply, agentSettings) || null;
     } catch (e) {
       this.logger.warn(`[TG:${this.name}] free-mode failed: ${String(e)}`);
       return null;
@@ -2637,9 +2769,14 @@ export abstract class BaseAgent extends EventEmitter {
     if (welcomed.includes(groupLink)) return; // Already initialized
 
     try {
-      // Try to join first (succeeds for UserBot; Bot agents will fail silently)
+      // Try to join first (succeeds for UserBot; Bot agents will fail silently).
+      // joinChat returns { resolvedId } for invite-link joins so we can sendMessage
+      // using the numeric chat ID instead of the invite URL.
+      let messageTarget = groupLink;
       try {
-        await this.callTool("joinChat", { target: groupLink });
+        const joinResult = await this.callTool("joinChat", { target: groupLink });
+        const resolvedId = (joinResult as any)?.resolvedId;
+        if (resolvedId) messageTarget = resolvedId;
         this.logger.info(`[TG:${this.name}] joined leads group: ${groupLink}`);
       } catch {
         // Bot agents don't have joinChat — silently continue
@@ -2650,7 +2787,7 @@ export abstract class BaseAgent extends EventEmitter {
         `Буду автоматически отправлять сюда карточки новых лидов 🎯\n\n` +
         `Канал готов к работе — жду первых контактов!`;
 
-      await this.callTool("sendMessage", { target: groupLink, message: welcomeMessage });
+      await this.callTool("sendMessage", { target: messageTarget, message: welcomeMessage });
 
       // Mark as welcomed so we don't repeat on restart
       const updatedSettings = {

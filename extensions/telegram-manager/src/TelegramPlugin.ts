@@ -1717,8 +1717,21 @@ function extractTrainingPairs(json: string): {
     return { pairs: [], managerFromId: "", error: "No messages array found" };
   }
 
+  // Skip entire bot-chat conversations — no useful human training signal.
+  // Telegram exports use "bot_chat" in some versions; also guard by name pattern.
+  const isBotName = (name: string | null) =>
+    !!name && /bot$/i.test(name.trim().replace(/\s+/g, ""));
+  if (chat.type === "bot_chat" || isBotName(chat.name)) {
+    return { pairs: [], managerFromId: "", error: "Skipped: bot conversation" };
+  }
+
+  // Returns true if a message was sent by or through a bot:
+  //  - via_bot field present (inline bot like @gif)
+  //  - sender display name ends with "Bot" (case-insensitive)
+  const isBotMessage = (m: TelegramExportMessage) => !!m.via_bot || isBotName(m.from);
+
   // Identify manager: sender with from === null is the account owner (exporter)
-  const msgs = chat.messages.filter((m) => m.type === "message");
+  const msgs = chat.messages.filter((m) => m.type === "message" && !isBotMessage(m));
   const nullSender = msgs.find((m) => m.from === null);
   let managerFromId = nullSender?.from_id ?? "";
 

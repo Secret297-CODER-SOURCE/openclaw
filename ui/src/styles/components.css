@@ -4179,7 +4179,10 @@
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text-muted);
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
 }
 
 .tg-reeng-day:hover {
@@ -4273,7 +4276,7 @@
 }
 
 .tg-reeng-code {
-  background: var(--bg-muted, rgba(255,255,255,0.07));
+  background: var(--bg-muted, rgba(255, 255, 255, 0.07));
   border: 1px solid var(--border);
   padding: 2px 6px;
   border-radius: 4px;
@@ -4396,7 +4399,6 @@
   margin-left: auto;
 }
 
-
 /* Re-engagement saved templates list */
 .tg-reeng-templates {
   display: flex;
@@ -4408,7 +4410,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  background: var(--bg-muted, rgba(255,255,255,0.05));
+  background: var(--bg-muted, rgba(255, 255, 255, 0.05));
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 10px;
@@ -4431,7 +4433,9 @@
   border: none;
   padding: 2px 6px;
 }
-.tg-reeng-template-select:hover { text-decoration: underline; }
+.tg-reeng-template-select:hover {
+  text-decoration: underline;
+}
 .tg-reeng-template-delete {
   flex-shrink: 0;
   font-size: 11px;
@@ -4442,4 +4446,7 @@
   padding: 2px 4px;
   opacity: 0.6;
 }
-.tg-reeng-template-delete:hover { opacity: 1; color: #ff5555; }
+.tg-reeng-template-delete:hover {
+  opacity: 1;
+  color: #ff5555;
+}

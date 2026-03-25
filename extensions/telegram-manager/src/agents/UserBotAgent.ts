@@ -185,13 +185,15 @@ export class UserBotAgent extends BaseAgent {
     if (!c) return;
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const tl = require("telegram/tl") as any;
-      const result = await c.invoke(new tl.functions.messages.GetDialogFilters());
+      const { Api } = require("telegram/tl") as { Api: Record<string, any> };
+      const result = await c.invoke(new Api["messages"]["GetDialogFilters"]({}));
       const filters: any[] = Array.isArray(result) ? result : ((result as any).filters ?? []);
 
-      // Find existing "AI" folder.
+      // Find existing "AI" folder (match by title string or TextWithEntities).
+      const titleOf = (f: any): string =>
+        typeof f.title === "string" ? f.title.trim() : (f.title?.text ?? "").trim();
       const existing = filters.find(
-        (f: any) => f.className === "DialogFilter" && f.title?.trim() === "AI",
+        (f: any) => f.className === "DialogFilter" && titleOf(f) === "AI",
       );
       if (existing) {
         this.aiFolderFilterId = existing.id as number;
@@ -204,28 +206,10 @@ export class UserBotAgent extends BaseAgent {
       let newId = 2;
       while (usedIds.has(newId) && newId < 255) newId++;
 
-      await c.invoke(
-        new tl.functions.messages.UpdateDialogFilter({
-          id: newId,
-          filter: new tl.types.DialogFilter({
-            id: newId,
-            title: "AI",
-            pinnedPeers: [],
-            includedPeers: [],
-            excludedPeers: [],
-            contacts: false,
-            nonContacts: false,
-            groups: false,
-            broadcasts: false,
-            bots: false,
-            excludeArchived: false,
-            excludeMuted: false,
-            excludeRead: false,
-          }),
-        }),
-      );
+      // Telegram rejects folders with empty includePeers — defer actual creation
+      // to the first addChatToAiFolder call, just store the planned ID.
       this.aiFolderFilterId = newId;
-      this.logger.info(`[TG:${this.name}] AI folder created (id=${newId})`);
+      this.logger.info(`[TG:${this.name}] AI folder will be created on first chat (id=${newId})`);
     } catch (e) {
       this.logger.warn(`[TG:${this.name}] initAiFolder failed: ${String(e)}`);
     }
@@ -241,40 +225,71 @@ export class UserBotAgent extends BaseAgent {
     if (!c || this.aiFolderFilterId === null) return;
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const tl = require("telegram/tl") as any;
-      const result = await c.invoke(new tl.functions.messages.GetDialogFilters());
+      const { Api } = require("telegram/tl") as { Api: Record<string, any> };
+      const result = await c.invoke(new Api["messages"]["GetDialogFilters"]({}));
       const filters: any[] = Array.isArray(result) ? result : ((result as any).filters ?? []);
 
-      const filter = filters.find(
-        (f: any) => f.className === "DialogFilter" && f.id === this.aiFolderFilterId,
-      );
-      if (!filter) return; // folder was deleted externally
-
-      // Resolve the InputPeer for this chatId.
+      // Resolve the InputPeer for this chatId first — bail silently if not possible.
       let inputPeer: any;
       try {
         inputPeer = await c.getInputEntity(chatId);
       } catch {
-        return; // cannot resolve peer, skip silently
+        return;
+      }
+
+      const titleObj = (t: any) =>
+        typeof t === "string"
+          ? new Api["TextWithEntities"]({ text: t, entities: [] })
+          : (t ?? new Api["TextWithEntities"]({ text: "AI", entities: [] }));
+
+      const filter = filters.find(
+        (f: any) => f.className === "DialogFilter" && f.id === this.aiFolderFilterId,
+      );
+
+      if (!filter) {
+        // Folder not yet created — first chat triggers creation with this peer.
+        const newId = this.aiFolderFilterId;
+        await c.invoke(
+          new Api["messages"]["UpdateDialogFilter"]({
+            id: newId,
+            filter: new Api["DialogFilter"]({
+              id: newId,
+              title: new Api["TextWithEntities"]({ text: "AI", entities: [] }),
+              pinnedPeers: [],
+              includePeers: [inputPeer],
+              excludePeers: [],
+              contacts: false,
+              nonContacts: false,
+              groups: false,
+              broadcasts: false,
+              bots: false,
+              excludeArchived: false,
+              excludeMuted: false,
+              excludeRead: false,
+            }),
+          }),
+        );
+        this.logger.info(`[TG:${this.name}] AI folder created with chat ${chatId}`);
+        return;
       }
 
       // Check if already in the folder (compare serialised peer).
-      const included: any[] = filter.includedPeers ?? [];
+      const included: any[] = filter.includePeers ?? [];
       const alreadyIn = included.some(
         (p: any) => String(p.userId ?? p.channelId ?? p.chatId ?? "") === String(chatId),
       );
       if (alreadyIn) return;
 
-      // Append and update.
+      // Append peer and update existing folder.
       await c.invoke(
-        new tl.functions.messages.UpdateDialogFilter({
+        new Api["messages"]["UpdateDialogFilter"]({
           id: this.aiFolderFilterId,
-          filter: new tl.types.DialogFilter({
+          filter: new Api["DialogFilter"]({
             id: filter.id,
-            title: filter.title,
+            title: titleObj(filter.title),
             pinnedPeers: filter.pinnedPeers ?? [],
-            includedPeers: [...included, inputPeer],
-            excludedPeers: filter.excludedPeers ?? [],
+            includePeers: [...included, inputPeer],
+            excludePeers: filter.excludePeers ?? [],
             contacts: filter.contacts ?? false,
             nonContacts: filter.nonContacts ?? false,
             groups: filter.groups ?? false,
@@ -517,15 +532,45 @@ export class UserBotAgent extends BaseAgent {
         }));
       }
       case "joinChat": {
-        return this.client.invoke(
-          new (require("telegram/tl").functions.channels.JoinChannelRequest)({
-            channel: await this.client.getInputEntity(args.target as string),
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { Api: TgApi } = require("telegram/tl") as { Api: Record<string, any> };
+        const target = args.target as string;
+        // Private invite links (t.me/+HASH) need ImportChatInvite, not JoinChannel.
+        const inviteHash = target.match(/t\.me\/\+([A-Za-z0-9_-]+)/)?.[1];
+        if (inviteHash) {
+          let resolvedId: string | null = null;
+          try {
+            const updates = await this.client.invoke(
+              new TgApi["messages"]["ImportChatInvite"]({ hash: inviteHash }),
+            );
+            const chat = (updates as any)?.chats?.[0];
+            resolvedId = chat?.id ? String(chat.id) : null;
+          } catch (joinErr: any) {
+            // Already a member — use CheckChatInvite to get chat ID without joining.
+            if (/USER_ALREADY_PARTICIPANT|INVITE_HASH_EXPIRED/i.test(String(joinErr))) {
+              const info = await this.client.invoke(
+                new TgApi["messages"]["CheckChatInvite"]({ hash: inviteHash }),
+              );
+              const chat = (info as any)?.chat ?? (info as any)?.chats?.[0];
+              resolvedId = chat?.id ? String(chat.id) : null;
+            } else {
+              throw joinErr;
+            }
+          }
+          return { ok: true, resolvedId };
+        }
+        await this.client.invoke(
+          new TgApi["channels"]["JoinChannel"]({
+            channel: await this.client.getInputEntity(target),
           }),
         );
+        return { ok: true, resolvedId: null };
       }
       case "leaveChat": {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { Api: TgApi } = require("telegram/tl") as { Api: Record<string, any> };
         return this.client.invoke(
-          new (require("telegram/tl").functions.channels.LeaveChannelRequest)({
+          new TgApi["channels"]["LeaveChannel"]({
             channel: await this.client.getInputEntity(args.target as string),
           }),
         );
@@ -576,6 +621,8 @@ export class UserBotAgent extends BaseAgent {
 
     for (const dialog of unread) {
       const chatId = String(dialog.id);
+      // Skip bots — never auto-reply to other bots (gramjs entity.bot flag).
+      if ((dialog.entity as any)?.bot) continue;
       // Skip master_control chats — they have their own handler.
       if (mc?.enabled && mc.allowedChatIds.includes(chatId)) continue;
 
@@ -1493,6 +1540,21 @@ export class UserBotAgent extends BaseAgent {
           const agentSettings = this.getAgentSettings();
           let followUpText: string | null = null;
 
+          // Check history for a confirmed call time — if one exists, skip the
+          // follow-up entirely (no need to re-engage when a call is already booked).
+          const hist = this.storage.loadConversationHistory(chatKey);
+          const confirmedCallPattern =
+            /(?:договорил|запис|позвон|созвон|набер|свяж)[^.!?\n]{0,80}/gi;
+          const timePattern =
+            /\d{1,2}[:\.]\d{2}|\d{1,2}\s*(?:утра|вечера|дня|ночи|am|pm)|(?:после|в|к)\s+\d{1,2}(?!\d)/i;
+          const hasConfirmedCall = hist.some(
+            (m) =>
+              m.role === "assistant" &&
+              confirmedCallPattern.test(m.content) &&
+              timePattern.test(m.content),
+          );
+          if (hasConfirmedCall) continue; // call already booked — no follow-up needed
+
           if (agentSettings.useSchema && agentSettings.activeDiagramId) {
             // Schema mode: generate follow-up that fits the current script step.
             followUpText = await this.runScriptStep(chatId, "__FOLLOWUP__", chatKey);
@@ -1502,11 +1564,26 @@ export class UserBotAgent extends BaseAgent {
             const basePrompt = taskSession
               ? await this.buildRichSystemPrompt(taskSession.task, chatKey)
               : await this.buildRichSystemPrompt(undefined, chatKey);
+
+            // Last few agent messages — prohibit repeating them.
+            const lastAgentMsgs = hist
+              .filter((m) => m.role === "assistant")
+              .slice(-3)
+              .map((m, i) => `  ${i + 1}. "${m.content.slice(0, 100)}"`)
+              .join("\n");
+
             const followUpPrompt =
               basePrompt +
-              `\n\n## Ситуация\nСобеседник не отвечает уже ${Math.round((now - last) / 60000)} мин. ` +
-              `Напиши ОДНО короткое, ненавязчивое follow-up сообщение, чтобы мягко продолжить диалог. ` +
-              `Не упоминай, что прошло время. Продолжай как будто разговор продолжается естественно.`;
+              `\n\n## ЗАДАЧА: мягкий follow-up после ${Math.round((now - last) / 60000)} мин тишины.\n` +
+              `Напиши ОДНО конкретное предложение — либо задай уточняющий вопрос по теме разговора, ` +
+              `либо предложи созвониться в конкретное время (если уместно по контексту).\n\n` +
+              `## СТРОГО ЗАПРЕЩЕНО:\n` +
+              `• Здороваться ("Привет", "Добрый день") — мы уже в диалоге\n` +
+              `• Писать "Чем займёмся?", "Как дела?", "Чем могу помочь?"\n` +
+              `• Спрашивать расплывчато "Есть вопросы?" без конкретики\n` +
+              `• Писать "я могу подстраиваться" — только конкретные предложения\n` +
+              (lastAgentMsgs ? `• Повторять уже сказанное:\n${lastAgentMsgs}\n` : "") +
+              `\nОдно предложение. Конкретно. Без пустых строк.`;
             followUpText = await aiReply(
               "__FOLLOWUP__",
               chatKey,
@@ -1517,6 +1594,8 @@ export class UserBotAgent extends BaseAgent {
           }
 
           if (followUpText) {
+            // Hard guard: never send an out-of-hours time in follow-ups either.
+            followUpText = this.enforceWorkingHours(followUpText, agentSettings);
             // Send as chunks with natural delays (same as regular replies).
             await this.sendAsChunks(chatId, followUpText);
             followUpSentAt.set(chatKey, Date.now());

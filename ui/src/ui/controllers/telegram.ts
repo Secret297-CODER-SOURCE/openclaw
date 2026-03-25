@@ -239,7 +239,7 @@ type TelegramConfigState = TelegramState & {
   telegramProxyError: string | null;
 };
 
-export async function loadTelegramConfig(state: TelegramConfigState): Promise<void> {
+export async function loadTelegramConfig(state: TelegramConfigState, _attempt = 0): Promise<void> {
   if (!isReady(state)) {
     return;
   }
@@ -262,8 +262,16 @@ export async function loadTelegramConfig(state: TelegramConfigState): Promise<vo
     if (res?.proxyPort) {
       state.telegramProxyPort = String(res.proxyPort);
     }
-  } catch {
-    // Plugin may not be loaded yet — treat as unknown
+  } catch (err: unknown) {
+    const msg = String((err as { message?: string })?.message ?? err);
+    // Plugin still booting — retry up to 5 times with exponential back-off.
+    if (msg.includes("UNAVAILABLE") || msg.includes("still initializing")) {
+      if (_attempt < 5) {
+        await new Promise((r) => setTimeout(r, 1500 * (_attempt + 1)));
+        return loadTelegramConfig(state, _attempt + 1);
+      }
+    }
+    // Plugin may not be loaded — treat as unknown.
     state.telegramApiIdConfigured = null;
   }
 }

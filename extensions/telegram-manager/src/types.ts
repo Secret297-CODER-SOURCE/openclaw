@@ -474,6 +474,8 @@ export interface TelegramExportMessage {
   date: string;
   from: string | null;
   from_id: string;
+  /** Set when the message was sent via an inline bot (e.g. @gif, @sticker bots). */
+  via_bot?: string;
   /** Text can be a plain string or an array of string/formatting objects */
   text: string | (string | { type: string; text: string })[];
 }

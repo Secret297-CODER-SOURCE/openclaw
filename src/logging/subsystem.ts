@@ -209,7 +209,9 @@ function formatConsoleLine(opts: {
   const displayMessage = stripRedundantSubsystemPrefixForConsole(opts.message, displaySubsystem);
   const time = (() => {
     if (opts.style === "pretty") {
-      return color.gray(new Date().toISOString().slice(11, 19));
+      const _d = new Date();
+      const _t = `${String(_d.getHours()).padStart(2, "0")}:${String(_d.getMinutes()).padStart(2, "0")}:${String(_d.getSeconds()).padStart(2, "0")}`;
+      return color.gray(_t);
     }
     if (loggingState.consoleTimestampPrefix) {
       return color.gray(new Date().toISOString());

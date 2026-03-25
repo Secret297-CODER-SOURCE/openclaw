@@ -340,7 +340,8 @@ export class BotAgent extends BaseAgent {
       const systemPrompt =
         taskSession.systemPrompt ?? (await this.buildRichSystemPrompt(taskSession.task, chatKey));
       try {
-        const reply = await aiReply(text, chatKey, systemPrompt, this.storage, workspaceTools);
+        const rawReply = await aiReply(text, chatKey, systemPrompt, this.storage, workspaceTools);
+        const reply = this.enforceWorkingHours(rawReply, this.getAgentSettings());
         if (reply) {
           await ctx.reply(reply);
           this.trackMessage("out", reply, chatId);

@@ -989,7 +989,14 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
             <label class="tg-toggle-option ${settings.offlineReplyEnabled ? "tg-toggle-option--active" : ""}">
               <input type="radio" name="offlineReply-${agent.id}"
                 ?checked=${!!settings.offlineReplyEnabled}
-                @change=${() => saveSettings({ offlineReplyEnabled: true })}
+                @change=${() =>
+                  saveSettings({
+                    offlineReplyEnabled: true,
+                    // Persist defaults immediately so enforceWorkingHours
+                    // has values even if the user never touches the time inputs.
+                    managerWorkFrom: settings.managerWorkFrom ?? "09:00",
+                    managerWorkTo: settings.managerWorkTo ?? "18:00",
+                  })}
                 style="display:none;" />
               ИИ ведёт диалог
             </label>
