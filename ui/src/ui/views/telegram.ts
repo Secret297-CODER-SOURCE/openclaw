@@ -264,11 +264,20 @@ export type TelegramProps = {
   webchatInput: string;
   webchatSending: boolean;
   webchatSearchQuery: string;
+  webchatFolders: import("../controllers/telegram.ts").TelegramDialogFolder[];
+  webchatFolderId: number | null;
   onWebchatRefresh: (agentId: string) => void;
   onWebchatSelectDialog: (agentId: string, dialogId: string, dialogName: string) => void;
   onWebchatInputChange: (v: string) => void;
   onWebchatSend: (agentId: string) => void;
   onWebchatSearchChange: (q: string) => void;
+  onWebchatFolderSelect: (agentId: string, folderId: number | null) => void;
+  translateEnabled: boolean;
+  translations: Record<string, string>;
+  showOriginals: Record<string, boolean>;
+  onTranslateToggle: () => void;
+  onTranslateText: (text: string) => void;
+  onToggleOriginal: (key: string) => void;
   // Agent work-mode settings
   agentSettings: import("../controllers/telegram.ts").AgentSettings | null;
   agentSettingsLoading: boolean;
@@ -596,6 +605,42 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
         >
           ${t("ui.delete")}
         </button>
+      </div>
+
+      <!-- AI master switch + auto-start -->
+      <div style="margin-top:16px;display:flex;flex-direction:column;gap:10px;">
+        <!-- AI master kill-switch -->
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:8px;background:${savedSettings.aiEnabled === false ? "rgba(239,68,68,0.12)" : "rgba(34,197,94,0.08)"};border:1px solid ${savedSettings.aiEnabled === false ? "rgba(239,68,68,0.3)" : "rgba(34,197,94,0.25)"};">
+          <span style="font-size:1.1rem;">${savedSettings.aiEnabled === false ? "🔴" : "🟢"}</span>
+          <div style="flex:1;">
+            <div style="font-size:0.9rem;font-weight:600;">${savedSettings.aiEnabled === false ? "ИИ отключён — агент молчит" : "ИИ активен"}</div>
+            <div style="font-size:0.75rem;opacity:0.6;">Когда выключен: агент получает сообщения но ничего не отправляет</div>
+          </div>
+          <label style="cursor:pointer;position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0;">
+            <input
+              type="checkbox"
+              ?checked=${savedSettings.aiEnabled !== false}
+              @change=${(e: Event) =>
+                saveSettings({ aiEnabled: (e.target as HTMLInputElement).checked })}
+              style="opacity:0;width:0;height:0;position:absolute;"
+            />
+            <span style="position:absolute;inset:0;border-radius:12px;background:${savedSettings.aiEnabled === false ? "#666" : "var(--primary)"};transition:background .2s;cursor:pointer;">
+              <span style="position:absolute;top:3px;left:${savedSettings.aiEnabled === false ? "3px" : "23px"};width:18px;height:18px;border-radius:50%;background:#fff;transition:left .2s;"></span>
+            </span>
+          </label>
+        </div>
+
+        <!-- Auto-start toggle -->
+        <label class="tg-toggle-row" style="cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none;">
+          <input
+            type="checkbox"
+            ?checked=${savedSettings.autoStartEnabled !== false}
+            @change=${(e: Event) =>
+              saveSettings({ autoStartEnabled: (e.target as HTMLInputElement).checked })}
+            style="width:16px;height:16px;cursor:pointer;accent-color:var(--primary);"
+          />
+          <span style="font-size:0.9rem;">Автозапуск при старте gateway</span>
+        </label>
       </div>
     </section>
 
@@ -1690,6 +1735,13 @@ function renderDetail(props: TelegramProps) {
     batchError: props.batchError,
     onRunBatchAnalysis: props.onRunBatchAnalysis,
     onCancelBatchAnalysis: props.onCancelBatchAnalysis,
+    // Translation (shared across chat/training views)
+    translateEnabled: props.translateEnabled,
+    translations: props.translations,
+    showOriginals: props.showOriginals,
+    onTranslateToggle: props.onTranslateToggle,
+    onTranslateText: props.onTranslateText,
+    onToggleOriginal: props.onToggleOriginal,
     // Webchat: only provide for userbot agents
     webchat:
       agent.type === "userbot"
@@ -1704,11 +1756,20 @@ function renderDetail(props: TelegramProps) {
             input: props.webchatInput,
             sending: props.webchatSending,
             searchQuery: props.webchatSearchQuery,
+            folders: props.webchatFolders,
+            selectedFolderId: props.webchatFolderId,
+            translateEnabled: props.translateEnabled,
+            translations: props.translations,
+            showOriginals: props.showOriginals,
             onRefreshDialogs: () => props.onWebchatRefresh(agent.id),
             onSelectDialog: (id, name) => props.onWebchatSelectDialog(agent.id, id, name),
             onInputChange: props.onWebchatInputChange,
             onSend: () => props.onWebchatSend(agent.id),
             onSearchChange: props.onWebchatSearchChange,
+            onFolderSelect: (folderId) => props.onWebchatFolderSelect(agent.id, folderId),
+            onTranslateToggle: props.onTranslateToggle,
+            onTranslateText: props.onTranslateText,
+            onToggleOriginal: props.onToggleOriginal,
           } satisfies WebchatProps)
         : undefined,
   };

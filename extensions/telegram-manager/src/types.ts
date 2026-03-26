@@ -199,8 +199,21 @@ export type BehaviorConfig =
  * Stored in tg_agent_settings table.
  */
 export interface AgentSettings {
+  /**
+   * Whether to automatically start this agent when the gateway boots.
+   * Defaults to true (existing behavior preserved for all agents).
+   */
+  autoStartEnabled?: boolean;
+
   /** ID of the diagram the agent follows when useSchema is true. */
   activeDiagramId?: string;
+
+  /**
+   * Master AI kill-switch. When false, the agent receives messages but does
+   * NOT send any AI replies (schema, auto-reply, catch-up, follow-ups, etc.).
+   * Default: true (enabled).
+   */
+  aiEnabled?: boolean;
 
   /**
    * Whether the agent follows the selected diagram as a strict conversation

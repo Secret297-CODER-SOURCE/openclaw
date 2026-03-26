@@ -1137,11 +1137,13 @@ Rules:
             generatedAt: new Date().toISOString(),
           };
           // Persist so tips survive page reloads / gateway restarts
+          const ctScope: "personal" | "shared" = p.scope === "shared" ? "shared" : "personal";
           this.storage.saveCoachingTip(
             String(p.agentId),
             ctResult.chatId,
             ctResult.content,
             ctResult.generatedAt,
+            ctScope,
           );
           respond(ctResult);
           break;
@@ -1153,8 +1155,36 @@ Rules:
             fail("agentId is required");
             break;
           }
-          const allTips = this.storage.getCoachingTips(String(p.agentId));
+          const lctScope: "personal" | "shared" = p.scope === "shared" ? "shared" : "personal";
+          const allTips = this.storage.getCoachingTips(String(p.agentId), lctScope);
           respond(allTips);
+          break;
+        }
+
+        // ── Translation proxy (CSP bypass) ────────────────────────────────
+
+        case "telegram.translate.text": {
+          // Proxy Google Translate free API from server side to bypass UI CSP.
+          const text = typeof p.text === "string" ? p.text.trim() : "";
+          const targetLang = typeof p.targetLang === "string" ? p.targetLang : "ru";
+          if (!text) {
+            respond({ translated: "" });
+            break;
+          }
+          try {
+            const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(targetLang)}&dt=t&q=${encodeURIComponent(text)}`;
+            const res = await fetch(url);
+            if (!res.ok) {
+              respond({ translated: text });
+              break;
+            }
+            const data = (await res.json()) as unknown[][];
+            const translated =
+              (data[0] as unknown[][]).map((item) => String(item[0])).join("") || text;
+            respond({ translated });
+          } catch {
+            respond({ translated: text });
+          }
           break;
         }
 

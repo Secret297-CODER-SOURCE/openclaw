@@ -1332,6 +1332,7 @@ export async function getCoachingTips(
   agentId: string,
   chatId: string,
   pairs: Array<{ input: string; response: string }>,
+  scope: "personal" | "shared" = "personal",
 ): Promise<CoachingTips | null> {
   if (!isReady(state)) {
     throw new Error("Нет соединения с сервером");
@@ -1350,6 +1351,7 @@ export async function getCoachingTips(
       agentId,
       chatId,
       pairs,
+      scope,
     });
     if (result) {
       state.telegramCoachingTips = { ...state.telegramCoachingTips, [chatId]: result };
@@ -1369,6 +1371,7 @@ export async function getCoachingTips(
 export async function loadCoachingTips(
   state: TelegramScenarioState,
   agentId: string,
+  scope: "personal" | "shared" = "personal",
 ): Promise<void> {
   if (!isReady(state)) {
     return;
@@ -1376,7 +1379,7 @@ export async function loadCoachingTips(
   try {
     const result = await state.client!.request<Record<string, CoachingTips>>(
       "telegram.scenario.loadCoachingTips",
-      { agentId },
+      { agentId, scope },
     );
     if (result && typeof result === "object") {
       // Merge: in-memory tips are more recent; DB fills in missing ones
@@ -1815,7 +1818,7 @@ export async function analyzeDialogChat(
     const result = parseAnalysisResponse(inner);
     // Fire-and-forget: generate coaching tips alongside the analysis result
     if (result && group.pairs.length >= 2) {
-      void getCoachingTips(state, agentId, group.chatId, group.pairs);
+      void getCoachingTips(state, agentId, group.chatId, group.pairs, state.telegramTrainingScope);
     }
     return result;
   } catch {
@@ -2094,7 +2097,7 @@ export async function runBatchAnalysis(
           }
           const g = tipsNeeded[ci];
           try {
-            await getCoachingTips(state, agentId, g.chatId, g.pairs);
+            await getCoachingTips(state, agentId, g.chatId, g.pairs, state.telegramTrainingScope);
           } catch {
             // Non-fatal — keep generating for others
           }
@@ -2223,6 +2226,13 @@ export type TelegramDialog = {
   lastMessageOut: boolean;
 };
 
+/** A Telegram folder (DialogFilter) returned by get_dialog_filters tool */
+export type TelegramDialogFolder = {
+  id: number;
+  title: string;
+  emoji: string | null;
+};
+
 /** A single message returned by getMessages tool (with out field) */
 export type TelegramWebMessage = {
   id: string;
@@ -2243,20 +2253,52 @@ type WebchatState = TelegramState & {
   telegramWebchatInput: string;
   telegramWebchatSending: boolean;
   telegramWebchatSearchQuery: string;
+  telegramWebchatFolders: TelegramDialogFolder[];
+  telegramWebchatFolderId: number | null;
 };
 
-/** Load recent dialogs from the userbot agent */
-export async function loadWebchatDialogs(state: WebchatState, agentId: string): Promise<void> {
+/** Load the list of Telegram folders (dialog filters) for the userbot */
+export async function loadWebchatFolders(state: WebchatState, agentId: string): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  try {
+    const res = await state.client!.request<TelegramDialogFolder[]>("telegram.tool.call", {
+      agentId,
+      tool: "get_dialog_filters",
+      args: {},
+    });
+    const folders = ((res as unknown as Record<string, unknown>)?.data ?? res) as unknown;
+    state.telegramWebchatFolders = Array.isArray(folders)
+      ? (folders as TelegramDialogFolder[])
+      : [];
+  } catch {
+    // Non-critical — if folders fail to load, just show no tabs
+    state.telegramWebchatFolders = [];
+  }
+}
+
+/** Load recent dialogs from the userbot agent, optionally filtered by folder */
+export async function loadWebchatDialogs(
+  state: WebchatState,
+  agentId: string,
+  folderId?: number | null,
+): Promise<void> {
   if (!isReady(state) || state.telegramWebchatDialogsLoading) {
     return;
   }
   state.telegramWebchatDialogsLoading = true;
   state.telegramWebchatDialogsError = null;
+  const effectiveFolderId = folderId !== undefined ? folderId : state.telegramWebchatFolderId;
   try {
+    const args: Record<string, unknown> = { limit: 30 };
+    if (effectiveFolderId !== null && effectiveFolderId !== undefined) {
+      args.filterId = effectiveFolderId;
+    }
     const res = await state.client!.request<TelegramDialog[]>("telegram.tool.call", {
       agentId,
       tool: "get_dialogs",
-      args: { limit: 30 },
+      args,
     });
     // Plugin wraps results as { ok: true, data: actualResult }; unwrap before use
     const dialogs = ((res as unknown as Record<string, unknown>)?.data ?? res) as unknown;

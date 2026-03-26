@@ -122,6 +122,8 @@ export abstract class BaseAgent extends EventEmitter {
    * work-mode settings.  Always returns true for modes other than "schedule".
    */
   protected isWithinSchedule(settings: AgentSettings): boolean {
+    // Master AI kill-switch: false = agent is completely silent.
+    if (settings.aiEnabled === false) return false;
     if (settings.scheduleMode !== "schedule") return true;
     const from = settings.scheduleFrom;
     const to = settings.scheduleTo;
@@ -800,6 +802,23 @@ export abstract class BaseAgent extends EventEmitter {
     if (kbParts.length === 0) return "";
 
     const scopeLabel = diagram.scope === "shared" ? "Shared" : "Personal";
+
+    // Load coaching tips for this scope and append as a coaching insights section.
+    // Use at most 5 most-recent tips to keep the prompt concise.
+    const coachingTips = this.storage.getCoachingTips(
+      diagram.agentId,
+      diagram.scope as "personal" | "shared",
+    );
+    const tipValues = Object.values(coachingTips)
+      .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))
+      .slice(0, 5);
+    const coachingSection =
+      tipValues.length > 0
+        ? `\n\n## Уроки из прошлых диалогов (советы тренера)\n` +
+          `Учти эти наблюдения из разбора реальных переписок:\n\n` +
+          tipValues.map((t, i) => `### Диалог ${i + 1}\n${t.content}`).join("\n\n")
+        : "";
+
     return (
       `## Схема разговора (${scopeLabel})\n` +
       `Следуй этой схеме строго в ходе беседы:\n` +
@@ -809,7 +828,8 @@ export abstract class BaseAgent extends EventEmitter {
       `ВАЖНО: Это ГОТОВЫЕ ОФФЕРЫ которые нужно ОТПРАВИТЬ клиенту — это НЕ вопросы к клиенту.\n` +
       `Возьми скрипт из нужного шага, переведи на язык клиента, адаптируй и отправь.\n` +
       `Чем выше ★ — тем лучше результат. ЗАПРЕЩЕНО превращать скрипт в вопрос.\n\n` +
-      kbParts.join("\n\n")
+      kbParts.join("\n\n") +
+      coachingSection
     );
   }
 
@@ -2551,6 +2571,16 @@ export abstract class BaseAgent extends EventEmitter {
   private async runReEngagementCheck(): Promise<void> {
     const settings = this.getAgentSettings();
     if (!settings.reEngagementEnabled) return;
+
+    // "Молчать": if agent is on schedule AND currently outside the window AND
+    // offline-lead mode is disabled — do NOT send any re-engagement messages.
+    if (
+      settings.scheduleMode === "schedule" &&
+      !this.isWithinSchedule(settings) &&
+      !settings.offlineReplyEnabled
+    ) {
+      return;
+    }
 
     const template = settings.reEngagementTemplate?.trim();
     if (!template) return;

@@ -128,6 +128,8 @@ const TELEGRAM_METHODS = [
   "telegram.leads.delete",
   "telegram.agent.initLeadsGroup",
   "telegram.agent.generateReEngagementTemplate",
+  // Translation proxy (CSP bypass: server-side fetch to Google Translate)
+  "telegram.translate.text",
 ] as const;
 
 const plugin = {

@@ -1,7 +1,11 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { TelegramAgentRecord } from "../controllers/telegram.ts";
-import type { TelegramDialog, TelegramWebMessage } from "../controllers/telegram.ts";
+import type {
+  TelegramDialog,
+  TelegramDialogFolder,
+  TelegramWebMessage,
+} from "../controllers/telegram.ts";
 
 export type WebchatProps = {
   agent: TelegramAgentRecord;
@@ -14,11 +18,20 @@ export type WebchatProps = {
   input: string;
   sending: boolean;
   searchQuery: string;
+  folders: TelegramDialogFolder[];
+  selectedFolderId: number | null;
+  translateEnabled: boolean;
+  translations: Record<string, string>;
+  showOriginals: Record<string, boolean>;
   onRefreshDialogs: () => void;
   onSelectDialog: (id: string, name: string) => void;
   onInputChange: (v: string) => void;
   onSend: () => void;
   onSearchChange: (q: string) => void;
+  onFolderSelect: (folderId: number | null) => void;
+  onTranslateToggle: () => void;
+  onTranslateText: (text: string) => void;
+  onToggleOriginal: (key: string) => void;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -106,13 +119,46 @@ function renderDialogItem(dialog: TelegramDialog, isSelected: boolean, onSelect:
 
 // ─── Message bubble ───────────────────────────────────────────────────────────
 
-function renderMessage(msg: TelegramWebMessage) {
+function renderMessage(
+  msg: TelegramWebMessage,
+  translateEnabled: boolean,
+  translations: Record<string, string>,
+  showOriginals: Record<string, boolean>,
+  onTranslateText: (text: string) => void,
+  onToggleOriginal: (key: string) => void,
+) {
   const cls = msg.out ? "tg-wc-msg tg-wc-msg--out" : "tg-wc-msg";
+  const rawText = msg.text || "";
+
+  // Trigger translation if needed
+  if (translateEnabled && rawText && !translations[rawText]) {
+    onTranslateText(rawText);
+  }
+
+  const translated = translateEnabled ? (translations[rawText] ?? null) : null;
+  const showOrig = showOriginals[rawText] ?? false;
+  const displayText = translated && !showOrig ? translated : rawText;
+
   return html`
     <div class=${cls}>
       <div class="tg-wc-bubble">
-        ${msg.text || (msg.hasMedia ? html`<em class="tg-wc-media-label">${msg.mediaType ?? "медиа"}</em>` : "—")}
+        ${displayText || (msg.hasMedia ? html`<em class="tg-wc-media-label">${msg.mediaType ?? "медиа"}</em>` : "—")}
       </div>
+      ${
+        translateEnabled && rawText
+          ? translated
+            ? html`
+                <button
+                  type="button"
+                  class="tg-translate-orig-btn"
+                  @click=${() => onToggleOriginal(rawText)}
+                >${showOrig ? "↩ перевод" : "🔍 оригинал"}</button>
+              `
+            : html`
+                <span class="tg-translate-pending">Перевод…</span>
+              `
+          : nothing
+      }
       <div class="tg-wc-msg-time">${formatMsgTime(msg.date)}</div>
     </div>
   `;
@@ -121,7 +167,20 @@ function renderMessage(msg: TelegramWebMessage) {
 // ─── Webchat panel ────────────────────────────────────────────────────────────
 
 export function renderWebchat(props: WebchatProps) {
-  const { agent, dialogs, selectedDialogId, messages, input, sending, searchQuery } = props;
+  const {
+    agent,
+    dialogs,
+    selectedDialogId,
+    messages,
+    input,
+    sending,
+    searchQuery,
+    folders,
+    selectedFolderId,
+    translateEnabled,
+    translations,
+    showOriginals,
+  } = props;
 
   const filteredDialogs = searchQuery.trim()
     ? dialogs.filter((d) => d.name.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -154,6 +213,29 @@ export function renderWebchat(props: WebchatProps) {
               ${props.dialogsLoading ? "…" : "↻"}
             </button>
           </div>
+
+          ${
+            folders.length > 0
+              ? html`
+                  <div class="tg-wc-folders">
+                    <button
+                      type="button"
+                      class="tg-wc-folder ${selectedFolderId === null ? "tg-wc-folder--active" : ""}"
+                      @click=${() => props.onFolderSelect(null)}
+                    >Все</button>
+                    ${folders.map(
+                      (f) => html`
+                        <button
+                          type="button"
+                          class="tg-wc-folder ${selectedFolderId === f.id ? "tg-wc-folder--active" : ""}"
+                          @click=${() => props.onFolderSelect(f.id)}
+                        >${f.emoji ? `${f.emoji} ` : ""}${f.title}</button>
+                      `,
+                    )}
+                  </div>
+                `
+              : nothing
+          }
 
           <div class="tg-wc-search-bar">
             <input
@@ -218,7 +300,7 @@ export function renderWebchat(props: WebchatProps) {
                             : initials(selectedDialog.name)
                       }
                     </div>
-                    <div>
+                    <div style="flex:1;">
                       <div class="tg-wc-header-name">${selectedDialog.name}</div>
                       ${
                         selectedDialog.username
@@ -226,6 +308,12 @@ export function renderWebchat(props: WebchatProps) {
                           : nothing
                       }
                     </div>
+                    <button
+                      type="button"
+                      class="tg-translate-btn ${translateEnabled ? "tg-translate-btn--on" : ""}"
+                      @click=${props.onTranslateToggle}
+                      title="Режим перевода"
+                    >🌐 ${translateEnabled ? "Перевод вкл" : "Перевод"}</button>
                   </div>
 
                   <!-- Messages — scrolled to bottom on each render -->
@@ -246,7 +334,16 @@ export function renderWebchat(props: WebchatProps) {
                           ? html`
                               <div class="tg-wc-empty-hint">Нет сообщений</div>
                             `
-                          : messages.map(renderMessage)
+                          : messages.map((m) =>
+                              renderMessage(
+                                m,
+                                translateEnabled,
+                                translations,
+                                showOriginals,
+                                props.onTranslateText,
+                                props.onToggleOriginal,
+                              ),
+                            )
                     }
                   </div>
 

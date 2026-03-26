@@ -286,6 +286,14 @@ export type AppViewState = {
   telegramWebchatInput: string;
   telegramWebchatSending: boolean;
   telegramWebchatSearchQuery: string;
+  telegramWebchatFolders: import("./controllers/telegram.ts").TelegramDialogFolder[];
+  telegramWebchatFolderId: number | null;
+  /** Translation mode (shared between Chat and Training tabs) */
+  telegramTranslateEnabled: boolean;
+  /** Cache: original text → translated text */
+  telegramTranslations: Record<string, string>;
+  /** Set of texts currently showing original instead of translation */
+  telegramTranslateShowOriginals: Record<string, boolean>;
   /** Non-reactive: holds the polling interval ID */
   _telegramWebchatPollTimer?: number | null;
   sessionsLoading: boolean;

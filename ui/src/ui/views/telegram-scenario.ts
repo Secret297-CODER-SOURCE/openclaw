@@ -134,6 +134,13 @@ export type ScenarioProps = {
   coachingLoading: Set<string>;
   /** Set of chatIds whose coaching card is currently collapsed. */
   coachingCollapsed: Set<string>;
+  /** Translation mode */
+  translateEnabled: boolean;
+  translations: Record<string, string>;
+  showOriginals: Record<string, boolean>;
+  onTranslateToggle: () => void;
+  onTranslateText: (text: string) => void;
+  onToggleOriginal: (key: string) => void;
 };
 
 // ─── Sub-panel tabs ───────────────────────────────────────────────────────────
@@ -1139,6 +1146,12 @@ function renderTrainingView(props: ScenarioProps, agent: TelegramAgentRecord) {
                 >
                   + Ноды
                 </button>
+                <button
+                  type="button"
+                  class="tg-translate-btn ${props.translateEnabled ? "tg-translate-btn--on" : ""}"
+                  @click=${props.onTranslateToggle}
+                  title="Режим перевода"
+                >🌐</button>
               </div>
 
               <!-- AI result card (shown when analysis is available) -->
@@ -1161,20 +1174,60 @@ function renderTrainingView(props: ScenarioProps, agent: TelegramAgentRecord) {
 
               <!-- Bubbles -->
               <div class="tg-msng-bubbles">
-                ${selectedGroup.pairs.map(
-                  (pair) => html`
+                ${selectedGroup.pairs.map((pair) => {
+                  // Trigger translations if needed
+                  if (props.translateEnabled) {
+                    if (pair.input && !props.translations[pair.input]) {
+                      props.onTranslateText(pair.input);
+                    }
+                    if (pair.response && !props.translations[pair.response]) {
+                      props.onTranslateText(pair.response);
+                    }
+                  }
+                  const inputTranslated = props.translateEnabled
+                    ? (props.translations[pair.input] ?? null)
+                    : null;
+                  const respTranslated = props.translateEnabled
+                    ? (props.translations[pair.response] ?? null)
+                    : null;
+                  const showInputOrig = props.showOriginals[pair.input] ?? false;
+                  const showRespOrig = props.showOriginals[pair.response] ?? false;
+
+                  return html`
                     <div class="tg-pair-block">
                       <div class="tg-msng-bubble tg-msng-bubble--client">
                         <div class="tg-msng-bubble-label">Клиент</div>
-                        <div class="tg-msng-bubble-text">${pair.input}</div>
+                        <div class="tg-msng-bubble-text">
+                          ${inputTranslated && !showInputOrig ? inputTranslated : pair.input}
+                        </div>
+                        ${
+                          inputTranslated
+                            ? html`<button type="button" class="tg-translate-orig-btn" @click=${() => props.onToggleOriginal(pair.input)}>${showInputOrig ? "↩ перевод" : "🔍 оригинал"}</button>`
+                            : props.translateEnabled && pair.input
+                              ? html`
+                                  <span class="tg-translate-pending">Перевод…</span>
+                                `
+                              : nothing
+                        }
                       </div>
                       <div class="tg-msng-bubble tg-msng-bubble--manager">
                         <div class="tg-msng-bubble-label">Менеджер</div>
-                        <div class="tg-msng-bubble-text">${pair.response}</div>
+                        <div class="tg-msng-bubble-text">
+                          ${respTranslated && !showRespOrig ? respTranslated : pair.response}
+                        </div>
+                        ${
+                          respTranslated
+                            ? html`<button type="button" class="tg-translate-orig-btn" @click=${() => props.onToggleOriginal(pair.response)}>${showRespOrig ? "↩ перевод" : "🔍 оригинал"}</button>`
+                            : props.translateEnabled && pair.response
+                              ? html`
+                                  <span class="tg-translate-pending">Перевод…</span>
+                                `
+                              : nothing
+                        }
                       </div>
                     </div>
-                  `,
-                )}
+                  `;
+                })}
               </div>
             `
               : html`

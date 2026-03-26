@@ -117,6 +117,7 @@ import {
   buildFlatPairs,
   applyTrainingEditorSave,
   loadWebchatDialogs,
+  loadWebchatFolders,
   loadWebchatMessages,
   sendWebchatMessage,
   loadLeads,
@@ -655,7 +656,7 @@ export function renderApp(state: AppViewState) {
                   if (id) {
                     void loadTrainingFromGateway(state, id, state.telegramTrainingScope);
                     // Load persisted coaching tips from DB (non-blocking)
-                    void loadCoachingTips(state, id);
+                    void loadCoachingTips(state, id, state.telegramTrainingScope);
                     // Load agent work-mode settings (non-blocking)
                     void loadAgentSettings(state, id);
                     // Load all diagrams (personal + shared) so the overview panel's
@@ -712,6 +713,7 @@ export function renderApp(state: AppViewState) {
                       }
                       state.telegramWebchatMessages = [];
                       state.telegramWebchatSelectedId = null;
+                      void loadWebchatFolders(state, state.telegramSelectedId);
                       void loadWebchatDialogs(state, state.telegramSelectedId);
                     }
                   } else if (panel !== "chat") {
@@ -988,6 +990,40 @@ export function renderApp(state: AppViewState) {
                 coachingTips: state.telegramCoachingTips,
                 coachingLoading: state.telegramCoachingLoading,
                 coachingCollapsed: state.telegramCoachingCollapsed,
+                // Translation mode (shared with webchat)
+                translateEnabled: state.telegramTranslateEnabled,
+                translations: state.telegramTranslations,
+                showOriginals: state.telegramTranslateShowOriginals,
+                onTranslateToggle: () => {
+                  state.telegramTranslateEnabled = !state.telegramTranslateEnabled;
+                },
+                onTranslateText: (text) => {
+                  if (!text.trim() || state.telegramTranslations[text]) {
+                    return;
+                  }
+                  // Route through gateway to avoid CSP restriction on external fetches
+                  void (async () => {
+                    try {
+                      const res = await state.client!.request<{ translated: string }>(
+                        "telegram.translate.text",
+                        { text, targetLang: "ru" },
+                      );
+                      const translated = res?.translated ?? text;
+                      state.telegramTranslations = {
+                        ...state.telegramTranslations,
+                        [text]: translated,
+                      };
+                    } catch {
+                      // Ignore silently
+                    }
+                  })();
+                },
+                onToggleOriginal: (key) => {
+                  state.telegramTranslateShowOriginals = {
+                    ...state.telegramTranslateShowOriginals,
+                    [key]: !(state.telegramTranslateShowOriginals[key] ?? false),
+                  };
+                },
                 agentSettings: state.telegramAgentSettings,
                 agentSettingsLoading: state.telegramAgentSettingsLoading,
                 agentSettingsSaving: state.telegramAgentSettingsSaving,
@@ -1137,6 +1173,7 @@ export function renderApp(state: AppViewState) {
                         state.telegramWebchatDialogs.length === 0 &&
                         !state.telegramWebchatDialogsLoading
                       ) {
+                        void loadWebchatFolders(state, aid);
                         void loadWebchatDialogs(state, aid);
                       }
                     }
@@ -1249,7 +1286,13 @@ export function renderApp(state: AppViewState) {
                   : null,
                 onGetCoachingTips: state.telegramSelectedId
                   ? async (chatId, pairs) => {
-                      await getCoachingTips(state, state.telegramSelectedId!, chatId, pairs);
+                      await getCoachingTips(
+                        state,
+                        state.telegramSelectedId!,
+                        chatId,
+                        pairs,
+                        state.telegramTrainingScope,
+                      );
                     }
                   : null,
                 onToggleCoachingCollapsed: (chatId) => {
@@ -1378,8 +1421,16 @@ export function renderApp(state: AppViewState) {
                 webchatInput: state.telegramWebchatInput,
                 webchatSending: state.telegramWebchatSending,
                 webchatSearchQuery: state.telegramWebchatSearchQuery,
+                webchatFolders: state.telegramWebchatFolders,
+                webchatFolderId: state.telegramWebchatFolderId,
                 onWebchatRefresh: (agentId) => {
+                  void loadWebchatFolders(state, agentId);
                   void loadWebchatDialogs(state, agentId);
+                },
+                onWebchatFolderSelect: (agentId, folderId) => {
+                  state.telegramWebchatFolderId = folderId;
+                  state.telegramWebchatDialogs = [];
+                  void loadWebchatDialogs(state, agentId, folderId);
                 },
                 onWebchatSelectDialog: (agentId, dialogId) => {
                   state.telegramWebchatSelectedId = dialogId;

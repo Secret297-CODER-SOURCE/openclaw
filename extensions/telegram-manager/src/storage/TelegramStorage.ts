@@ -34,6 +34,12 @@ export type TelegramPluginConfig = {
 export class TelegramStorage {
   private db: Database.Database;
   private configFile: string;
+
+  /**
+   * For shared-scope tables whose PRIMARY KEY includes agent_id, use this
+   * sentinel instead of the actual agentId so all agents read/write the same row.
+   */
+  private static readonly SHARED_ID = "__shared__";
   /** The telegram plugin data directory (e.g. ~/.openclaw/data/telegram). */
   readonly dataDir: string;
 
@@ -632,19 +638,22 @@ export class TelegramStorage {
 
   /** Persist the full training UI state (groups, labels, analysisResults) as a JSON blob. */
   saveTrainingSnapshot(agentId: string, scope: string, data: Record<string, unknown>): void {
+    // Shared scope uses a sentinel agent_id so every agent reads/writes the same row.
+    const effectiveId = scope === "shared" ? TelegramStorage.SHARED_ID : agentId;
     this.db
       .prepare(
         `INSERT OR REPLACE INTO tg_training_snapshots (agent_id, scope, data_json, updated_at)
          VALUES (?, ?, ?, ?)`,
       )
-      .run(agentId, scope, JSON.stringify(data), new Date().toISOString());
+      .run(effectiveId, scope, JSON.stringify(data), new Date().toISOString());
   }
 
   /** Retrieve a previously saved training snapshot, or null if not found. */
   getTrainingSnapshot(agentId: string, scope: string): Record<string, unknown> | null {
+    const effectiveId = scope === "shared" ? TelegramStorage.SHARED_ID : agentId;
     const row = this.db
       .prepare("SELECT data_json FROM tg_training_snapshots WHERE agent_id = ? AND scope = ?")
-      .get(agentId, scope) as any;
+      .get(effectiveId, scope) as any;
     if (!row) return null;
     try {
       return JSON.parse(row.data_json) as Record<string, unknown>;
@@ -660,9 +669,10 @@ export class TelegramStorage {
    * Returns null when no knowledge base has been saved yet.
    */
   getKnowledgeBase(agentId: string, scope: "personal" | "shared"): Record<string, unknown> | null {
+    const effectiveId = scope === "shared" ? TelegramStorage.SHARED_ID : agentId;
     const row = this.db
       .prepare("SELECT data_json FROM tg_diagram_knowledge WHERE agent_id = ? AND scope = ?")
-      .get(agentId, scope) as { data_json: string } | undefined;
+      .get(effectiveId, scope) as { data_json: string } | undefined;
     if (!row) return null;
     try {
       return JSON.parse(row.data_json) as Record<string, unknown>;
@@ -677,23 +687,28 @@ export class TelegramStorage {
     scope: "personal" | "shared",
     data: Record<string, unknown>,
   ): void {
+    const effectiveId = scope === "shared" ? TelegramStorage.SHARED_ID : agentId;
     this.db
       .prepare(
         `INSERT OR REPLACE INTO tg_diagram_knowledge (agent_id, scope, data_json, updated_at)
          VALUES (?, ?, ?, ?)`,
       )
-      .run(agentId, scope, JSON.stringify(data), new Date().toISOString());
+      .run(effectiveId, scope, JSON.stringify(data), new Date().toISOString());
   }
 
   // ─── Coaching tips ───────────────────────────────────────────────────────
 
-  /** Load all coaching tips for an agent, keyed by chatId. */
+  /** Load all coaching tips for an agent (or shared pool), keyed by chatId. */
   getCoachingTips(
     agentId: string,
+    scope: "personal" | "shared" = "personal",
   ): Record<string, { chatId: string; content: string; generatedAt: string }> {
+    const effectiveId = scope === "shared" ? TelegramStorage.SHARED_ID : agentId;
     const rows = this.db
-      .prepare("SELECT chat_id, content, generated_at FROM tg_coaching_tips WHERE agent_id = ?")
-      .all(agentId) as Array<{ chat_id: string; content: string; generated_at: string }>;
+      .prepare(
+        "SELECT chat_id, content, generated_at FROM tg_coaching_tips WHERE agent_id = ? ORDER BY generated_at DESC",
+      )
+      .all(effectiveId) as Array<{ chat_id: string; content: string; generated_at: string }>;
     const result: Record<string, { chatId: string; content: string; generatedAt: string }> = {};
     for (const row of rows) {
       result[row.chat_id] = {
@@ -705,14 +720,21 @@ export class TelegramStorage {
     return result;
   }
 
-  /** Persist a single coaching tip for a dialog, replacing any previous value. */
-  saveCoachingTip(agentId: string, chatId: string, content: string, generatedAt: string): void {
+  /** Persist a single coaching tip, replacing any previous value. */
+  saveCoachingTip(
+    agentId: string,
+    chatId: string,
+    content: string,
+    generatedAt: string,
+    scope: "personal" | "shared" = "personal",
+  ): void {
+    const effectiveId = scope === "shared" ? TelegramStorage.SHARED_ID : agentId;
     this.db
       .prepare(
         `INSERT OR REPLACE INTO tg_coaching_tips (agent_id, chat_id, content, generated_at)
          VALUES (?, ?, ?, ?)`,
       )
-      .run(agentId, chatId, content, generatedAt);
+      .run(effectiveId, chatId, content, generatedAt);
   }
 
   // ─── Agent settings (work mode, schedule, active diagram) ────────────────
@@ -1190,11 +1212,12 @@ export class TelegramStorage {
   // ─── Flow Diagrams ────────────────────────────────────────────────────────
 
   getDiagram(agentId: string, scope: "personal" | "shared" = "personal"): FlowDiagram | null {
+    const effectiveId = scope === "shared" ? TelegramStorage.SHARED_ID : agentId;
     const row = this.db
       .prepare(
         "SELECT * FROM tg_flow_diagrams WHERE agent_id = ? AND scope = ? ORDER BY updated_at DESC LIMIT 1",
       )
-      .get(agentId, scope) as Record<string, unknown> | undefined;
+      .get(effectiveId, scope) as Record<string, unknown> | undefined;
     return row ? this.toFlowDiagram(row) : null;
   }
 
@@ -1208,11 +1231,12 @@ export class TelegramStorage {
 
   /** List all saved diagrams for an agent+scope, newest first. */
   listDiagrams(agentId: string, scope: "personal" | "shared" = "personal"): FlowDiagram[] {
+    const effectiveId = scope === "shared" ? TelegramStorage.SHARED_ID : agentId;
     const rows = this.db
       .prepare(
         "SELECT * FROM tg_flow_diagrams WHERE agent_id = ? AND scope = ? ORDER BY updated_at DESC",
       )
-      .all(agentId, scope) as Record<string, unknown>[];
+      .all(effectiveId, scope) as Record<string, unknown>[];
     return rows.map((r) => this.toFlowDiagram(r));
   }
 
@@ -1229,6 +1253,8 @@ export class TelegramStorage {
   }
 
   saveDiagram(d: FlowDiagram): void {
+    // Use sentinel agent_id for shared diagrams so all agents read the same rows.
+    const agentId = d.scope === "shared" ? TelegramStorage.SHARED_ID : d.agentId;
     this.db
       .prepare(`
         INSERT OR REPLACE INTO tg_flow_diagrams
@@ -1238,7 +1264,7 @@ export class TelegramStorage {
       `)
       .run({
         id: d.id,
-        agentId: d.agentId,
+        agentId,
         scope: d.scope,
         title: d.title,
         nodesJson: JSON.stringify(d.nodes),

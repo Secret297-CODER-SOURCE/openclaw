@@ -363,6 +363,11 @@ export class OpenClawApp extends LitElement {
   @state() telegramWebchatInput = "";
   @state() telegramWebchatSending = false;
   @state() telegramWebchatSearchQuery = "";
+  @state() telegramWebchatFolders: import("./controllers/telegram.ts").TelegramDialogFolder[] = [];
+  @state() telegramWebchatFolderId: number | null = null;
+  @state() telegramTranslateEnabled = false;
+  @state() telegramTranslations: Record<string, string> = {};
+  @state() telegramTranslateShowOriginals: Record<string, boolean> = {};
   // Non-reactive: holds the polling interval ID
   _telegramWebchatPollTimer: number | null = null;
 

@@ -175,6 +175,9 @@ export class UserBotAgent extends BaseAgent {
   /** In-memory cache: filter ID of the "AI" folder, null = not yet created. */
   private aiFolderFilterId: number | null = null;
 
+  /** In-memory set of chatIds already tagged with #AI (avoids redundant API calls). */
+  private aiTaggedContacts = new Set<string>();
+
   /**
    * Ensure the "AI" Telegram folder (dialog filter) exists.
    * Creates it if absent, caches its ID for subsequent peer additions.
@@ -307,9 +310,56 @@ export class UserBotAgent extends BaseAgent {
     }
   }
 
+  /**
+   * Append "#AI" to the contact's saved last name so they're searchable by tag.
+   * Only works for real (non-bot) users. Skips groups/channels/bots silently.
+   * Uses an in-memory set to avoid redundant Telegram API calls per session.
+   */
+  private async tagContactAsAi(chatId: string): Promise<void> {
+    const c = this.client;
+    if (!c || this.aiTaggedContacts.has(chatId)) return;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { Api: TgApi } = require("telegram/tl") as { Api: Record<string, any> };
+
+      const entity = await c.getEntity(chatId).catch(() => null);
+      // Only tag real human users — skip bots, groups, channels
+      if (!entity || (entity as any).className !== "User" || (entity as any).bot) return;
+
+      const firstName: string = (entity as any).firstName || "";
+      const lastName: string = (entity as any).lastName || "";
+      const combined = [firstName, lastName].filter(Boolean).join(" ");
+
+      // Already tagged — just cache it so we don't check again
+      if (combined.includes("#AI")) {
+        this.aiTaggedContacts.add(chatId);
+        return;
+      }
+
+      const newLastName = lastName ? `${lastName} #AI` : "#AI";
+      const inputPeer = await c.getInputEntity(chatId);
+
+      await c.invoke(
+        new TgApi["contacts"]["AddContact"]({
+          id: inputPeer,
+          firstName,
+          lastName: newLastName,
+          phone: (entity as any).phone || "",
+          addPhonePrivacyException: false,
+        }),
+      );
+
+      this.aiTaggedContacts.add(chatId);
+      this.logger.info(`[TG:${this.name}] contact ${chatId} tagged #AI`);
+    } catch (e) {
+      this.logger.warn(`[TG:${this.name}] tagContactAsAi failed: ${String(e)}`);
+    }
+  }
+
   /** Hook: called by BaseAgent.trackMessage on every outgoing message. */
   protected override onOutgoingMessage(chatId: string): void {
     void this.addChatToAiFolder(chatId);
+    void this.tagContactAsAi(chatId);
   }
 
   // --- Lifecycle ------------------------------------------------------------
@@ -482,10 +532,46 @@ export class UserBotAgent extends BaseAgent {
         return { ok: true, scheduled: true, delayMs: delay, target };
       }
 
+      case "get_dialog_filters": {
+        // Returns the list of Telegram folders (dialog filters) for this account
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { Api: TgApi } = require("telegram/tl") as { Api: Record<string, any> };
+        const result = await this.client.invoke(new TgApi["messages"]["GetDialogFilters"]({}));
+        const raw = (result as any)?.filters ?? result;
+        return (Array.isArray(raw) ? raw : [])
+          .filter((f: any) => f.className !== "DialogFilterDefault") // skip the built-in "All" pseudo-filter
+          .map((f: any) => ({
+            id: f.id as number,
+            title: (f.title?.text ?? f.title ?? "") as string,
+            emoji: (f.emoticon ?? null) as string | null,
+          }));
+      }
+
       case "get_dialogs": {
         const limit = typeof args.limit === "number" ? args.limit : 30;
-        const dialogs = await this.client.getDialogs({ limit });
-        return (dialogs as any[]).map((d: any) => {
+        const filterId = typeof args.filterId === "number" ? args.filterId : null;
+        // Fetch more dialogs when filtering so we have enough to filter from
+        const dialogs = await this.client.getDialogs({ limit: filterId ? 200 : limit });
+
+        let filtered = dialogs as any[];
+        if (filterId) {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const { Api: TgApi2 } = require("telegram/tl") as { Api: Record<string, any> };
+          const result = await this.client.invoke(new TgApi2["messages"]["GetDialogFilters"]({}));
+          const raw = (result as any)?.filters ?? result;
+          const folder = (Array.isArray(raw) ? raw : []).find((f: any) => f.id === filterId);
+          if (folder) {
+            // Build set of peer IDs from includePeers
+            const included = new Set<string>(
+              ((folder.includePeers ?? []) as any[]).map((p: any) =>
+                String(p.userId ?? p.channelId ?? p.chatId ?? ""),
+              ),
+            );
+            filtered = filtered.filter((d: any) => included.has(String(d.id)));
+          }
+        }
+
+        return filtered.map((d: any) => {
           const entity = d.entity;
           let name = "Unknown";
           if (entity) {
@@ -603,6 +689,8 @@ export class UserBotAgent extends BaseAgent {
   private async catchUpUnread(): Promise<void> {
     if (!this.client) return;
     const agentSettings = this.getAgentSettings();
+    // Master kill-switch: do nothing when AI is disabled.
+    if (agentSettings.aiEnabled === false) return;
     const mc = this.getBehavior<MasterControlBehavior>("master_control");
     const autoReplyCfg = this.getBehavior<any>("auto_reply");
 
@@ -629,6 +717,9 @@ export class UserBotAgent extends BaseAgent {
       const taskSession = this.getTaskSession(chatId);
       const hasAutoReply = autoReplyCfg?.enabled;
       const hasSchema = agentSettings.useSchema && !!agentSettings.activeDiagramId;
+
+      // replyTo: "tasks" — only engage with chats that have an active task session.
+      if (agentSettings.replyTo === "tasks" && !taskSession) continue;
 
       // Only process if this chat would be handled by schema, task_session, or auto_reply.
       if (!hasSchema && !taskSession && !hasAutoReply) continue;
@@ -785,8 +876,16 @@ export class UserBotAgent extends BaseAgent {
 
         const agentSettings = this.getAgentSettings();
 
+        // Master kill-switch: do nothing when AI is disabled.
+        if (agentSettings.aiEnabled === false) return;
+
         // Only active when schema mode is on.
         if (!agentSettings.useSchema || !agentSettings.activeDiagramId) return;
+
+        // replyTo: "tasks" — schema handler only activates for task-session chats.
+        // (task-session chats are routed to setupTaskSessionHandler above, so this
+        // handler never sees them; therefore replyTo=tasks means "nothing to do here")
+        if (agentSettings.replyTo === "tasks") return;
 
         // Capture resolved InputPeer before any async gap (needed for offline reply too).
         let msgPeer: EntityLike | undefined;

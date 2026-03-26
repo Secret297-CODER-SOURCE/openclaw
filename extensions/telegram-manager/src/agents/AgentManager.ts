@@ -50,15 +50,20 @@ export class AgentManager {
     });
 
     const records = this.storage.getAllAgents();
-    this.logger.info(`[TG] Loading ${records.length} agents — auto-starting all on gateway boot`);
+    this.logger.info(`[TG] Loading ${records.length} agents on gateway boot`);
     for (const r of records) {
       const agent = this.spawn(r);
       this.pool.set(r.id, agent);
-      // Always start every agent on gateway launch so agents come back online
-      // automatically after a restart without requiring manual intervention.
-      agent
-        .start()
-        .catch((e) => this.logger.error(`[TG] Auto-start failed: ${r.name}`, { e: String(e) }));
+      // Respect per-agent autoStartEnabled setting (defaults to true when absent).
+      const settings = this.storage.getAgentSettings(r.id);
+      const shouldAutoStart = settings.autoStartEnabled !== false;
+      if (shouldAutoStart) {
+        agent
+          .start()
+          .catch((e) => this.logger.error(`[TG] Auto-start failed: ${r.name}`, { e: String(e) }));
+      } else {
+        this.logger.info(`[TG] Auto-start skipped for ${r.name} (autoStartEnabled=false)`);
+      }
     }
   }
 
