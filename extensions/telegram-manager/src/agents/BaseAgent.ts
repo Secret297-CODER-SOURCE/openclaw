@@ -539,6 +539,10 @@ export abstract class BaseAgent extends EventEmitter {
           `phase=${timeAgreed ? "agreed" : timeProposed ? "proposed" : "init"} ` +
           `interest=${interestLevel} turns=${turnCount}`,
       );
+      this.pushEvent("behavior", {
+        action: "offline_lead_reply",
+        chatId,
+      });
       // Capture lead on phone detection or when time is confirmed
       if (/(?:\+?[\d][\d\s\-()]{6,}\d)/.test(userText) || timeAgreed) {
         void this.extractAndSaveLead(chatId, chatKey);
@@ -911,8 +915,8 @@ export abstract class BaseAgent extends EventEmitter {
   protected trackMessage(direction: "in" | "out", text: string, chat?: string) {
     this.storage.incrementStat(this.id, direction === "in" ? "received" : "sent");
     this.pushEvent(direction === "in" ? "message_in" : "message_out", {
-      text: text.slice(0, 500),
-      chat,
+      text, // full text, no truncation
+      chatId: chat,
     });
     // Hook for subclasses — called on every outgoing message with a known chatId.
     if (direction === "out" && chat) {
@@ -1608,6 +1612,12 @@ export abstract class BaseAgent extends EventEmitter {
         this.logger.info(
           `[TG:${this.name}] schema advance | chat=${chatId} [${nodeType}] "${currentNode.text.slice(0, 30)}" → "${nextNodes[0].node.text.slice(0, 40)}"`,
         );
+        this.pushEvent("behavior", {
+          action: "schema_advance",
+          chatId,
+          from: currentNode.text.slice(0, 60),
+          to: nextNodes[0].node.text.slice(0, 60),
+        });
         return;
       }
 
@@ -1650,6 +1660,12 @@ export abstract class BaseAgent extends EventEmitter {
       this.logger.info(
         `[TG:${this.name}] schema advance | chat=${chatId} [${nodeType}] "${currentNode.text.slice(0, 30)}" → [${chosenIdx + 1}/${nextNodes.length}] "${chosen.node.text.slice(0, 40)}"`,
       );
+      this.pushEvent("behavior", {
+        action: "schema_advance",
+        chatId,
+        from: currentNode.text.slice(0, 60),
+        to: chosen.node.text.slice(0, 60),
+      });
     };
 
     /**
@@ -1685,6 +1701,13 @@ export abstract class BaseAgent extends EventEmitter {
       this.logger.info(
         `[TG:${this.name}] schema reply | chat=${chatId} source=kb-adapted node="${currentNode.text.slice(0, 40)}"`,
       );
+      this.pushEvent("ai_reply", {
+        action: "schema_reply",
+        chatId,
+        source: "kb-adapted",
+        node: currentNode.text.slice(0, 60),
+        text: reply,
+      });
       const safeReply = this.enforceWorkingHours(stripPhoneNumbers(reply), settings);
       persistHistory(userText, safeReply);
       return safeReply;
@@ -1700,6 +1723,13 @@ export abstract class BaseAgent extends EventEmitter {
       this.logger.info(
         `[TG:${this.name}] schema reply | chat=${chatId} source=kb-decision-adapted node="${currentNode.text.slice(0, 40)}"`,
       );
+      this.pushEvent("ai_reply", {
+        action: "schema_reply",
+        chatId,
+        source: "kb-decision-adapted",
+        node: currentNode.text.slice(0, 60),
+        text: reply,
+      });
       const safeDecisionReply = this.enforceWorkingHours(stripPhoneNumbers(reply), settings);
       persistHistory(userText, safeDecisionReply);
       return safeDecisionReply;
@@ -1747,27 +1777,22 @@ export abstract class BaseAgent extends EventEmitter {
       "Что сегодня обсудим, Чем займёмся, расскажите о себе";
 
     let systemPrompt =
-      `Ты — топовый менеджер по продажам (живой человек, НЕ бот).\n` +
+      `Ты — опытный менеджер по продажам (живой человек, НЕ бот).\n` +
       `Стиль: уверенный, конкретный, нацеленный на сделку. Ты ПРЕДЛАГАЕШЬ — не расспрашиваешь.\n` +
-      (timeSinceLastMsg ? `Время с последнего сообщения клиента: ${timeSinceLastMsg}.\n` : "") +
-      `\n## ЖЁСТКИЕ ПРАВИЛА\n` +
-      `• ЯЗЫК: все сообщения клиента: "${allClientMsgsFallback.slice(0, 200)}" — отвечай СТРОГО на этом языке, без смешивания.\n` +
-      `• СНАЧАЛА — конкретная выгода или предложение. Вопрос — один, в конце, если необходим.\n` +
-      `• НИКОГДА не задавай 2+ вопросов подряд.\n` +
-      `• НИКОГДА не повторяй свои прошлые фразы дословно.\n` +
-      (greetingWasSentFallback
-        ? `• НЕ используй: "Привет", "Здравствуй", "Рад снова" — ты уже поздоровался ранее.\n`
-        : "") +
-      `• НЕ используй клише: ${clichesFallback}\n` +
-      (knownFactsFallback
-        ? `• Клиент УЖЕ сообщил: ${knownFactsFallback} — НЕ спрашивай это снова.\n`
-        : "") +
+      (timeSinceLastMsg ? `Пауза в диалоге: ${timeSinceLastMsg}.\n` : "") +
+      `\n## ПРАВИЛА\n` +
+      `• ЯЗЫК: "${allClientMsgsFallback.slice(0, 150)}" — отвечай СТРОГО на этом языке.\n` +
+      `• Ответ: 1–3 предложения, без воды. Никаких "надеюсь", "рад помочь", "отличный вопрос".\n` +
+      `• СНАЧАЛА выгода или боль. Вопрос — один, в конце, если нужен для перехода к следующему шагу.\n` +
+      `• НЕ задавай 2+ вопроса. НЕ повторяй свои прошлые фразы дословно.\n` +
+      (greetingWasSentFallback ? `• Не здоровайся повторно.\n` : "") +
+      `• ЗАПРЕЩЕНЫ клише: ${clichesFallback}\n` +
+      (knownFactsFallback ? `• Уже знаешь: ${knownFactsFallback} — не переспрашивай.\n` : "") +
       (isOffSchemaQuestion
-        ? `• Клиент спросил тебя лично — сначала ответь на его вопрос кратко, потом продолжи по скрипту.\n`
+        ? `• Клиент задал вопрос не по теме — ответь коротко, вернись к скрипту.\n`
         : "") +
-      `• Никогда не раскрывай, что ты ИИ или бот.\n` +
-      `• Ответ: 1–2 предложения, без воды.\n` +
-      `• ${strict ? "СТРОГО используй скрипты из базы как основу ответа." : "Используй скрипты из базы — они написаны лучшими менеджерами."}\n\n`;
+      `• Никогда не раскрывай, что ты ИИ.\n` +
+      `• ${strict ? "СТРОГО используй скрипты из базы как основу ответа." : "Скрипты из базы — адаптируй под контекст."}\n\n`;
 
     if (chatMemory?.memoryText) {
       systemPrompt +=
@@ -1786,6 +1811,14 @@ export abstract class BaseAgent extends EventEmitter {
     if (endNode && endNode.id !== currentNode.id) {
       systemPrompt += `## ЦЕЛЬ РАЗГОВОРА\n"${endNode.text}"\nВсё, что ты говоришь, должно вести к этой цели.\n\n`;
     }
+
+    // Funnel progress — shows agent where it is in the funnel visually
+    const funnelSection = this.buildFunnelProgressSection(diagram, currentNode.id);
+    if (funnelSection) systemPrompt += funnelSection + "\n";
+
+    // Client signal analysis — tells agent how to react RIGHT NOW
+    const signalSection = this.detectClientSignals(conversationHistory);
+    if (signalSection) systemPrompt += signalSection + "\n";
 
     systemPrompt +=
       `## ТЕКУЩИЙ ШАГ\n` + `[${currentNode.type.toUpperCase()}] "${currentNode.text}"\n\n`;
@@ -1843,22 +1876,32 @@ export abstract class BaseAgent extends EventEmitter {
       }
     }
 
-    // KB template injection — always treated as mandatory scripts from top managers.
+    // KB template injection.
+    // When scripts exist: inject them with buyer-style delivery instructions.
+    // When no scripts: neutral fallback.
     if (hasTemplates) {
-      const scoreLabel = (s: number) => (s === 3 ? "★★★ СКРИПТ" : s === 2 ? "★★ ПРОВЕРЕНО" : "★");
+      const scoreLabel = (s: number) => (s === 3 ? "★★★" : s === 2 ? "★★" : "★");
       systemPrompt +=
-        `\n## ГОТОВЫЕ СКРИПТЫ ТОПОВЫХ МЕНЕДЖЕРОВ (ТВОЯ ОСНОВА)\n` +
-        `ВАЖНО: Это ГОТОВЫЕ ПРЕДЛОЖЕНИЯ которые ты должен отправить клиенту — НЕ вопросы к клиенту.\n` +
-        `Это лучшие проверенные офферы от реальных топ-менеджеров.\n` +
-        `ПРАВИЛО: Возьми ОДИН из скриптов ниже и адаптируй его под язык клиента и контекст.\n` +
-        `ЗАПРЕЩЕНО: превращать скрипт в вопрос ("что вы думаете?", "расскажите о себе?") — скрипт это ОФФЕР который ты ПРЕДЛАГАЕШЬ.\n\n`;
+        `\n## СКРИПТЫ ИЗ БАЗЫ — ТВОЯ ОСНОВА\n` +
+        `Реальные рабочие офферы от лучших менеджеров. Возьми один и доставь клиенту.\n\n`;
       for (const p of topPairs) {
         systemPrompt += `[${scoreLabel(p.score)}] ${p.response}\n`;
       }
-      systemPrompt += `\nАДАПТИРУЙ ОДИН ИЗ СКРИПТОВ — переведи на язык клиента если нужно, но сохрани суть и стиль предложения.\n\n`;
+      const isBuyerStyle = agentSettings.schemaDeliveryStyle === "buyer";
+      if (isBuyerStyle) {
+        systemPrompt +=
+          `\n## КАК АДАПТИРОВАТЬ (стиль баера):\n` +
+          `• Переведи на язык клиента, сохрани суть и конкретику\n` +
+          `• НЕ превращай оффер в вопрос — это ПРЕДЛОЖЕНИЕ которое ты делаешь\n` +
+          `• Добавь деталь из текущего разговора чтобы звучало лично\n` +
+          `• Говори результатами: цифры, сроки, выгода — не "хорошие условия"\n` +
+          `• Убери воду: "я думаю", "возможно", "наверное" — только уверенный тон\n` +
+          `• Один скрипт — одно сообщение. Без списков, без заголовков.\n\n`;
+      } else {
+        systemPrompt += `\nАДАПТИРУЙ под язык и контекст клиента — сохрани суть и конкретику оффера.\n\n`;
+      }
     } else {
-      // No KB — remind the agent to stay sharp anyway.
-      systemPrompt += `\n(Скриптов для этого шага нет — действуй по ситуации как опытный менеджер, предлагай конкретику.)\n\n`;
+      systemPrompt += `\n(Скриптов для этого шага нет — действуй как опытный менеджер, говори конкретикой.)\n\n`;
     }
 
     // BRANCH tag for multi-exit decision nodes (stripped from the reply before sending)
@@ -1940,6 +1983,11 @@ export abstract class BaseAgent extends EventEmitter {
         this.logger.warn(
           `[TG:${this.name}] strict validation FAIL chat=${chatId}: ${violations.join("; ")} — rebuilding`,
         );
+        this.pushEvent("validation", {
+          action: "strict_fail",
+          chatId,
+          violations: violations.join("; "),
+        });
         const templateHint =
           topPairs.length > 0
             ? `\nЭталонные ответы для данного шага:\n${topPairs.map((p) => `- ${p.response}`).join("\n")}\n`
@@ -1967,12 +2015,23 @@ export abstract class BaseAgent extends EventEmitter {
         }
       } else {
         this.logger.info(`[TG:${this.name}] strict validation OK chat=${chatId}`);
+        this.pushEvent("validation", {
+          action: "strict_ok",
+          chatId,
+        });
       }
     }
 
     this.logger.info(
       `[TG:${this.name}] schema reply | chat=${chatId} source=${replySource} node="${currentNode.text.slice(0, 40)}"`,
     );
+    this.pushEvent("ai_reply", {
+      action: "schema_reply",
+      chatId,
+      source: replySource,
+      node: currentNode.text.slice(0, 60),
+      text: reply,
+    });
 
     // ── Auto-save validated data to chat memory ───────────────────────────
     // When a validation decision node routes to "valid", persist the user's
@@ -2022,6 +2081,12 @@ export abstract class BaseAgent extends EventEmitter {
       this.logger.info(
         `[TG:${this.name}] schema advance | chat=${chatId} [decision] "${currentNode.text.slice(0, 30)}" → "${chosenNode?.node.text.slice(0, 40) ?? chosenNextNodeId}"`,
       );
+      this.pushEvent("behavior", {
+        action: "schema_advance",
+        chatId,
+        from: currentNode.text.slice(0, 60),
+        to: chosenNode?.node.text.slice(0, 60) ?? chosenNextNodeId,
+      });
     } else {
       await advanceNode(currentNode.type);
     }
@@ -2153,43 +2218,36 @@ export abstract class BaseAgent extends EventEmitter {
     })();
 
     const systemPrompt =
-      `Ты — опытный менеджер по продажам, тебя зовут ${agentDisplayName}. НЕ бот, НЕ ИИ.\n` +
-      `Скрипт завершён. Теперь живой свободный разговор — отвечай как нормальный человек.\n\n` +
+      `Ты — ${agentDisplayName}, опытный менеджер по продажам. Живой человек, не ИИ.\n` +
+      `Скрипт завершён. Теперь свободный диалог — отвечай как живой человек, по делу.\n\n` +
       (isLoopFree
-        ? `## ⚠️ ПЕТЛЯ:\n` +
-          `Клиент спрашивает одно и то же ${repeatCountFree + 1}-й раз. Прошлые ответы НЕ помогли.\n` +
-          `Измени подход: спроси "Что именно вас смущает?" — и не повторяй прошлые ответы.\n\n`
+        ? `## ⚠️ ПЕТЛЯ (${repeatCountFree + 1}-й раз одно и то же):\n` +
+          `Прошлые ответы не сработали. Смени угол: вскрой реальное возражение — "Что конкретно стопорит?"\n\n`
         : "") +
       (chatMemory?.memoryText
-        ? `## КОНТЕКСТ (прошлые ${chatMemory.sessionsCount} сессий):\n${chatMemory.memoryText}\n\n`
+        ? `## ПАМЯТЬ О КЛИЕНТЕ (${chatMemory.sessionsCount} сессий):\n${chatMemory.memoryText}\n\n`
         : "") +
-      `## Темы что уже обсудили:\n${schemaSummary}\n\n` +
+      `## Что уже обсудили:\n${schemaSummary}\n\n` +
       (historyLines ? `## История:\n${historyLines}\n\n` : "") +
-      `## Клиент СЕЙЧАС написал: "${userText.slice(0, 300)}"\n` +
-      (lastManagerMsg ? `(Твоё последнее сообщение: "${lastManagerMsg}")\n` : "") +
-      `\n` +
-      (knownFacts ? `## Знаю о клиенте: ${knownFacts}\n\n` : "") +
-      `## Язык: "${allClientText.slice(0, 150)}" — отвечай СТРОГО на этом языке.\n\n` +
-      `## ГЛАВНОЕ ПРАВИЛО:\n` +
-      `Клиент написал: "${userText.slice(0, 150)}" — ОТВЕТЬ ИМЕННО НА ЭТО.\n` +
+      `## Клиент написал: "${userText.slice(0, 300)}"\n` +
+      (lastManagerMsg ? `## Твоё последнее: "${lastManagerMsg}"\n` : "") +
+      (knownFacts ? `## Знаешь о клиенте: ${knownFacts}\n` : "") +
       (confirmedAgreements
-        ? `Уже договорились: "${confirmedAgreements}" — это зафиксировано, НЕ возвращайся.\n`
+        ? `## Договорились: "${confirmedAgreements}" — не пересматривай.\n`
         : "") +
-      `\n## ТОН:\n` +
-      `Деловой партнёр. НЕ пиши "я могу подстраиваться" — предлагай конкретные варианты.\n` +
-      `Одна мысль = одно сообщение.\n\n` +
-      `## ЗАПРЕЩЕНО (ЖЁСТКО):\n` +
-      (lastAgentRepliesFree
-        ? `• Эти фразы уже говорил — НЕЛЬЗЯ ПОВТОРЯТЬ:\n${lastAgentRepliesFree}\n`
-        : "") +
-      (bannedTrailingFree ? `• Особо запрещённые концовки: ${bannedTrailingFree}\n` : "") +
-      `• НИКАКИХ телефонных номеров\n` +
-      (knownFacts ? `• НЕ спрашивай уже известное: ${knownFacts}\n` : "") +
-      `• НЕ задавать 2+ вопроса подряд\n` +
-      `• НЕ раскрывать что ты ИИ\n` +
-      `• НОЛЬ иностранных/турецких слов\n` +
-      `• ${strict ? "СТРОГО только темы скрипта." : "НЕ зацикливайся на договорённостях — двигайся вперёд."}\n\n` +
-      `Пиши как живой человек в Telegram. 2–3 предложения. Без пустых строк.`;
+      `\n## Язык: "${allClientText.slice(0, 100)}" — СТРОГО этот язык.\n\n` +
+      `## ЗАДАЧА:\nОтветь на "${userText.slice(0, 150)}" — конкретно, без воды.\n` +
+      `Думай как баер: ROI, конверсия, масштаб. Говори результатами, не обещаниями.\n\n` +
+      `## НЕЛЬЗЯ:\n` +
+      (lastAgentRepliesFree ? `• НЕ повторять: ${lastAgentRepliesFree}\n` : "") +
+      (bannedTrailingFree ? `• Запрещённые концовки: ${bannedTrailingFree}\n` : "") +
+      `• Телефонные номера\n` +
+      (knownFacts ? `• Спрашивать уже известное: ${knownFacts}\n` : "") +
+      `• 2+ вопроса подряд\n` +
+      `• Раскрывать что ты ИИ\n` +
+      `• Пустые фразы: "рад помочь", "отличный вопрос", "конечно"\n` +
+      `• ${strict ? "Выходить за рамки скрипта." : "Зацикливаться на одном — двигайся дальше."}\n\n` +
+      `2–3 предложения. Telegram-стиль. Без пустых строк.`;
 
     const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
     try {
@@ -2199,6 +2257,11 @@ export abstract class BaseAgent extends EventEmitter {
         .replace(/\s{2,}/g, " ")
         .trim();
       this.logger.info(`[TG:${this.name}] free-mode reply | chat=${chatId}`);
+      this.pushEvent("ai_reply", {
+        action: "free_mode_reply",
+        chatId,
+        text: rawReply,
+      });
       // Auto-learn: persist this exchange to the most relevant KB node (fire-and-forget)
       if (safeReply) {
         void this.learnFromFreeMode(userText, safeReply, diagram);
@@ -2545,12 +2608,11 @@ export abstract class BaseAgent extends EventEmitter {
           : "(история недоступна)";
 
       const systemPrompt =
-        "Ты профессиональный менеджер по продажам. Твоя задача — написать короткое, " +
-        "персонализированное сообщение для реактивации клиента, который давно не отвечал. " +
-        "Сообщение должно быть живым, интересным, вызывать желание ответить. " +
-        "Не используй шаблонные фразы. Длина — 1-2 предложения максимум. " +
-        "ВАЖНО: определи язык, на котором клиент писал в истории диалога, и пиши на том же языке. " +
-        "Отвечай ТОЛЬКО текстом самого сообщения, без кавычек, без пояснений.";
+        "Ты — менеджер по продажам. Пишешь реактивационное сообщение клиенту который давно молчит. " +
+        "Сообщение живое, персонализированное, вызывает желание ответить. " +
+        "Без клише ('давно не виделись', 'как дела'). 1–2 предложения максимум. " +
+        "Определи язык клиента по истории и пиши на нём. " +
+        "Только текст сообщения — без кавычек, без пояснений.";
 
       const userPrompt =
         `Базовый шаблон сообщения: "${baseMessage}"\n\n` +
@@ -2564,6 +2626,51 @@ export abstract class BaseAgent extends EventEmitter {
     } catch {
       // AI unavailable — fall back to the base template
       return baseMessage;
+    }
+  }
+
+  /**
+   * Fully AI-generated re-engagement: reads the FULL chat history and crafts
+   * a personalised message from scratch — no template used.
+   */
+  private async generateAiReEngagement(
+    contact: {
+      chatId: string;
+      firstName: string | null;
+      lastName: string | null;
+      username: string | null;
+    },
+    chatKey: string,
+  ): Promise<string | null> {
+    try {
+      const { callAdapterOnce } = await import("../behaviors/AiReplyEngine.js");
+      const allHistory = this.storage.loadConversationHistory(chatKey);
+      if (allHistory.length === 0) return null; // no history → skip
+
+      const historyText = allHistory
+        .map((m) => `${m.role === "user" ? "Клиент" : "Агент"}: ${m.content}`)
+        .join("\n");
+
+      const name =
+        contact.firstName ?? (contact.username ? contact.username.replace(/^@/, "") : null);
+      const nameHint = name ? `Имя контакта: ${name}.` : "Имя неизвестно.";
+
+      const systemPrompt =
+        "Ты — менеджер по продажам. Клиент давно молчит, нужно возобновить диалог. " +
+        "Прочитай историю и напиши одно сообщение строго в тему разговора — " +
+        "без 'привет', без 'как дела', без клише. " +
+        "Зацепи незакрытым вопросом или конкретикой из прошлого общения. " +
+        "1–2 предложения. Язык клиента. Только текст.";
+
+      const userPrompt =
+        `${nameHint}\n\n` +
+        `Полная история диалога:\n${historyText}\n\n` +
+        `Напиши реактивационное сообщение — коротко, в тему, живо.`;
+
+      const result = await callAdapterOnce(userPrompt, systemPrompt);
+      return result.replace(/^["«»']+|["«»']+$/g, "").trim() || null;
+    } catch {
+      return null;
     }
   }
 
@@ -2583,7 +2690,8 @@ export abstract class BaseAgent extends EventEmitter {
     }
 
     const template = settings.reEngagementTemplate?.trim();
-    if (!template) return;
+    // In full-AI mode a template is optional; in template mode it's required.
+    if (settings.reEngagementAiMode !== "ai" && !template) return;
 
     // Build delays array: prefer range (from/to) over legacy chips array.
     const fromDay = settings.reEngagementDelayFrom ?? null;
@@ -2613,16 +2721,25 @@ export abstract class BaseAgent extends EventEmitter {
       const resolvedName = contact.firstName ?? contact.username ?? null;
       if (settings.reEngagementNameOnly && !resolvedName) return;
 
-      const baseMessage = this.formatReEngagementMessage(
-        template,
-        contact.firstName,
-        contact.lastName,
-        contact.username,
-      );
-      if (!baseMessage) return;
-
       const chatKey = `${this.id}:${contact.chatId}`;
-      const message = await this.enhanceReEngagementMessage(baseMessage, chatKey);
+      let message: string;
+
+      if (settings.reEngagementAiMode === "ai") {
+        // Full AI mode: generate entirely from chat history, no template
+        const aiMsg = await this.generateAiReEngagement(contact, chatKey);
+        if (!aiMsg) return; // no history or AI failed — skip contact
+        message = aiMsg;
+      } else {
+        // Template mode (default): fill template + AI enhance
+        const baseMessage = this.formatReEngagementMessage(
+          template,
+          contact.firstName,
+          contact.lastName,
+          contact.username,
+        );
+        if (!baseMessage) return;
+        message = await this.enhanceReEngagementMessage(baseMessage, chatKey);
+      }
 
       try {
         await this.callTool("sendMessage", { target: contact.chatId, message });
@@ -2636,11 +2753,27 @@ export abstract class BaseAgent extends EventEmitter {
         this.logger.info(
           `[TG:${this.name}] re-engagement sent | chat=${contact.chatId} day=${dayLabel}`,
         );
+        this.pushEvent("reengagement", {
+          action: "sent",
+          chatId: contact.chatId,
+          day: dayLabel,
+          text: message,
+        });
       } catch (e) {
         this.logger.warn(
           `[TG:${this.name}] re-engagement failed | chat=${contact.chatId}: ${String(e)}`,
         );
       }
+    };
+
+    // Configurable pause between messages to avoid flood-detection.
+    const pauseMin = (settings.reEngagementPauseMin ?? 0) * 1000;
+    const pauseMax = Math.max(pauseMin, (settings.reEngagementPauseMax ?? 0) * 1000);
+    let sentCount = 0;
+    const maybePause = async () => {
+      if (sentCount === 0 || pauseMax === 0) return;
+      const delay = pauseMin + Math.random() * (pauseMax - pauseMin);
+      await new Promise((r) => setTimeout(r, delay));
     };
 
     // Process each specific day in the range.
@@ -2656,7 +2789,9 @@ export abstract class BaseAgent extends EventEmitter {
         windowEnd,
       );
       for (const contact of contacts) {
+        await maybePause();
         await sendReEngagement(contact, days);
+        sentCount++;
       }
     }
 
@@ -2666,7 +2801,9 @@ export abstract class BaseAgent extends EventEmitter {
       const moreDay = toDay ?? Math.max(...delays, 1);
       const contacts = this.storage.getContactsForReEngagementMore(this.id, moreDay);
       for (const contact of contacts) {
+        await maybePause();
         await sendReEngagement(contact, 9999);
+        sentCount++;
       }
     }
   }
@@ -2726,6 +2863,11 @@ export abstract class BaseAgent extends EventEmitter {
 
     const minutes = Math.round(delayMs / 60_000);
     this.logger.info(`[TG:${this.name}] follow-up scheduled | chat=${chatId} in ${minutes}min`);
+    this.pushEvent("followup", {
+      action: "scheduled",
+      chatId,
+      inMinutes: minutes,
+    });
   }
 
   /** Schedule an in-process timer for a follow-up. */
@@ -2798,6 +2940,11 @@ export abstract class BaseAgent extends EventEmitter {
       await this.callTool("sendMessage", { target: chatId, message });
       this.trackMessage("out", message, chatId);
       this.logger.info(`[TG:${this.name}] follow-up sent | chat=${chatId}`);
+      this.pushEvent("followup", {
+        action: "sent",
+        chatId,
+        text: message,
+      });
     } catch (e) {
       this.logger.warn(`[TG:${this.name}] follow-up send failed: ${String(e)}`);
     }
@@ -2953,5 +3100,192 @@ export abstract class BaseAgent extends EventEmitter {
     }
 
     return lines.join("\n");
+  }
+
+  /**
+   * Build a visual funnel-progress section for the system prompt.
+   * Shows which nodes are "done" (before the current node in BFS order),
+   * the current position, and the remaining path to the end goal.
+   *
+   * Example output:
+   *   ## ВОРОНКА ПРОДАЖ — ПРОГРЕСС
+   *   [✓ 1] Новый лид  →  [✓ 2] Приветствие  →  [► 3] Презентация  →  [ 4] Оффер  →  [ 5] Закрытие
+   *   Прогресс: 2 из 5 шагов  (40%)  |  Текущий: "Презентация"  |  Цель: "Закрытие"
+   */
+  private buildFunnelProgressSection(diagram: FlowDiagram, currentNodeId: string): string {
+    const startNode = diagram.nodes.find((n: DiagramNode) => n.type === "start");
+    if (!startNode || diagram.nodes.length < 2) return "";
+
+    // BFS order — gives us a linear reading of the funnel
+    const bfsOrder: DiagramNode[] = [];
+    const visited = new Set<string>();
+    const queue: string[] = [startNode.id];
+    while (queue.length > 0) {
+      const nid = queue.shift()!;
+      if (visited.has(nid)) continue;
+      visited.add(nid);
+      const node = diagram.nodes.find((n: DiagramNode) => n.id === nid);
+      if (node) bfsOrder.push(node);
+      for (const e of diagram.edges.filter((e: DiagramEdge) => e.sourceId === nid)) {
+        if (!visited.has(e.targetId)) queue.push(e.targetId);
+      }
+    }
+    // Any unreachable nodes appended
+    for (const n of diagram.nodes) {
+      if (!visited.has(n.id)) bfsOrder.push(n);
+    }
+
+    const total = bfsOrder.length;
+    const currentIdx = bfsOrder.findIndex((n) => n.id === currentNodeId);
+    if (currentIdx < 0) return "";
+
+    const completedCount = currentIdx; // nodes strictly before current
+    const pct = Math.round((completedCount / Math.max(total - 1, 1)) * 100);
+
+    // Build compact funnel line (max 8 nodes shown to keep prompt short)
+    const showNodes = bfsOrder.slice(0, 8);
+    const funnelLine = showNodes
+      .map((n, i) => {
+        const label = n.text.slice(0, 30);
+        if (n.id === currentNodeId) return `[►${i + 1}] ${label}`;
+        if (i < currentIdx) return `[✓${i + 1}] ${label}`;
+        return `[ ${i + 1}] ${label}`;
+      })
+      .join("  →  ");
+    const moreStr = bfsOrder.length > 8 ? `  →  … (ещё ${bfsOrder.length - 8})` : "";
+
+    const endNode = bfsOrder[bfsOrder.length - 1];
+    const goalLabel = endNode?.text.slice(0, 50) ?? "";
+
+    return (
+      `## ВОРОНКА ПРОДАЖ — ПРОГРЕСС\n` +
+      `${funnelLine}${moreStr}\n` +
+      `Прогресс: ${completedCount} из ${total - 1} шагов (${pct}%)  |  ` +
+      `Текущий шаг: "${bfsOrder[currentIdx]?.text.slice(0, 40)}"  |  ` +
+      `Цель: "${goalLabel}"\n` +
+      `⚡ Каждый твой ответ должен ПРОДВИГАТЬ клиента к следующему шагу. ` +
+      `Не застревай на текущем — веди вперёд.\n`
+    );
+  }
+
+  /**
+   * Detect buying signals in the latest client messages and return a
+   * buyer-style tactical instruction for the agent.
+   *
+   * No extra AI call — keyword heuristic, fast and deterministic.
+   * Scored by priority: close > price > delay > doubt > interest > neutral.
+   */
+  private detectClientSignals(
+    conversationHistory: Array<{ role: string; content: string }>,
+  ): string {
+    const clientMsgs = conversationHistory
+      .filter((m) => m.role === "user")
+      .slice(-3)
+      .map((m) => m.content.toLowerCase());
+    if (clientMsgs.length === 0) return "";
+    const text = clientMsgs.join(" ");
+
+    // ── 1. Готов к сделке ─────────────────────────────────────────────────
+    if (
+      /готов|согласен|давай|оформим|беру|где платить|как оплатить|как купить|стартуем|let'?s do|deal\b|sounds good|i['']?m in|ok go|записывай|подписываем/.test(
+        text,
+      )
+    ) {
+      return (
+        `## СТАТУС: 🟢 ЗАКРЫВАЕТСЯ\n` +
+        `Клиент в точке решения — НЕ дай остыть.\n` +
+        `► Назови конкретный следующий шаг прямо сейчас: ` +
+        `дата/время, реквизиты, ссылка или контакт.\n` +
+        `► НЕ переспрашивай "точно?", "уверены?" — просто веди к действию.\n` +
+        `► Тон: деловой, спокойный, как будто так и должно быть.\n`
+      );
+    }
+
+    // ── 2. Ценовое возражение ─────────────────────────────────────────────
+    if (
+      /дорого|не по карман|бюджет|скидк|дешевл|сколько стоит|цена|стоимость|expensive|too (much|pricey)|cheaper|price|cost\b|afford/.test(
+        text,
+      )
+    ) {
+      return (
+        `## СТАТУС: 💰 ЦЕНОВОЕ ВОЗРАЖЕНИЕ\n` +
+        `Клиент застрял на цене — типичный этап, не паникуй.\n` +
+        `► НЕ снижай цену сразу — это убьёт сделку и доверие.\n` +
+        `► Сначала: переведи в ROI — "ты платишь X, получаешь Y — окупается за Z".\n` +
+        `► Потом: вскрой реальный барьер — "что смущает — сумма или соотношение?".\n` +
+        `► Если нужно: предложи вход с меньшим риском (рассрочка, стартовый пакет, пилот).\n`
+      );
+    }
+
+    // ── 3. Откладывает / тянет ────────────────────────────────────────────
+    if (
+      /подумаю|посоветуюсь|позже|не сейчас|потом|нужно время|надо подумать|не готов|i'?ll think|maybe later|let me think|later|not now/.test(
+        text,
+      )
+    ) {
+      return (
+        `## СТАТУС: ⏳ ТЯНЕТ РЕЗИНУ\n` +
+        `"Подумаю" = скрытое возражение. НЕ говори "конечно, думайте".\n` +
+        `► Вскрой реальный стопор: "что конкретно стопорит — цена, время, или что-то ещё?"\n` +
+        `► Покажи потери: что клиент теряет каждую неделю пока не стартовал (цифры).\n` +
+        `► Создай реальную срочность: дедлайн, следующий свободный слот, изменение условий.\n` +
+        `► НЕ давай "подумать" — предложи конкретный маленький следующий шаг без риска.\n`
+      );
+    }
+
+    // ── 4. Сомневается / просит доказательств ─────────────────────────────
+    if (
+      /не уверен|сомневаюсь|риск|а вдруг|докажи|гарантии|отзывы|кейс|пример|not sure|doubt|guarantee|proof|risk|show me|evidence/.test(
+        text,
+      )
+    ) {
+      return (
+        `## СТАТУС: 🤔 НУЖНЫ ДОКАЗАТЕЛЬСТВА\n` +
+        `Клиент хочет снизить воспринимаемый риск.\n` +
+        `► Дай конкретный кейс с цифрами из скриптов/KB — не "многие клиенты", а "один чел из похожей ниши сделал X за Y".\n` +
+        `► Используй специфику: ниша, срок, результат — чем конкретнее, тем лучше работает.\n` +
+        `► Предложи минимальный вход без риска: "давай начнём с малого — убедишься сам".\n`
+      );
+    }
+
+    // ── 5. Конкурент / альтернатива ────────────────────────────────────────
+    if (
+      /конкурент|другой|альтернатив|сравни|у других|видел другой|есть ещё|competitor|alternative|compare|other option/.test(
+        text,
+      )
+    ) {
+      return (
+        `## СТАТУС: ⚔️ СРАВНИВАЕТ С КОНКУРЕНТОМ\n` +
+        `Клиент держит open loop — изучает рынок.\n` +
+        `► НЕ поливай конкурентов — это слабость.\n` +
+        `► Укрепи свою позицию: назови 1–2 конкретных отличия с цифрами.\n` +
+        `► Используй контраст: "там платишь за X, у нас X + Y + Z".\n` +
+        `► Закрой на следующий шаг, пока ещё не ушёл к другим.\n`
+      );
+    }
+
+    // ── 6. Активный интерес ────────────────────────────────────────────────
+    if (
+      /интересно|расскажи|хочу узнать|подробнее|а как|а можно|tell me more|interesting|how does|what about|i want|хочу попробовать/.test(
+        text,
+      )
+    ) {
+      return (
+        `## СТАТУС: 🔥 ГОРЯЧИЙ ИНТЕРЕС\n` +
+        `Клиент открыт — это лучший момент для продвижения.\n` +
+        `► НЕ сыпь фичами — дай один конкретный результат который получит именно он.\n` +
+        `► Сразу предложи следующий шаг: "давай 15-минутный созвон — покажу конкретику под твою ситуацию".\n` +
+        `► Тон: уверенный, не заискивающий — ты знаешь что у тебя есть рабочий продукт.\n`
+      );
+    }
+
+    // ── 7. Нейтральный / стандартный ──────────────────────────────────────
+    return (
+      `## СТАТУС: 🔵 НЕЙТРАЛЬНЫЙ\n` +
+      `Стандартный ход.\n` +
+      `► Выполни текущий шаг скрипта: конкретное предложение или выгода.\n` +
+      `► Один вопрос в конце чтобы продвинуть к следующему узлу воронки.\n` +
+      `► Думай о ROI клиента — говори его деньгами и его результатами.\n`
+    );
   }
 }

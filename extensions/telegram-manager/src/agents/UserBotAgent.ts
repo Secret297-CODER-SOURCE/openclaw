@@ -767,6 +767,10 @@ export class UserBotAgent extends BaseAgent {
       this.trackMessage("in", text, chatId);
       this.detectFollowupRequest(chatId, chatKey, text);
       this.logger.info(`[TG:${this.name}] catch-up: processing unread from ${chatId}`);
+      this.pushEvent("behavior", {
+        action: "catchup_process",
+        chatId,
+      });
 
       try {
         if (agentSettings.useSchema && agentSettings.activeDiagramId) {
@@ -1584,8 +1588,17 @@ export class UserBotAgent extends BaseAgent {
   ): Promise<void> {
     const parts = splitMessage(text);
     for (let i = 0; i < parts.length; i++) {
-      if (i > 0) {
-        // Human-like delay: scales with the length of the previous part
+      if (i === 0) {
+        // Pre-reply delay: configurable range that simulates human "thinking time".
+        const s = this.getAgentSettings();
+        const minSec = s.replyDelayMin ?? 0;
+        const maxSec = s.replyDelayMax ?? 0;
+        if (maxSec > 0) {
+          const delayMs = (minSec + Math.random() * Math.max(0, maxSec - minSec)) * 1000;
+          if (delayMs > 0) await this.delay(delayMs);
+        }
+      } else {
+        // Human-like delay between chunks: scales with the length of the previous part
         // (longer message → longer "typing" time), plus random jitter.
         const prevLen = parts[i - 1].length;
         // ~50 ms per character to simulate typing, capped at 5 s base + 2 s jitter.

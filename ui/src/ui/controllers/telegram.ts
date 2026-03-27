@@ -26,7 +26,18 @@ export type TelegramAgentRecord = {
 export type TelegramAgentEvent = {
   agentId: string;
   agentName: string;
-  type: "message_in" | "message_out" | "parsed_item" | "status_change" | "error";
+  type:
+    | "message_in"
+    | "message_out"
+    | "parsed_item"
+    | "status_change"
+    | "error"
+    | "agent_message"
+    | "behavior"
+    | "ai_reply"
+    | "reengagement"
+    | "followup"
+    | "validation";
   payload: Record<string, unknown>;
   timestamp: string;
 };
@@ -2423,23 +2434,26 @@ export type DiagramKnowledgeBase = {
  */
 export function saveAgentScope(
   tab: "training" | "schema",
-  agentId: string,
+  _agentId: string,
   scope: TrainingScope,
 ): void {
   try {
-    localStorage.setItem(`${LS_SCOPE_PREFIX}${tab}_${agentId}`, scope);
+    // Scope is global (not per-agent) so all agents share the same setting.
+    localStorage.setItem(`${LS_SCOPE_PREFIX}${tab}`, scope);
   } catch {
     // Non-fatal — localStorage may be unavailable in some browsers/contexts.
   }
 }
 
 /**
- * Restore the last-saved scope for a given tab + agent.
+ * Restore the last-saved scope for a given tab.
+ * Global (not per-agent): switching agents preserves the selected scope.
  * Returns "personal" as the default if nothing is persisted yet.
  */
-export function loadAgentScope(tab: "training" | "schema", agentId: string): TrainingScope {
+export function loadAgentScope(tab: "training" | "schema", _agentId: string): TrainingScope {
   try {
-    const val = localStorage.getItem(`${LS_SCOPE_PREFIX}${tab}_${agentId}`);
+    // Check global key first; fall back to any per-agent key for migration.
+    const val = localStorage.getItem(`${LS_SCOPE_PREFIX}${tab}`);
     if (val === "personal" || val === "shared") {
       return val;
     }

@@ -1,5 +1,63 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
+
+/** Attach drag-to-scroll behaviour to a horizontal scroll container.
+ *  Uses a movement threshold so short taps still reach child buttons as clicks.
+ */
+function initDragScroll(el: Element | undefined) {
+  if (!el || (el as HTMLElement).dataset["dragScroll"]) {
+    return;
+  }
+  const node = el as HTMLElement;
+  node.dataset["dragScroll"] = "1";
+  let isDown = false;
+  let didDrag = false;
+  let startX = 0;
+  let scrollLeft = 0;
+  const THRESHOLD = 5; // px — below this = click, above = drag
+  node.addEventListener("mousedown", (e: MouseEvent) => {
+    // Only primary button; ignore clicks directly on buttons (let them propagate)
+    if (e.button !== 0) {
+      return;
+    }
+    isDown = true;
+    didDrag = false;
+    startX = e.pageX;
+    scrollLeft = node.scrollLeft;
+    node.style.cursor = "grabbing";
+  });
+  window.addEventListener("mouseup", () => {
+    if (!isDown) {
+      return;
+    }
+    isDown = false;
+    node.style.cursor = "";
+    node.classList.remove("is-dragging");
+  });
+  window.addEventListener("mousemove", (e: MouseEvent) => {
+    if (!isDown) {
+      return;
+    }
+    const dx = e.pageX - startX;
+    if (!didDrag && Math.abs(dx) < THRESHOLD) {
+      return;
+    }
+    didDrag = true;
+    node.classList.add("is-dragging");
+    node.scrollLeft = scrollLeft - dx;
+  });
+  // Suppress click on buttons when we actually dragged
+  node.addEventListener(
+    "click",
+    (e: MouseEvent) => {
+      if (didDrag) {
+        e.stopPropagation();
+        e.preventDefault();
+      }
+    },
+    true,
+  );
+}
 import type { TelegramAgentRecord } from "../controllers/telegram.ts";
 import type {
   TelegramDialog,
@@ -217,7 +275,7 @@ export function renderWebchat(props: WebchatProps) {
           ${
             folders.length > 0
               ? html`
-                  <div class="tg-wc-folders">
+                  <div class="tg-wc-folders" ${ref(initDragScroll)}>
                     <button
                       type="button"
                       class="tg-wc-folder ${selectedFolderId === null ? "tg-wc-folder--active" : ""}"

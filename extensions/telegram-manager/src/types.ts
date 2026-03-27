@@ -250,6 +250,13 @@ export interface AgentSettings {
   schemaStrictMode?: boolean;
 
   /**
+   * Delivery style for KB scripts in schema mode.
+   * - "neutral"  — стандартный менеджер (default)
+   * - "buyer"    — стиль баера: цифры, ROI, без воды, уверенный тон
+   */
+  schemaDeliveryStyle?: "neutral" | "buyer";
+
+  /**
    * When true and scheduleMode === "schedule", the AI continues chatting and
    * processing leads while the manager is offline.  The AI knows the manager's
    * working hours ({от}/{до}) and focuses on qualifying the lead and collecting
@@ -307,6 +314,18 @@ export interface AgentSettings {
   reEngagementDelayMore?: boolean;
 
   /**
+   * Minimum pause between consecutive re-engagement sends (seconds). Default 0.
+   * Helps avoid flood-detection when many contacts are processed in one cycle.
+   */
+  reEngagementPauseMin?: number;
+
+  /**
+   * Maximum pause between consecutive re-engagement sends (seconds). Default 0.
+   * Actual delay is random in [reEngagementPauseMin, reEngagementPauseMax].
+   */
+  reEngagementPauseMax?: number;
+
+  /**
    * Message template. Supports placeholders:
    *   {имя}        — first name
    *   {фамилия}    — last name
@@ -318,8 +337,30 @@ export interface AgentSettings {
   /** When true, only send re-engagement if the contact's first name is known. */
   reEngagementNameOnly?: boolean;
 
+  /**
+   * AI-персонализация реактивации:
+   * - "template"  — использует шаблон + AI улучшает (текущее поведение)
+   * - "ai"        — AI читает ВСЮ историю чата и генерирует сообщение с нуля
+   */
+  reEngagementAiMode?: "template" | "ai";
+
   /** Previously saved re-engagement templates the user can pick from. */
   reEngagementSavedTemplates?: string[];
+
+  // ── Reply delay (schema + free mode) ──────────────────────────────────────
+
+  /**
+   * Minimum pause (seconds) before sending an AI reply.
+   * Simulates human "thinking time". Default 0 (no delay).
+   */
+  replyDelayMin?: number;
+
+  /**
+   * Maximum pause (seconds) before sending an AI reply.
+   * Actual delay is a random value in [replyDelayMin, replyDelayMax].
+   * Default 0 (no delay).
+   */
+  replyDelayMax?: number;
 }
 
 // ─── Lead record ──────────────────────────────────────────────────────────────
@@ -518,7 +559,18 @@ export interface TelegramExportChat {
 export interface TelegramEvent {
   agentId: string;
   agentName: string;
-  type: "message_in" | "message_out" | "parsed_item" | "status_change" | "error" | "agent_message";
+  type:
+    | "message_in"
+    | "message_out"
+    | "parsed_item"
+    | "status_change"
+    | "error"
+    | "agent_message"
+    | "behavior" // agent decision: schema advance, free-mode, offline-lead, catch-up, etc.
+    | "ai_reply" // full AI reply with context
+    | "reengagement" // re-engagement sent
+    | "followup" // follow-up scheduled/sent
+    | "validation"; // strict schema validation pass/fail
   payload: Record<string, unknown>;
   timestamp: string;
 }

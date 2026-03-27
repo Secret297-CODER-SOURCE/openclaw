@@ -3739,17 +3739,29 @@
 .tg-wc-folders {
   display: flex;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 6px 10px 8px;
   flex-shrink: 0;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: none; /* Firefox */
+  scrollbar-width: thin; /* Firefox — thin visible scrollbar */
+  scrollbar-color: var(--border) transparent;
   border-bottom: 1px solid var(--border);
   -webkit-overflow-scrolling: touch;
+  cursor: grab;
+  user-select: none;
 }
-
+.tg-wc-folders.is-dragging {
+  cursor: grabbing;
+}
 .tg-wc-folders::-webkit-scrollbar {
-  display: none; /* Chrome/Safari */
+  height: 3px;
+}
+.tg-wc-folders::-webkit-scrollbar-track {
+  background: transparent;
+}
+.tg-wc-folders::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
 }
 
 .tg-wc-folder {
