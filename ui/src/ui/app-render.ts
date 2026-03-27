@@ -1363,7 +1363,25 @@ export function renderApp(state: AppViewState) {
                   state.telegramTrainingEditorError = null;
                 },
                 onTrainingSelectChat: (id) => {
+                  // Save scroll position of the current chat before switching
+                  const prevBubbles = document.querySelector(".tg-msng-bubbles");
+                  if (prevBubbles && state.telegramTrainingSelectedChatId) {
+                    state._trainingScrollPositions ??= {};
+                    state._trainingScrollPositions[state.telegramTrainingSelectedChatId] =
+                      prevBubbles.scrollTop;
+                  }
                   state.telegramTrainingSelectedChatId = id;
+                  // Restore or reset scroll after Lit renders the new chat
+                  void state.updateComplete.then(() => {
+                    requestAnimationFrame(() => {
+                      const bubbles = document.querySelector(".tg-msng-bubbles");
+                      if (!bubbles) {
+                        return;
+                      }
+                      const saved = id ? (state._trainingScrollPositions?.[id] ?? 0) : 0;
+                      bubbles.scrollTop = saved;
+                    });
+                  });
                 },
                 onTrainingSearchChange: (q) => {
                   state.telegramTrainingSearchQuery = q;

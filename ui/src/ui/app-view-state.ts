@@ -276,6 +276,8 @@ export type AppViewState = {
   telegramBatchError: string | null;
   /** Non-reactive abort ref set by runBatchAnalysis */
   _telegramBatchAbort?: { cancelled: boolean };
+  /** Non-reactive: scroll position per training chatId */
+  _trainingScrollPositions?: Record<string, number>;
   // Build schema + KB from training chats
   telegramBuildLoading: boolean;
   telegramBuildResult: import("./controllers/telegram.ts").BuildFromTrainingResult | null;

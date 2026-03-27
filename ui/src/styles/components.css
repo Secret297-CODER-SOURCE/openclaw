@@ -3209,6 +3209,8 @@
   flex-direction: column;
   gap: 6px;
   overscroll-behavior: contain;
+  /* Disable browser scroll anchoring — we manage scroll position manually */
+  overflow-anchor: none;
 }
 
 /* Outer msg wrapper — matches .tg-wc-msg */
