@@ -393,15 +393,27 @@ export function renderWebchat(props: WebchatProps) {
                     >🌐 ${translateEnabled ? "Перевод вкл" : "Перевод"}</button>
                   </div>
 
-                  <!-- Messages — scrolled to bottom only on initial mount -->
+                  <!-- Messages — scrolled to bottom only on initial mount.
+                       Subsequent re-renders (e.g. translations arriving) must NOT reset scroll. -->
                   <div class="tg-wc-messages" id="tg-wc-msg-list"
                     ${ref((el: Element | undefined) => {
-                      if (el && !_wcInitialScrolled.has(el)) {
+                      if (!el) {
+                        return;
+                      }
+                      if (!_wcInitialScrolled.has(el)) {
                         _wcInitialScrolled.add(el);
                         requestAnimationFrame(() => {
-                          (el as HTMLElement).scrollTop = (el as HTMLElement).scrollHeight;
+                          el.scrollTop = el.scrollHeight;
                         });
+                        return; // skip preservation on initial mount
                       }
+                      // Re-render: lock scroll position so content changes (translations) don't shift it.
+                      const savedTop = el.scrollTop;
+                      requestAnimationFrame(() => {
+                        if (el.scrollTop !== savedTop) {
+                          el.scrollTop = savedTop;
+                        }
+                      });
                     })}>
                     ${
                       props.messagesLoading && messages.length === 0

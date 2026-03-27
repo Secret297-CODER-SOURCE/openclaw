@@ -4028,6 +4028,8 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
+  /* Prevent browser from auto-adjusting scroll when content changes (e.g. translations) */
+  overflow-anchor: none;
 }
 
 .tg-wc-msg {
