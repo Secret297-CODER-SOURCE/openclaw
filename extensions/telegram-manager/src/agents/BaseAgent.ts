@@ -2645,7 +2645,12 @@ export abstract class BaseAgent extends EventEmitter {
     try {
       const { callAdapterOnce } = await import("../behaviors/AiReplyEngine.js");
       const allHistory = this.storage.loadConversationHistory(chatKey);
-      if (allHistory.length === 0) return null; // no history → skip
+      if (allHistory.length === 0) {
+        this.logger.info(
+          `[TG:${this.name}] re-engagement AI skip (no history) | chat=${contact.chatId}`,
+        );
+        return null;
+      }
 
       const historyText = allHistory
         .map((m) => `${m.role === "user" ? "Клиент" : "Агент"}: ${m.content}`)
@@ -2669,7 +2674,10 @@ export abstract class BaseAgent extends EventEmitter {
 
       const result = await callAdapterOnce(userPrompt, systemPrompt);
       return result.replace(/^["«»']+|["«»']+$/g, "").trim() || null;
-    } catch {
+    } catch (e) {
+      this.logger.warn(
+        `[TG:${this.name}] re-engagement AI generation failed | chat=${contact.chatId}: ${String(e)}`,
+      );
       return null;
     }
   }
@@ -2706,8 +2714,13 @@ export abstract class BaseAgent extends EventEmitter {
     if (delays.length === 0 && !settings.reEngagementDelayMore) return;
 
     const now = Date.now();
-    // Check window: ±30 minutes around the exact delay target
-    const windowMs = 30 * 60 * 1000;
+    this.logger.info(
+      `[TG:${this.name}] re-engagement check | delays=${JSON.stringify(delays)} more=${settings.reEngagementDelayMore ?? false}`,
+    );
+
+    // Window for exact-day matches: ±2 h for day 0 (fresh contacts), ±1 h for day 1+.
+    // Wider window ensures the every-30-min cron never misses a contact entirely.
+    const windowMs = (d: number) => (d === 0 ? 2 * 60 * 60 * 1000 : 60 * 60 * 1000);
 
     // Helper: send a re-engagement message to a contact.
     const sendReEngagement = async (
@@ -2781,14 +2794,18 @@ export abstract class BaseAgent extends EventEmitter {
     // Process each specific day in the range.
     for (const days of delays) {
       const targetMs = days * 24 * 60 * 60 * 1000;
-      const windowStart = new Date(now - targetMs - windowMs).toISOString();
-      const windowEnd = new Date(now - targetMs + windowMs).toISOString();
+      const wMs = windowMs(days);
+      const windowStart = new Date(now - targetMs - wMs).toISOString();
+      const windowEnd = new Date(now - targetMs + wMs).toISOString();
 
       const contacts = this.storage.getContactsForReEngagement(
         this.id,
         days,
         windowStart,
         windowEnd,
+      );
+      this.logger.info(
+        `[TG:${this.name}] re-engagement day=${days} window=[${windowStart}..${windowEnd}] found=${contacts.length}`,
       );
       for (const contact of contacts) {
         await maybePause();
@@ -2802,6 +2819,9 @@ export abstract class BaseAgent extends EventEmitter {
     if (settings.reEngagementDelayMore) {
       const moreDay = toDay ?? Math.max(...delays, 1);
       const contacts = this.storage.getContactsForReEngagementMore(this.id, moreDay);
+      this.logger.info(
+        `[TG:${this.name}] re-engagement more (>${moreDay}d) found=${contacts.length}`,
+      );
       for (const contact of contacts) {
         await maybePause();
         await sendReEngagement(contact, 9999);
