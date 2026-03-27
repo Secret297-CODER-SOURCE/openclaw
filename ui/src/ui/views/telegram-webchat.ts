@@ -9,7 +9,8 @@ import { ref } from "lit/directives/ref.js";
 const _wcInitialScrolled = new WeakSet<Element>();
 
 /** Attach drag-to-scroll behaviour to a horizontal scroll container.
- *  Uses a movement threshold so short taps still reach child buttons as clicks.
+ *  Only activates drag when pointer-down starts on the container itself (not on a child button).
+ *  Uses a generous movement threshold so trackpad micro-jitter doesn't suppress clicks.
  */
 function initDragScroll(el: Element | undefined) {
   if (!el || (el as HTMLElement).dataset["dragScroll"]) {
@@ -21,10 +22,16 @@ function initDragScroll(el: Element | undefined) {
   let didDrag = false;
   let startX = 0;
   let scrollLeft = 0;
-  const THRESHOLD = 5; // px — below this = click, above = drag
+  // 12px threshold prevents trackpad micro-jitter from being treated as a drag.
+  const THRESHOLD = 12;
+
   node.addEventListener("mousedown", (e: MouseEvent) => {
-    // Only primary button; ignore clicks directly on buttons (let them propagate)
     if (e.button !== 0) {
+      return;
+    }
+    // If the click originated on a button/anchor, let it pass through as a normal click.
+    const target = e.target as HTMLElement | null;
+    if (target && target.closest("button, a")) {
       return;
     }
     isDown = true;
@@ -32,7 +39,9 @@ function initDragScroll(el: Element | undefined) {
     startX = e.pageX;
     scrollLeft = node.scrollLeft;
     node.style.cursor = "grabbing";
+    e.preventDefault(); // prevent text selection during drag
   });
+
   window.addEventListener("mouseup", () => {
     if (!isDown) {
       return;
@@ -41,6 +50,7 @@ function initDragScroll(el: Element | undefined) {
     node.style.cursor = "";
     node.classList.remove("is-dragging");
   });
+
   window.addEventListener("mousemove", (e: MouseEvent) => {
     if (!isDown) {
       return;
@@ -53,13 +63,15 @@ function initDragScroll(el: Element | undefined) {
     node.classList.add("is-dragging");
     node.scrollLeft = scrollLeft - dx;
   });
-  // Suppress click on buttons when we actually dragged
+
+  // Belt-and-suspenders: suppress residual click if we actually scrolled
   node.addEventListener(
     "click",
     (e: MouseEvent) => {
       if (didDrag) {
         e.stopPropagation();
         e.preventDefault();
+        didDrag = false; // reset so next click isn't suppressed
       }
     },
     true,
