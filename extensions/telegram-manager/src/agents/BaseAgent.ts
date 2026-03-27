@@ -2677,6 +2677,8 @@ export abstract class BaseAgent extends EventEmitter {
   /** Check all delay thresholds and send re-engagement messages to qualifying contacts. */
   private async runReEngagementCheck(): Promise<void> {
     const settings = this.getAgentSettings();
+    // Master AI kill-switch — do nothing when AI is fully disabled.
+    if (settings.aiEnabled === false) return;
     if (!settings.reEngagementEnabled) return;
 
     // "Молчать": if agent is on schedule AND currently outside the window AND
@@ -2907,6 +2909,12 @@ export abstract class BaseAgent extends EventEmitter {
     chatId: string,
     chatKey: string,
   ): Promise<void> {
+    // Master AI kill-switch — skip follow-up when AI is fully disabled.
+    const followupSettings = this.getAgentSettings();
+    if (followupSettings.aiEnabled === false) {
+      this.storage.markFollowupSent(followupId); // consume it so it doesn't retry
+      return;
+    }
     // Mark as sent first so even if sending fails it won't retry
     this.storage.markFollowupSent(followupId);
 
