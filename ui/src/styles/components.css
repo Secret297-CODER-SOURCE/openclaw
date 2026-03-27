@@ -3774,7 +3774,10 @@
   font-size: 0.75rem;
   padding: 3px 12px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -3800,11 +3803,17 @@
   font-size: 0.75rem;
   padding: 3px 10px;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
   white-space: nowrap;
   flex-shrink: 0;
 }
-.tg-translate-btn:hover { border-color: var(--primary); color: var(--text); }
+.tg-translate-btn:hover {
+  border-color: var(--primary);
+  color: var(--text);
+}
 .tg-translate-btn--on {
   background: var(--primary);
   border-color: var(--primary);
@@ -3824,7 +3833,10 @@
   opacity: 0.7;
   transition: opacity 0.12s;
 }
-.tg-translate-orig-btn:hover { opacity: 1; color: var(--primary); }
+.tg-translate-orig-btn:hover {
+  opacity: 1;
+  color: var(--primary);
+}
 
 .tg-translate-pending {
   font-size: 0.68rem;
