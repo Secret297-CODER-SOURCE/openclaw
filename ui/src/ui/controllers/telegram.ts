@@ -2223,6 +2223,64 @@ export async function analyzeTrainingData(
   }
 }
 
+// ─── Build schema + KB from top training chats ───────────────────────────────
+
+export type BuildFromTrainingResult = {
+  diagramTitle: string;
+  diagramNodeCount: number;
+  kbEntryCount: number;
+  kbPairCount: number;
+  kbError?: string;
+};
+
+export async function buildFromTraining(
+  state: TelegramScenarioState,
+  agentId: string,
+): Promise<BuildFromTrainingResult> {
+  if (!isReady(state)) {
+    throw new Error("Нет подключения к gateway");
+  }
+
+  const scope = state.telegramTrainingScope ?? "personal";
+  const groups = state.telegramTrainingGroups;
+  const labels = state.telegramTrainingLabels;
+
+  if (groups.length === 0) {
+    throw new Error("Нет обучающих данных. Загрузите экспорт переписки в разделе «Обучение».");
+  }
+
+  const res = await state.client!.request<{
+    diagram?: FlowDiagram;
+    kb?: DiagramKnowledgeBase | null;
+    kbError?: string;
+  }>("telegram.scenario.buildFromTraining", {
+    agentId,
+    scope,
+    groups,
+    labels,
+  });
+
+  const diagram = res?.diagram;
+  const kb = res?.kb ?? null;
+
+  if (diagram) {
+    state.telegramDiagram = diagram;
+    // Refresh diagram list
+    void loadDiagramListAllScopes(state, agentId).catch(() => {});
+  }
+  if (kb) {
+    state.telegramKnowledgeBase = kb;
+  }
+
+  return {
+    diagramTitle: diagram?.title ?? "Схема",
+    diagramNodeCount: diagram?.nodes?.length ?? 0,
+    kbEntryCount: kb?.entries?.length ?? 0,
+    kbPairCount: kb?.entries?.reduce((s, e) => s + (e.pairs?.length ?? 0), 0) ?? 0,
+    kbError: res?.kbError,
+  };
+}
+
 // ─── Webchat (Telegram-Web-like) ──────────────────────────────────────────────
 
 /** A single dialog entry returned by get_dialogs tool */

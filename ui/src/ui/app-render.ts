@@ -123,6 +123,7 @@ import {
   loadLeads,
   deleteTelegramLead,
   saveTelegramLead,
+  buildFromTraining,
 } from "./controllers/telegram.ts";
 import { icons } from "./icons.ts";
 import { TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
@@ -1410,6 +1411,28 @@ export function renderApp(state: AppViewState) {
                 },
                 onCancelBatchAnalysis: () => {
                   cancelBatchAnalysis(state);
+                },
+                // Build schema + KB from top training chats
+                buildLoading: state.telegramBuildLoading,
+                buildResult: state.telegramBuildResult,
+                buildError: state.telegramBuildError,
+                onBuildFromTraining: (agentId) => {
+                  if (state.telegramBuildLoading) {
+                    return;
+                  }
+                  state.telegramBuildLoading = true;
+                  state.telegramBuildResult = null;
+                  state.telegramBuildError = null;
+                  void buildFromTraining(state, agentId)
+                    .then((result) => {
+                      state.telegramBuildResult = result;
+                    })
+                    .catch((err: unknown) => {
+                      state.telegramBuildError = String(err);
+                    })
+                    .finally(() => {
+                      state.telegramBuildLoading = false;
+                    });
                 },
                 // Webchat
                 webchatDialogs: state.telegramWebchatDialogs,

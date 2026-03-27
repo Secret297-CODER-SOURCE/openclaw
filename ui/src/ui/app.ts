@@ -353,6 +353,12 @@ export class OpenClawApp extends LitElement {
   // Non-reactive: mutated in-place by runBatchAnalysis/cancelBatchAnalysis
   _telegramBatchAbort: { cancelled: boolean } = { cancelled: false };
 
+  // Build schema + KB from training chats
+  @state() telegramBuildLoading = false;
+  @state() telegramBuildResult: import("./controllers/telegram.ts").BuildFromTrainingResult | null =
+    null;
+  @state() telegramBuildError: string | null = null;
+
   // Webchat (Telegram-Web-like messenger)
   @state() telegramWebchatDialogs: import("./controllers/telegram.ts").TelegramDialog[] = [];
   @state() telegramWebchatDialogsLoading = false;

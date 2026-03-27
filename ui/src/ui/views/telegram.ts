@@ -254,6 +254,11 @@ export type TelegramProps = {
   batchError: string | null;
   onRunBatchAnalysis: (agentId: string, force?: boolean) => void;
   onCancelBatchAnalysis: () => void;
+  // Build schema + KB from top training chats
+  buildLoading: boolean;
+  buildResult: import("../controllers/telegram.ts").BuildFromTrainingResult | null;
+  buildError: string | null;
+  onBuildFromTraining: (agentId: string) => void;
   // Webchat (Telegram Web messenger)
   webchatDialogs: import("../controllers/telegram.ts").TelegramDialog[];
   webchatDialogsLoading: boolean;
@@ -1929,6 +1934,10 @@ function renderDetail(props: TelegramProps) {
     batchError: props.batchError,
     onRunBatchAnalysis: props.onRunBatchAnalysis,
     onCancelBatchAnalysis: props.onCancelBatchAnalysis,
+    buildLoading: props.buildLoading,
+    buildResult: props.buildResult,
+    buildError: props.buildError,
+    onBuildFromTraining: props.onBuildFromTraining,
     // Translation (shared across chat/training views)
     translateEnabled: props.translateEnabled,
     translations: props.translations,

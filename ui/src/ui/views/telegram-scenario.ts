@@ -81,6 +81,11 @@ export type ScenarioProps = {
   batchError: string | null;
   onRunBatchAnalysis: (agentId: string, force?: boolean) => void;
   onCancelBatchAnalysis: () => void;
+  // Build schema + KB from top training chats
+  buildLoading: boolean;
+  buildResult: import("../controllers/telegram.ts").BuildFromTrainingResult | null;
+  buildError: string | null;
+  onBuildFromTraining: (agentId: string) => void;
   // Webchat (Telegram messenger) — provided for userbot agents only
   webchat?: WebchatProps;
   /** Visual flowchart diagram for the current agent+scope. */
@@ -1334,6 +1339,14 @@ function renderAnalysisView(props: ScenarioProps, agent: TelegramAgentRecord) {
                   >
                     ${props.analysisLoading ? "Суммаризируем…" : "AI-суммаризация"}
                   </button>
+                  <button
+                    class="btn btn--sm primary ${props.buildLoading ? "btn--loading" : ""}"
+                    ?disabled=${props.buildLoading}
+                    title="AI создаёт схему воронки из топ чатов и наполняет базу скриптов для баера"
+                    @click=${() => props.onBuildFromTraining(agent.id)}
+                  >
+                    ${props.buildLoading ? "Строим схему…" : "🤖 Схема + База из чатов"}
+                  </button>
                 </div>
               `
             : nothing
@@ -1485,6 +1498,32 @@ function renderAnalysisView(props: ScenarioProps, agent: TelegramAgentRecord) {
                   : nothing
               }
             `
+      }
+
+      <!-- Build from training: result / error -->
+      ${
+        props.buildError
+          ? html`<div class="callout danger" style="margin-top: 16px;"><strong>Ошибка генерации:</strong> ${props.buildError}</div>`
+          : nothing
+      }
+      ${
+        props.buildResult
+          ? html`
+              <div class="callout" style="margin-top: 16px; border-left: 3px solid #4caf50;">
+                <div style="font-weight: 600; margin-bottom: 6px;">✅ Схема + База созданы</div>
+                <div style="display: flex; flex-wrap: wrap; gap: 12px; font-size: 0.88em;">
+                  <span>📊 Схема: <strong>${props.buildResult.diagramTitle}</strong> · ${props.buildResult.diagramNodeCount} узлов</span>
+                  <span>🗂 База: <strong>${props.buildResult.kbEntryCount}</strong> узлов · <strong>${props.buildResult.kbPairCount}</strong> скриптов</span>
+                </div>
+                ${
+                  props.buildResult.kbError
+                    ? html`<div class="muted" style="font-size: 0.8em; margin-top: 4px;">⚠ База не создана: ${props.buildResult.kbError}</div>`
+                    : nothing
+                }
+                <div class="muted" style="font-size: 0.8em; margin-top: 6px;">Схема добавлена в список схем. Перейдите в раздел «Схема» чтобы её активировать.</div>
+              </div>
+            `
+          : nothing
       }
 
       <!-- AI freeform analysis result (whole-dataset summary) -->

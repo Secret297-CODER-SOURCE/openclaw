@@ -1510,6 +1510,228 @@ Rules:
           break;
         }
 
+        // ── Build schema + KB from top training chats ─────────────────────
+        case "telegram.scenario.buildFromTraining": {
+          const agentId = String(p.agentId ?? "");
+          const bftScope: "personal" | "shared" = p.scope === "shared" ? "shared" : "personal";
+          if (!agentId) {
+            fail("agentId is required");
+            break;
+          }
+
+          // ── 1. Resolve groups + labels ────────────────────────────────────
+          type BftGroup = {
+            chatId: string;
+            pairs: Array<{ input: string; response: string }>;
+            label?: string;
+          };
+          let bftGroups: BftGroup[] = [];
+          let bftLabels: Record<string, string> = {};
+
+          if (Array.isArray(p.groups) && (p.groups as BftGroup[]).length > 0) {
+            bftGroups = p.groups as BftGroup[];
+            bftLabels = (p.labels as Record<string, string> | undefined) ?? {};
+          } else {
+            const snap = this.storage.getTrainingSnapshot(agentId, bftScope);
+            if (snap) {
+              bftGroups = Array.isArray(snap.groups) ? (snap.groups as BftGroup[]) : [];
+              bftLabels = (snap.labels as Record<string, string> | undefined) ?? {};
+            }
+          }
+
+          if (bftGroups.length === 0) {
+            fail("Нет обучающих данных. Загрузите экспорт переписки в разделе «Обучение».");
+            break;
+          }
+
+          // Annotate groups with effective label + sort: success first, then by pair count desc
+          type ScoredGroup = BftGroup & { effectiveLabel: string; pairCount: number };
+          const scored: ScoredGroup[] = bftGroups.map((g) => ({
+            ...g,
+            effectiveLabel: bftLabels[g.chatId] ?? g.label ?? "neutral",
+            pairCount: (g.pairs ?? []).length,
+          }));
+          const labelRank = (l: string) => (l === "success" ? 0 : l === "neutral" ? 1 : 2);
+          scored.sort(
+            (a, b) =>
+              labelRank(a.effectiveLabel) - labelRank(b.effectiveLabel) ||
+              b.pairCount - a.pairCount,
+          );
+
+          // Top chats for schema generation: up to 15 success + up to 5 neutral
+          const topSuccess = scored.filter((g) => g.effectiveLabel === "success").slice(0, 15);
+          const topNeutral = scored.filter((g) => g.effectiveLabel === "neutral").slice(0, 5);
+          const corpusGroups = [...topSuccess, ...topNeutral];
+          if (corpusGroups.length === 0) {
+            // No success/neutral — use all
+            corpusGroups.push(...scored.slice(0, 10));
+          }
+
+          // Build corpus text (cap per-chat to 15 pairs, total ≤ 200 pairs)
+          let totalPairs = 0;
+          const corpusLines: string[] = [];
+          for (const g of corpusGroups) {
+            const label =
+              g.effectiveLabel === "success" ? "✅" : g.effectiveLabel === "fail" ? "❌" : "⚪";
+            corpusLines.push(`\n=== Диалог ${label} (${g.pairCount} обменов) ===`);
+            const maxPairs = Math.min(g.pairs.length, 15, 200 - totalPairs);
+            for (let i = 0; i < maxPairs; i++) {
+              const pr = g.pairs[i];
+              corpusLines.push(`Клиент: ${pr.input.slice(0, 150)}`);
+              corpusLines.push(`Менеджер: ${pr.response.slice(0, 150)}`);
+            }
+            totalPairs += maxPairs;
+            if (totalPairs >= 200) break;
+          }
+          const corpus = corpusLines.join("\n");
+
+          const successCount = topSuccess.length;
+          const totalCount = bftGroups.length;
+
+          // ── 2. AI Call 1: Generate FlowDiagram ───────────────────────────
+          const diagramSchema = `interface FlowDiagram {
+  title: string;
+  nodes: Array<{ id: string; type: "start"|"end"|"process"|"decision"; text: string; x: number; y: number; groupId?: string }>;
+  edges: Array<{ id: string; sourceId: string; targetId: string; label?: string }>;
+  groups: Array<{ id: string; label: string; color: "blue"|"green"|"orange"|"purple"; x: number; y: number; w: number; h: number }>;
+}`;
+          const schemaSystem =
+            `Ты — эксперт по построению воронок продаж. Тебе дан корпус реальных диалогов менеджеров с клиентами.\n` +
+            `Проанализируй диалоги и построй СХЕМУ ПРОДАЖ — FlowDiagram который отражает этапы воронки.\n\n` +
+            `Правила:\n` +
+            `- Выяви 5–12 ключевых этапов которые ведут клиента к сделке\n` +
+            `- В успешных диалогах ищи паттерны: что говорит менеджер на каждом этапе\n` +
+            `- В неуспешных — где диалог обрывается, какие возражения не были обработаны\n` +
+            `- Добавь узлы для ключевых возражений (цена, сомнение, откладывает) с обходными путями\n` +
+            `- Схема должна вести от первого контакта к оплате/лиду\n` +
+            `- Используй короткие уникальные ID (8 случайных символов)\n` +
+            `- x: 0–900, y: 0–900, расстояние между узлами 130–160px, сверху вниз\n` +
+            `- ОТВЕТ: ТОЛЬКО JSON объект FlowDiagram. Никакого текста до или после.\n\n` +
+            `${diagramSchema}`;
+          const schemaUser =
+            `Корпус диалогов (${successCount} успешных из ${totalCount} всего):\n${corpus}\n\n` +
+            `Построй FlowDiagram для этой воронки продаж.`;
+
+          let rawDiagram: string;
+          try {
+            rawDiagram = await callAdapterOnceJson(schemaUser, schemaSystem);
+          } catch (err) {
+            fail(`Ошибка генерации схемы: ${err instanceof Error ? err.message : String(err)}`);
+            break;
+          }
+
+          let parsedDiagram: {
+            title?: string;
+            nodes?: unknown[];
+            edges?: unknown[];
+            groups?: unknown[];
+          };
+          try {
+            parsedDiagram = extractJsonFromAiReply(rawDiagram) as typeof parsedDiagram;
+          } catch (err) {
+            fail(
+              `Не удалось распарсить схему: ${err instanceof Error ? err.message : String(err)}`,
+            );
+            break;
+          }
+
+          const now = new Date().toISOString();
+          const newDiagram = {
+            id: randomUUID(),
+            agentId,
+            scope: bftScope,
+            title:
+              typeof parsedDiagram.title === "string" ? parsedDiagram.title : "Схема из обучения",
+            nodes: (Array.isArray(parsedDiagram.nodes) ? parsedDiagram.nodes : []) as DiagramNode[],
+            edges: (Array.isArray(parsedDiagram.edges) ? parsedDiagram.edges : []) as DiagramEdge[],
+            groups: (Array.isArray(parsedDiagram.groups)
+              ? parsedDiagram.groups
+              : []) as DiagramGroup[],
+            createdAt: now,
+            updatedAt: now,
+          };
+          this.storage.saveDiagram(newDiagram);
+
+          // ── 3. AI Call 2: Distribute ALL pairs to KB nodes (buyer-style) ──
+          // Collect all pairs from all groups sorted by score
+          const allBftPairs: Array<{ input: string; response: string; score: number }> = [];
+          for (const g of scored) {
+            const s = g.effectiveLabel === "success" ? 3 : g.effectiveLabel === "neutral" ? 2 : 1;
+            for (const pr of g.pairs ?? []) {
+              allBftPairs.push({
+                input: String(pr.input ?? ""),
+                response: String(pr.response ?? ""),
+                score: s,
+              });
+            }
+          }
+          allBftPairs.sort((a, b) => b.score - a.score);
+          const topBftPairs = allBftPairs.slice(0, 100);
+
+          const nodeList = newDiagram.nodes
+            .filter((n) => n.type !== "start" && n.type !== "end")
+            .map((n) => `${n.id}: ${(n.text as string).replace(/\n/g, " ")}`)
+            .join("\n");
+
+          const pairsText = topBftPairs
+            .map((pr, i) => `[${i}] Q: ${pr.input.slice(0, 120)}\nA: ${pr.response.slice(0, 120)}`)
+            .join("\n---\n");
+
+          const kbSystem =
+            `Ты — система распределения диалогов по узлам схемы продаж в стиле баера.\n` +
+            `Для каждой пары вопрос/ответ выбери ОДИН наиболее подходящий узел схемы.\n` +
+            `Верни ТОЛЬКО валидный JSON: ключи — ID узлов, значения — массивы индексов пар.\n` +
+            `Пример: {"node_abc": [0, 2, 5], "node_xyz": [1, 3]}\n` +
+            `Правила:\n` +
+            `- Каждая пара назначается РОВНО в один узел\n` +
+            `- Назначай пару туда где тема разговора совпадает с узлом\n` +
+            `- Все индексы от 0 до ${topBftPairs.length - 1} должны присутствовать\n` +
+            `- Только JSON, без пояснений`;
+          const kbUser = `Узлы схемы:\n${nodeList}\n\nПары (индекс: вопрос → ответ):\n${pairsText}\n\nРаспредели пары по узлам.`;
+
+          let rawMapping: string;
+          try {
+            rawMapping = await callAdapterOnceJson(kbUser, kbSystem);
+          } catch (err) {
+            // KB generation failed — still return the diagram
+            respond({ diagram: newDiagram, kb: null, kbError: String(err) });
+            break;
+          }
+
+          let mapping: Record<string, number[]>;
+          try {
+            mapping = extractJsonFromAiReply(rawMapping) as Record<string, number[]>;
+          } catch {
+            respond({ diagram: newDiagram, kb: null, kbError: "Не удалось распарсить маппинг KB" });
+            break;
+          }
+
+          const nodeMap = new Map(newDiagram.nodes.map((n) => [n.id, n.text as string]));
+          const kbEntries = Object.entries(mapping)
+            .filter(([nodeId]) => nodeMap.has(nodeId))
+            .map(([nodeId, idxs]) => ({
+              nodeId,
+              nodeText: nodeMap.get(nodeId) ?? "",
+              pairs: (Array.isArray(idxs) ? idxs : [])
+                .filter((i): i is number => typeof i === "number" && topBftPairs[i] !== undefined)
+                .map((i) => topBftPairs[i])
+                .sort((a, b) => b.score - a.score),
+            }))
+            .filter((e) => e.pairs.length > 0);
+
+          const kbUpdatedAt = new Date().toISOString();
+          this.storage.saveKnowledgeBase(agentId, bftScope, {
+            entries: kbEntries,
+            updatedAt: kbUpdatedAt,
+          });
+
+          respond({
+            diagram: newDiagram,
+            kb: { agentId, scope: bftScope, entries: kbEntries, updatedAt: kbUpdatedAt },
+          });
+          break;
+        }
+
         default:
           fail(`Unknown method: ${msg.method}`);
       }

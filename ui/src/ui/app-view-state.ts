@@ -276,6 +276,10 @@ export type AppViewState = {
   telegramBatchError: string | null;
   /** Non-reactive abort ref set by runBatchAnalysis */
   _telegramBatchAbort?: { cancelled: boolean };
+  // Build schema + KB from training chats
+  telegramBuildLoading: boolean;
+  telegramBuildResult: import("./controllers/telegram.ts").BuildFromTrainingResult | null;
+  telegramBuildError: string | null;
   // Webchat (Telegram-Web-like messenger)
   telegramWebchatDialogs: import("./controllers/telegram.ts").TelegramDialog[];
   telegramWebchatDialogsLoading: boolean;
