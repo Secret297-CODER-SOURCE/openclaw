@@ -1,6 +1,13 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 
+/**
+ * Tracks which message-list elements have already been scrolled to bottom on
+ * initial mount. Re-renders (e.g. from translation state updates) must NOT
+ * scroll the user back down — only the first mount should.
+ */
+const _wcInitialScrolled = new WeakSet<Element>();
+
 /** Attach drag-to-scroll behaviour to a horizontal scroll container.
  *  Uses a movement threshold so short taps still reach child buttons as clicks.
  */
@@ -374,12 +381,13 @@ export function renderWebchat(props: WebchatProps) {
                     >🌐 ${translateEnabled ? "Перевод вкл" : "Перевод"}</button>
                   </div>
 
-                  <!-- Messages — scrolled to bottom on each render -->
+                  <!-- Messages — scrolled to bottom only on initial mount -->
                   <div class="tg-wc-messages" id="tg-wc-msg-list"
                     ${ref((el: Element | undefined) => {
-                      if (el) {
+                      if (el && !_wcInitialScrolled.has(el)) {
+                        _wcInitialScrolled.add(el);
                         requestAnimationFrame(() => {
-                          el.scrollTop = el.scrollHeight;
+                          (el as HTMLElement).scrollTop = (el as HTMLElement).scrollHeight;
                         });
                       }
                     })}>
