@@ -704,14 +704,12 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
         <div class="tg-setting-label">💬 Режим общения</div>
         <div class="tg-setting-right">
           <div class="tg-toggle-group">
-            <label class="tg-toggle-option ${settings.useSchema ? "tg-toggle-option--active" : ""}">
-              <input type="radio" name="useSchema-${agent.id}" ?checked=${settings.useSchema}
-                @change=${() => patchWorkMode({ useSchema: true })} style="display:none;" />
+            <label class="tg-toggle-option ${settings.useSchema ? "tg-toggle-option--active" : ""}"
+              @click=${() => patchWorkMode({ useSchema: true })}>
               По схеме
             </label>
-            <label class="tg-toggle-option ${!settings.useSchema ? "tg-toggle-option--active" : ""}">
-              <input type="radio" name="useSchema-${agent.id}" ?checked=${!settings.useSchema}
-                @change=${() => patchWorkMode({ useSchema: false })} style="display:none;" />
+            <label class="tg-toggle-option ${!settings.useSchema ? "tg-toggle-option--active" : ""}"
+              @click=${() => patchWorkMode({ useSchema: false })}>
               Свободно
             </label>
           </div>
@@ -739,18 +737,12 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                 <div class="tg-setting-label">🎯 Строгость</div>
                 <div class="tg-setting-right">
                   <div class="tg-toggle-group">
-                    <label class="tg-toggle-option ${settings.schemaStrictMode ? "tg-toggle-option--active" : ""}">
-                      <input type="radio" name="schemaStrictMode-${agent.id}"
-                        ?checked=${!!settings.schemaStrictMode}
-                        @change=${() => patchWorkMode({ schemaStrictMode: true })}
-                        style="display:none;" />
+                    <label class="tg-toggle-option ${settings.schemaStrictMode ? "tg-toggle-option--active" : ""}"
+                      @click=${() => patchWorkMode({ schemaStrictMode: true })}>
                       Строгий
                     </label>
-                    <label class="tg-toggle-option ${!settings.schemaStrictMode ? "tg-toggle-option--active" : ""}">
-                      <input type="radio" name="schemaStrictMode-${agent.id}"
-                        ?checked=${!settings.schemaStrictMode}
-                        @change=${() => patchWorkMode({ schemaStrictMode: false })}
-                        style="display:none;" />
+                    <label class="tg-toggle-option ${!settings.schemaStrictMode ? "tg-toggle-option--active" : ""}"
+                      @click=${() => patchWorkMode({ schemaStrictMode: false })}>
                       Гибкий
                     </label>
                   </div>
@@ -767,6 +759,30 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                   }
                 </div>
               </div>
+
+              <!-- ── Стиль подачи скриптов ──────────────────────────────── -->
+              <div class="tg-setting-row">
+                <div class="tg-setting-label">🗣 Стиль подачи</div>
+                <div class="tg-setting-right">
+                  <div class="tg-toggle-group">
+                    <label class="tg-toggle-option ${(settings.schemaDeliveryStyle ?? "neutral") === "neutral" ? "tg-toggle-option--active" : ""}"
+                      @click=${() => patchWorkMode({ schemaDeliveryStyle: "neutral" })}>
+                      Стандарт
+                    </label>
+                    <label class="tg-toggle-option ${settings.schemaDeliveryStyle === "buyer" ? "tg-toggle-option--active" : ""}"
+                      @click=${() => patchWorkMode({ schemaDeliveryStyle: "buyer" })}>
+                      🔥 Баер
+                    </label>
+                  </div>
+                  <div class="tg-setting-hint">
+                    ${
+                      settings.schemaDeliveryStyle === "buyer"
+                        ? "Скрипты подаются в стиле баера: цифры, ROI, без воды, уверенный тон"
+                        : "Стандартная адаптация скриптов под язык и контекст клиента"
+                    }
+                  </div>
+                </div>
+              </div>
             `
           : html``
       }
@@ -776,14 +792,12 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
         <div class="tg-setting-label">🕐 Время ответов</div>
         <div class="tg-setting-right">
           <div class="tg-toggle-group">
-            <label class="tg-toggle-option ${settings.scheduleMode === "always" ? "tg-toggle-option--active" : ""}">
-              <input type="radio" name="scheduleMode-${agent.id}" ?checked=${settings.scheduleMode === "always"}
-                @change=${() => patchWorkMode({ scheduleMode: "always" })} style="display:none;" />
+            <label class="tg-toggle-option ${settings.scheduleMode === "always" ? "tg-toggle-option--active" : ""}"
+              @click=${() => patchWorkMode({ scheduleMode: "always" })}>
               Всегда
             </label>
-            <label class="tg-toggle-option ${settings.scheduleMode === "schedule" ? "tg-toggle-option--active" : ""}">
-              <input type="radio" name="scheduleMode-${agent.id}" ?checked=${settings.scheduleMode === "schedule"}
-                @change=${() => patchWorkMode({ scheduleMode: "schedule" })} style="display:none;" />
+            <label class="tg-toggle-option ${settings.scheduleMode === "schedule" ? "tg-toggle-option--active" : ""}"
+              @click=${() => patchWorkMode({ scheduleMode: "schedule" })}>
               По расписанию
             </label>
           </div>
@@ -793,12 +807,12 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                   <span style="font-size:13px;color:var(--text-muted);">С</span>
                   <input type="time" class="input" style="width:110px;"
                     .value=${settings.scheduleFrom ?? "09:00"}
-                    @change=${(e: Event) =>
+                    @input=${(e: Event) =>
                       patchWorkMode({ scheduleFrom: (e.target as HTMLInputElement).value })} />
                   <span style="font-size:13px;color:var(--text-muted);">до</span>
                   <input type="time" class="input" style="width:110px;"
                     .value=${settings.scheduleTo ?? "18:00"}
-                    @change=${(e: Event) =>
+                    @input=${(e: Event) =>
                       patchWorkMode({ scheduleTo: (e.target as HTMLInputElement).value })} />
                   <span class="tg-setting-hint">(время сервера)</span>
                 </div>`
@@ -814,14 +828,12 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
         <div class="tg-setting-label">👥 Кому отвечать</div>
         <div class="tg-setting-right">
           <div class="tg-toggle-group">
-            <label class="tg-toggle-option ${settings.replyTo === "all" ? "tg-toggle-option--active" : ""}">
-              <input type="radio" name="replyTo-${agent.id}" ?checked=${settings.replyTo === "all"}
-                @change=${() => patchWorkMode({ replyTo: "all" })} style="display:none;" />
+            <label class="tg-toggle-option ${settings.replyTo === "all" ? "tg-toggle-option--active" : ""}"
+              @click=${() => patchWorkMode({ replyTo: "all" })}>
               Всем
             </label>
-            <label class="tg-toggle-option ${settings.replyTo === "tasks" ? "tg-toggle-option--active" : ""}">
-              <input type="radio" name="replyTo-${agent.id}" ?checked=${settings.replyTo === "tasks"}
-                @change=${() => patchWorkMode({ replyTo: "tasks" })} style="display:none;" />
+            <label class="tg-toggle-option ${settings.replyTo === "tasks" ? "tg-toggle-option--active" : ""}"
+              @click=${() => patchWorkMode({ replyTo: "tasks" })}>
               Только из Tasks
             </label>
           </div>
@@ -837,7 +849,35 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
         </div>
       </div>
 
-      <!-- ── 5. Реактивация лидов ──────────────────────────────────── -->
+      <!-- ── 5. Задержка ответа ────────────────────────────────────── -->
+      <div class="tg-setting-row">
+        <div class="tg-setting-label">⏱ Задержка ответа</div>
+        <div class="tg-setting-right">
+          <div class="tg-reeng-section-title" style="margin-bottom:8px;">Пауза перед ответом агента (сек)</div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span style="color:var(--text-muted,#aaa);font-size:13px;">от</span>
+            <input type="number" min="0" max="300" style="width:70px;"
+              class="tg-reeng-input"
+              .value=${String(settings.replyDelayMin ?? 0)}
+              @input=${(e: Event) => patchWorkMode({ replyDelayMin: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) })} />
+            <span style="color:var(--text-muted,#aaa);font-size:13px;">до</span>
+            <input type="number" min="0" max="300" style="width:70px;"
+              class="tg-reeng-input"
+              .value=${String(settings.replyDelayMax ?? 0)}
+              @input=${(e: Event) => patchWorkMode({ replyDelayMax: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) })} />
+            <span style="color:var(--text-muted,#aaa);font-size:13px;">сек</span>
+          </div>
+          <div class="tg-setting-hint" style="margin-top:6px;">
+            ${
+              (settings.replyDelayMin ?? 0) === 0 && (settings.replyDelayMax ?? 0) === 0
+                ? "Без задержки — агент отвечает мгновенно"
+                : `Агент выждет ${settings.replyDelayMin ?? 0}–${settings.replyDelayMax ?? 0} сек. перед каждым ответом`
+            }
+          </div>
+        </div>
+      </div>
+
+      <!-- ── 6. Реактивация лидов ──────────────────────────────────── -->
       <div class="tg-setting-row">
         <div class="tg-setting-label">🔁 Реактивация</div>
         <div class="tg-setting-right">
@@ -922,8 +962,75 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                 до <b>${settings.reEngagementDelayTo ?? 7}</b> дней${settings.reEngagementDelayMore ? `, а также всем кто молчит дольше` : ""}.
               </div>
 
+              <!-- Pause between messages -->
+              <div class="tg-reeng-section-title" style="margin-top:14px;">Задержка между сообщениями</div>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;">
+                <span style="font-size:0.85rem;color:var(--text-muted);">от</span>
+                <input
+                  type="number" min="0" max="3600"
+                  class="input"
+                  style="width:72px;padding:4px 8px;font-size:0.85rem;"
+                  .value=${String(settings.reEngagementPauseMin ?? 0)}
+                  @change=${(e: Event) =>
+                    saveSettings({
+                      reEngagementPauseMin: Math.max(
+                        0,
+                        Number((e.target as HTMLInputElement).value) || 0,
+                      ),
+                    })}
+                />
+                <span style="font-size:0.85rem;color:var(--text-muted);">до</span>
+                <input
+                  type="number" min="0" max="3600"
+                  class="input"
+                  style="width:72px;padding:4px 8px;font-size:0.85rem;"
+                  .value=${String(settings.reEngagementPauseMax ?? 0)}
+                  @change=${(e: Event) =>
+                    saveSettings({
+                      reEngagementPauseMax: Math.max(
+                        0,
+                        Number((e.target as HTMLInputElement).value) || 0,
+                      ),
+                    })}
+                />
+                <span style="font-size:0.85rem;color:var(--text-muted);">сек.</span>
+              </div>
+              <div class="tg-setting-hint">
+                ${
+                  (settings.reEngagementPauseMin ?? 0) === 0 &&
+                  (settings.reEngagementPauseMax ?? 0) === 0
+                    ? "Без паузы — все сообщения отправляются подряд"
+                    : `Случайная пауза от ${settings.reEngagementPauseMin ?? 0} до ${settings.reEngagementPauseMax ?? 0} сек. между каждым сообщением`
+                }
+              </div>
+
+              <!-- AI mode toggle -->
+              <div class="tg-reeng-section-title" style="margin-top:14px;margin-bottom:8px;">
+                Режим сообщения
+              </div>
+              <div class="tg-toggle-group" style="margin-bottom:10px;">
+                <label
+                  class="tg-toggle-option ${(settings.reEngagementAiMode ?? "template") === "template" ? "tg-toggle-option--active" : ""}"
+                  @click=${() => saveSettings({ reEngagementAiMode: "template" })}>
+                  📝 Шаблон
+                </label>
+                <label
+                  class="tg-toggle-option ${settings.reEngagementAiMode === "ai" ? "tg-toggle-option--active" : ""}"
+                  @click=${() => saveSettings({ reEngagementAiMode: "ai" })}>
+                  🤖 ИИ генерирует
+                </label>
+              </div>
+              ${
+                settings.reEngagementAiMode === "ai"
+                  ? html`
+                      <div class="tg-setting-hint" style="margin-bottom: 10px">
+                        ИИ читает всю историю чата и пишет уникальное сообщение с нуля — в тему прошлого разговора, на
+                        языке клиента. Шаблон не нужен.
+                      </div>
+                    `
+                  : html`
               <!-- Template -->
-              <div class="tg-reeng-section-title" style="margin-top:14px;display:flex;align-items:center;gap:8px;">
+              <div class="tg-reeng-section-title" style="display:flex;align-items:center;gap:8px;">
                 <span>Шаблон сообщения</span>
                 <span class="tg-reeng-badge-ai">✨ AI улучшает</span>
                 <button
@@ -943,7 +1050,8 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                   saveSettings({
                     reEngagementTemplate: (e.target as HTMLTextAreaElement).value || undefined,
                   })}
-              ></textarea>
+              ></textarea>`
+              }
 
               <!-- Save template + saved templates list -->
               <div style="display:flex;gap:8px;margin-top:6px;">
@@ -1089,23 +1197,17 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
         <div class="tg-setting-label">📴 Менеджер офлайн</div>
         <div class="tg-setting-right">
           <div class="tg-toggle-group">
-            <label class="tg-toggle-option ${settings.offlineReplyEnabled ? "tg-toggle-option--active" : ""}">
-              <input type="radio" name="offlineReply-${agent.id}"
-                ?checked=${!!settings.offlineReplyEnabled}
-                @change=${() =>
-                  patchWorkMode({
-                    offlineReplyEnabled: true,
-                    managerWorkFrom: settings.managerWorkFrom ?? "09:00",
-                    managerWorkTo: settings.managerWorkTo ?? "18:00",
-                  })}
-                style="display:none;" />
+            <label class="tg-toggle-option ${settings.offlineReplyEnabled ? "tg-toggle-option--active" : ""}"
+              @click=${() =>
+                patchWorkMode({
+                  offlineReplyEnabled: true,
+                  managerWorkFrom: settings.managerWorkFrom ?? "09:00",
+                  managerWorkTo: settings.managerWorkTo ?? "18:00",
+                })}>
               ИИ ведёт диалог
             </label>
-            <label class="tg-toggle-option ${!settings.offlineReplyEnabled ? "tg-toggle-option--active" : ""}">
-              <input type="radio" name="offlineReply-${agent.id}"
-                ?checked=${!settings.offlineReplyEnabled}
-                @change=${() => patchWorkMode({ offlineReplyEnabled: false })}
-                style="display:none;" />
+            <label class="tg-toggle-option ${!settings.offlineReplyEnabled ? "tg-toggle-option--active" : ""}"
+              @click=${() => patchWorkMode({ offlineReplyEnabled: false })}>
               Молчать
             </label>
           </div>
@@ -1127,7 +1229,7 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                       class="input"
                       style="width:120px;font-size:13px;"
                       .value=${settings.managerWorkFrom ?? settings.scheduleFrom ?? "09:00"}
-                      @change=${(e: Event) =>
+                      @input=${(e: Event) =>
                         patchWorkMode({ managerWorkFrom: (e.target as HTMLInputElement).value })}
                     />
                     <span style="font-size:13px;color:var(--text-muted);">до</span>
@@ -1136,7 +1238,7 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                       class="input"
                       style="width:120px;font-size:13px;"
                       .value=${settings.managerWorkTo ?? settings.scheduleTo ?? "18:00"}
-                      @change=${(e: Event) =>
+                      @input=${(e: Event) =>
                         patchWorkMode({ managerWorkTo: (e.target as HTMLInputElement).value })}
                     />
                   </div>
@@ -1312,35 +1414,127 @@ function renderBehaviorsPanel(props: TelegramProps, agent: TelegramAgentRecord) 
 // ─── Detail: events panel ─────────────────────────────────────────────────────
 
 function renderEventsPanel(props: TelegramProps, agentId: string) {
-  const events = props.recentEvents.filter((e) => e.agentId === agentId);
+  const all = props.recentEvents.filter((e) => e.agentId === agentId);
+
+  const typeIcon: Record<string, string> = {
+    message_in: "📨",
+    message_out: "📤",
+    ai_reply: "🤖",
+    behavior: "⚙️",
+    reengagement: "🔁",
+    followup: "🔔",
+    validation: "✅",
+    status_change: "🔌",
+    error: "❌",
+    agent_message: "💬",
+    parsed_item: "📋",
+  };
+
+  const typeLabel: Record<string, string> = {
+    message_in: "Входящее",
+    message_out: "Исходящее",
+    ai_reply: "Ответ ИИ",
+    behavior: "Поведение",
+    reengagement: "Реактивация",
+    followup: "Follow-up",
+    validation: "Валидация",
+    status_change: "Статус",
+    error: "Ошибка",
+    agent_message: "Сообщение",
+    parsed_item: "Парсинг",
+  };
+
+  const chipClass: Record<string, string> = {
+    message_in: "chip",
+    message_out: "chip chip-ok",
+    ai_reply: "chip chip-ok",
+    behavior: "chip",
+    reengagement: "chip chip-warn",
+    followup: "chip chip-warn",
+    validation: "chip chip-ok",
+    status_change: "chip",
+    error: "chip chip-err",
+    agent_message: "chip chip-ok",
+  };
+
+  const fmtPayload = (evt: TelegramAgentEvent): string => {
+    const p = evt.payload;
+    const action = p["action"] as string | undefined;
+    const text = (p["text"] ?? p["message"] ?? "") as string;
+    const chatId = (p["chatId"] ?? p["chat"]) as string | undefined;
+    const chatPrefix = chatId ? `[${chatId}] ` : "";
+
+    switch (evt.type) {
+      case "message_in":
+        return `${chatPrefix}${text}`;
+      case "message_out":
+      case "agent_message":
+        return `${chatPrefix}${text}`;
+      case "ai_reply":
+        return `${chatPrefix}[${action ?? "reply"}] ${text}`;
+      case "behavior":
+        if (action === "schema_advance") {
+          return `${chatPrefix}${String(p["from"])} → ${String(p["to"])}`;
+        }
+        if (action === "catchup_process") {
+          return `${chatPrefix}обработка догона`;
+        }
+        if (action === "offline_lead_reply") {
+          return `${chatPrefix}офлайн-лид режим`;
+        }
+        return `${chatPrefix}${action ?? ""}`;
+      case "reengagement":
+        return `${chatPrefix}день ${String(p["day"])} · ${text}`;
+      case "followup":
+        return action === "scheduled"
+          ? `${chatPrefix}запланирован через ${String(p["inMinutes"])} мин.`
+          : `${chatPrefix}отправлен · ${text}`;
+      case "validation":
+        return action === "strict_ok"
+          ? `${chatPrefix}OK`
+          : `${chatPrefix}FAIL: ${JSON.stringify(p["violations"])}`;
+      case "status_change":
+        return JSON.stringify(p["status"] ?? "");
+      case "error":
+        return JSON.stringify(p["message"] ?? p["error"] ?? p);
+      default:
+        return JSON.stringify(p).slice(0, 200);
+    }
+  };
 
   return html`
     <section class="card">
-      <div class="card-title">${t("ui.panelEvents")}</div>
+      <div class="card-title" style="display:flex;align-items:center;gap:10px;">
+        <span>${t("ui.panelEvents")}</span>
+        <span style="font-size:12px;color:var(--text-muted);">${all.length} событий</span>
+      </div>
       <div class="card-sub">${t("ui.eventsDesc")}</div>
-      <div class="list" style="margin-top: 16px;">
+      <div class="list" style="margin-top:12px;">
         ${
-          events.length === 0
-            ? html`
-                <div class="muted">${t("ui.noEvents")}</div>
-              `
-            : events.slice(0, 50).map(
-                (evt) => html`
-                  <div class="list-item">
-                    <div class="list-main">
-                      <div class="list-title">
-                        <span class="chip">${evt.type}</span>
+          all.length === 0
+            ? html`<div class="muted">${t("ui.noEvents")}</div>`
+            : all.slice(0, 200).map((evt) => {
+                const icon = typeIcon[evt.type] ?? "•";
+                const label = typeLabel[evt.type] ?? evt.type;
+                const cls = chipClass[evt.type] ?? "chip";
+                const body = fmtPayload(evt);
+                const chatId = (evt.payload["chatId"] ?? evt.payload["chat"]) as string | undefined;
+                return html`
+                  <div class="list-item" style="align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid var(--border,#2a2a2a);">
+                    <div style="font-size:18px;line-height:1;padding-top:2px;">${icon}</div>
+                    <div style="flex:1;min-width:0;">
+                      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:3px;">
+                        <span class="${cls}" style="font-size:11px;">${label}</span>
+                        ${chatId ? html`<span style="font-size:11px;color:var(--text-muted);">chat:${chatId}</span>` : nothing}
+                        <span style="font-size:11px;color:var(--text-muted);margin-left:auto;">
+                          ${new Date(evt.timestamp).toLocaleTimeString()}
+                        </span>
                       </div>
-                      <div class="list-sub mono" style="word-break: break-all;">
-                        ${JSON.stringify(evt.payload).slice(0, 120)}
-                      </div>
-                    </div>
-                    <div class="list-meta">
-                      <div>${new Date(evt.timestamp).toLocaleTimeString()}</div>
+                      <div style="font-size:13px;color:var(--text-primary,#eee);word-break:break-word;white-space:pre-wrap;line-height:1.4;">${body}</div>
                     </div>
                   </div>
-                `,
-              )
+                `;
+              })
         }
       </div>
     </section>
