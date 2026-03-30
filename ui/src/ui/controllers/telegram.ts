@@ -820,6 +820,14 @@ export type AgentSettings = {
    * When false/absent: standard AI generation with KB context (flexible).
    */
   schemaStrictMode?: boolean;
+  /** "neutral" | "buyer" — delivery style for KB scripts in schema mode. */
+  schemaDeliveryStyle?: "neutral" | "buyer";
+  /** Buyer mode aggression level: "soft" | "balanced" | "hard". */
+  buyerAggressionLevel?: "soft" | "balanced" | "hard";
+  /** Short product/niche context for ROI personalisation in buyer mode. */
+  buyerProductContext?: string;
+  /** Closing technique in buyer mode: "alternative" | "direct" | "micro-step". */
+  buyerCloseStyle?: "alternative" | "direct" | "micro-step";
   // ── Re-engagement ───────────────────────────────────────────────────────────
   reEngagementEnabled?: boolean;
   reEngagementDelays?: number[];

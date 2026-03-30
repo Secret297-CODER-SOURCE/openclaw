@@ -257,6 +257,32 @@ export interface AgentSettings {
   schemaDeliveryStyle?: "neutral" | "buyer";
 
   /**
+   * Агрессивность баера — насколько напористо агент ведёт к решению.
+   * - "soft"     — мягкий: больше вопросов, понимание потребности, нет давления
+   * - "balanced" — стандартный баер: ROI, альтернативный выбор, умеренная срочность (default)
+   * - "hard"     — жёсткий закрыватель: прямые предложения, минимум вопросов, максимум давления
+   * Активно только при schemaDeliveryStyle === "buyer".
+   */
+  buyerAggressionLevel?: "soft" | "balanced" | "hard";
+
+  /**
+   * Краткое описание продукта/ниши для персонализации ROI-аргументов.
+   * Инжектируется в систем-промпт — агент использует реальные цифры вместо "X" и "Y".
+   * Пример: "Курс по трейдингу — средний ученик выходит в плюс за 2 мес., ROI ×3"
+   * Активно только при schemaDeliveryStyle === "buyer".
+   */
+  buyerProductContext?: string;
+
+  /**
+   * Техника закрытия сделки.
+   * - "alternative" — альтернативный выбор: "Удобнее X или Y?" (default)
+   * - "direct"      — прямое закрытие: "Давай оформим прямо сейчас"
+   * - "micro-step"  — называй следующее действие уверенно, без продажи идеи шага
+   * Активно только при schemaDeliveryStyle === "buyer".
+   */
+  buyerCloseStyle?: "alternative" | "direct" | "micro-step";
+
+  /**
    * When true and scheduleMode === "schedule", the AI continues chatting and
    * processing leads while the manager is offline.  The AI knows the manager's
    * working hours ({от}/{до}) and focuses on qualifying the lead and collecting

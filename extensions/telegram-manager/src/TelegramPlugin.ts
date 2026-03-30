@@ -1109,7 +1109,43 @@ Rules:
             .map((pair, i) => `[${i + 1}] Клиент: ${pair.input}\n    Менеджер: ${pair.response}`)
             .join("\n\n");
 
-          const ctSystem = `Ты — опытный тренер по продажам B2C/B2B.
+          // Load agent settings to adapt coaching style for buyer mode.
+          const ctAgentSettings = this.storage.getAgentSettings(String(p.agentId));
+          const ctIsBuyer = ctAgentSettings.schemaDeliveryStyle === "buyer";
+          const ctAggression = ctAgentSettings.buyerAggressionLevel ?? "balanced";
+          const ctCloseStyle = ctAgentSettings.buyerCloseStyle ?? "alternative";
+          const ctProductCtx = ctAgentSettings.buyerProductContext ?? "";
+
+          const ctCloseStyleHint =
+            ctCloseStyle === "direct"
+              ? "прямое закрытие («Давай оформим прямо сейчас»)"
+              : ctCloseStyle === "micro-step"
+                ? "уверенный следующий шаг («Давай сделаем X» — без обоснований)"
+                : "альтернативный выбор («Удобнее X или Y?»)";
+
+          const ctAggressionHint =
+            ctAggression === "hard"
+              ? "жёсткий стиль: прямые предложения, минимум вопросов, максимум давления"
+              : ctAggression === "soft"
+                ? "мягкий стиль: больше вопросов, минимум давления, фокус на понимании"
+                : "сбалансированный стиль: ROI + умеренная срочность";
+
+          const ctSystem = ctIsBuyer
+            ? `Ты — опытный баер-тренер по продажам. Агент работает в режиме баера: ROI, цифры, уверенный тон, без воды.
+${ctProductCtx ? `Продукт/ниша: ${ctProductCtx}\n` : ""}Настройки агента: стиль закрытия — ${ctCloseStyleHint}; напористость — ${ctAggressionHint}.
+
+Проанализируй переписку и дай КОНКРЕТНЫЕ советы как улучшить результат в баер-стиле.
+
+Формат ответа — ТОЛЬКО нумерованный список на русском языке, 4–6 пунктов.
+Каждый пункт: 1–2 предложения. Без вводных слов, без заголовков, без пояснений вне списка.
+
+Фокусируйся на:
+• Где можно было перевести в ROI ("ты платишь X, получаешь Y за Z") — укажи номер реплики
+• Упущенные моменты для закрытия техникой "${ctCloseStyleHint}" — укажи номер реплики
+• Возражения (цена / сомнения / "подумаю" / конкурент) — что конкретно стоило сказать
+• Где менеджер говорил расплывчато вместо цифр и конкретики
+• Как довести до конкретного следующего шага с минимальным барьером`
+            : `Ты — опытный тренер по продажам B2C/B2B.
 Проанализируй переписку менеджера с клиентом и дай КОНКРЕТНЫЕ советы, как менеджер мог бы лучше дожать и закрыть этого лида.
 
 Формат ответа — ТОЛЬКО нумерованный список на русском языке, 4–6 пунктов.

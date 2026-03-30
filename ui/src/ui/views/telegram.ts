@@ -788,6 +788,94 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                   </div>
                 </div>
               </div>
+
+              ${
+                settings.schemaDeliveryStyle === "buyer"
+                  ? html`
+                      <!-- ── Агрессивность баера ──────────────────────────── -->
+                      <div class="tg-setting-row" style="padding-left:12px;border-left:2px solid var(--accent,#e8660088);">
+                        <div class="tg-setting-label">⚡ Напористость</div>
+                        <div class="tg-setting-right">
+                          <div class="tg-toggle-group">
+                            <label class="tg-toggle-option ${(settings.buyerAggressionLevel ?? "balanced") === "soft" ? "tg-toggle-option--active" : ""}"
+                              @click=${() => patchWorkMode({ buyerAggressionLevel: "soft" })}>
+                              Мягкий
+                            </label>
+                            <label class="tg-toggle-option ${(settings.buyerAggressionLevel ?? "balanced") === "balanced" ? "tg-toggle-option--active" : ""}"
+                              @click=${() => patchWorkMode({ buyerAggressionLevel: "balanced" })}>
+                              Баланс
+                            </label>
+                            <label class="tg-toggle-option ${settings.buyerAggressionLevel === "hard" ? "tg-toggle-option--active" : ""}"
+                              @click=${() => patchWorkMode({ buyerAggressionLevel: "hard" })}>
+                              🔥 Жёсткий
+                            </label>
+                          </div>
+                          <div class="tg-setting-hint">
+                            ${
+                              {
+                                soft: "Больше вопросов, мягкое давление — фокус на понимании",
+                                balanced: "Стандартный баер: ROI, срочность, альтернативный выбор",
+                                hard: "Прямые предложения, минимум вопросов, максимум давления",
+                              }[settings.buyerAggressionLevel ?? "balanced"]
+                            }
+                          </div>
+                        </div>
+                      </div>
+
+                      <!-- ── Техника закрытия ────────────────────────────── -->
+                      <div class="tg-setting-row" style="padding-left:12px;border-left:2px solid var(--accent,#e8660088);">
+                        <div class="tg-setting-label">🎯 Закрытие</div>
+                        <div class="tg-setting-right">
+                          <div class="tg-toggle-group">
+                            <label class="tg-toggle-option ${(settings.buyerCloseStyle ?? "alternative") === "alternative" ? "tg-toggle-option--active" : ""}"
+                              @click=${() => patchWorkMode({ buyerCloseStyle: "alternative" })}>
+                              X или Y?
+                            </label>
+                            <label class="tg-toggle-option ${settings.buyerCloseStyle === "direct" ? "tg-toggle-option--active" : ""}"
+                              @click=${() => patchWorkMode({ buyerCloseStyle: "direct" })}>
+                              Напрямую
+                            </label>
+                            <label class="tg-toggle-option ${settings.buyerCloseStyle === "micro-step" ? "tg-toggle-option--active" : ""}"
+                              @click=${() => patchWorkMode({ buyerCloseStyle: "micro-step" })}>
+                              Микрошаг
+                            </label>
+                          </div>
+                          <div class="tg-setting-hint">
+                            ${
+                              {
+                                alternative: "«Удобнее X или Y?» — альтернативный выбор без да/нет",
+                                direct: "«Давай оформим прямо сейчас» — прямое закрытие",
+                                "micro-step": "«Давай начнём с малого» — снизить барьер входа",
+                              }[settings.buyerCloseStyle ?? "alternative"]
+                            }
+                          </div>
+                        </div>
+                      </div>
+
+                      <!-- ── Контекст продукта / ниши ────────────────────── -->
+                      <div class="tg-setting-row" style="padding-left:12px;border-left:2px solid var(--accent,#e8660088);">
+                        <div class="tg-setting-label">📦 Продукт / ниша</div>
+                        <div class="tg-setting-right">
+                          <textarea
+                            class="input"
+                            rows="2"
+                            style="width:100%;max-width:320px;resize:vertical;font-size:13px;"
+                            placeholder="Курс по трейдингу — ученик выходит в плюс за 2 мес., ROI ×3"
+                            .value=${settings.buyerProductContext ?? ""}
+                            @input=${(e: Event) =>
+                              patchWorkMode({
+                                buyerProductContext:
+                                  (e.target as HTMLTextAreaElement).value.trim() || undefined,
+                              })}
+                          ></textarea>
+                          <div class="tg-setting-hint">
+                            Агент использует эти цифры в ROI-аргументах вместо «X» и «Y»
+                          </div>
+                        </div>
+                      </div>
+                    `
+                  : html``
+              }
             `
           : html``
       }
