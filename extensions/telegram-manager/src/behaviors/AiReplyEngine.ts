@@ -458,12 +458,14 @@ export async function aiReply(
       role: m.role,
       content: m.content,
     }));
-    reply = await runAnthropicWithTools(msgs, systemPrompt, workspaceTools);
+    reply = await withTimeout(
+      runAnthropicWithTools(msgs, systemPrompt, workspaceTools),
+      AI_REPLY_TIMEOUT_MS,
+      "aiReply+tools",
+    );
   } else {
     const adapter = resolveAdapter();
-    // Pass chatKey as sessionKey so adapters that support it (e.g. the gateway
-    // adapter) can maintain per-conversation sessions on the server side.
-    reply = await adapter(hist, systemPrompt, chatKey);
+    reply = await withTimeout(adapter(hist, systemPrompt, chatKey), AI_REPLY_TIMEOUT_MS, "aiReply");
   }
 
   hist.push({ role: "assistant", content: reply });
@@ -478,6 +480,22 @@ export function clearHistory(chatKey: string, storage?: ConversationStorage) {
   if (storage) storage.saveConversationHistory(chatKey, []);
 }
 
+/** Race a promise against a timeout. Rejects with a clear error on expiry. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`AI timeout (${ms}ms): ${label}`)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/** Default timeout for single AI calls (60 s). */
+const AI_CALL_TIMEOUT_MS = 60_000;
+/** Default timeout for conversational AI replies (90 s, longer for tool-use). */
+const AI_REPLY_TIMEOUT_MS = 90_000;
+
 /**
  * One-shot text completion using the configured model adapter.
  * Does NOT maintain conversation history — use for single prompts such as AI-driven
@@ -486,7 +504,7 @@ export function clearHistory(chatKey: string, storage?: ConversationStorage) {
 export async function callAdapterOnce(userPrompt: string, systemPrompt: string): Promise<string> {
   const adapter = resolveAdapter();
   const msgs: ModelMessage[] = [{ role: "user", content: userPrompt }];
-  return adapter(msgs, systemPrompt);
+  return withTimeout(adapter(msgs, systemPrompt), AI_CALL_TIMEOUT_MS, "callAdapterOnce");
 }
 
 /**
@@ -510,7 +528,11 @@ export async function callAdapterOnceJson(
     "\n\n⚠️ IMPORTANT: Respond with ONLY a raw JSON object. No text before or after it. No markdown.";
 
   const adapter = resolveAdapter();
-  const firstReply = await adapter([{ role: "user", content: jsonUser }], jsonSystem);
+  const firstReply = await withTimeout(
+    adapter([{ role: "user", content: jsonUser }], jsonSystem),
+    AI_CALL_TIMEOUT_MS,
+    "callAdapterOnceJson",
+  );
 
   // Check if there is a JSON object or array in the response
   const hasJson = firstReply.includes("{") || firstReply.includes("[");
@@ -528,5 +550,9 @@ export async function callAdapterOnceJson(
         "No explanations. No questions. ONLY the JSON.",
     },
   ];
-  return adapter(retryMsgs, jsonSystem);
+  return withTimeout(
+    adapter(retryMsgs, jsonSystem),
+    AI_CALL_TIMEOUT_MS,
+    "callAdapterOnceJson-retry",
+  );
 }

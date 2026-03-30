@@ -26,6 +26,10 @@ export abstract class BaseAgent extends EventEmitter {
   protected record: AgentRecord;
   protected storage: TelegramStorage;
   protected logger: ILogger;
+  // TTL cache for KB and coaching tips — avoids DB reads on every AI reply.
+  private _kbCache: { key: string; data: unknown; ts: number } | null = null;
+  private _coachCache: { key: string; data: unknown; ts: number } | null = null;
+  private static readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 min
   // cronJobs is declared here only for TypeScript — the actual value is set as
   // non-enumerable in the constructor so that structuredClone (called by the
   // pi-agent framework in emitContext) never traverses into cron.ScheduledTask
@@ -763,10 +767,19 @@ export abstract class BaseAgent extends EventEmitter {
    * section string. Returns "" when the KB is empty or missing.
    */
   private _buildKBFromDiagram(diagram: FlowDiagram): string {
-    const raw = this.storage.getKnowledgeBase(
-      diagram.agentId,
-      diagram.scope as "personal" | "shared",
-    );
+    const kbKey = `${diagram.agentId}:${diagram.scope}`;
+    const now = Date.now();
+    let raw: Record<string, unknown> | null;
+    if (
+      this._kbCache &&
+      this._kbCache.key === kbKey &&
+      now - this._kbCache.ts < BaseAgent.CACHE_TTL_MS
+    ) {
+      raw = this._kbCache.data as Record<string, unknown> | null;
+    } else {
+      raw = this.storage.getKnowledgeBase(diagram.agentId, diagram.scope as "personal" | "shared");
+      this._kbCache = { key: kbKey, data: raw, ts: now };
+    }
     if (!raw) return "";
 
     const entries = raw.entries as
@@ -807,12 +820,22 @@ export abstract class BaseAgent extends EventEmitter {
 
     const scopeLabel = diagram.scope === "shared" ? "Shared" : "Personal";
 
-    // Load coaching tips for this scope and append as a coaching insights section.
-    // Use at most 5 most-recent tips to keep the prompt concise.
-    const coachingTips = this.storage.getCoachingTips(
-      diagram.agentId,
-      diagram.scope as "personal" | "shared",
-    );
+    // Load coaching tips for this scope (cached 5 min to reduce DB load).
+    const coachKey = `${diagram.agentId}:${diagram.scope}`;
+    let coachingTips: Record<string, { content: string; generatedAt: string }>;
+    if (
+      this._coachCache &&
+      this._coachCache.key === coachKey &&
+      now - this._coachCache.ts < BaseAgent.CACHE_TTL_MS
+    ) {
+      coachingTips = this._coachCache.data as typeof coachingTips;
+    } else {
+      coachingTips = this.storage.getCoachingTips(
+        diagram.agentId,
+        diagram.scope as "personal" | "shared",
+      );
+      this._coachCache = { key: coachKey, data: coachingTips, ts: now };
+    }
     const tipValues = Object.values(coachingTips)
       .sort((a, b) => b.generatedAt.localeCompare(a.generatedAt))
       .slice(0, 5);
@@ -2817,7 +2840,7 @@ export abstract class BaseAgent extends EventEmitter {
     // "И более": contacts silent for longer than the range end, re-engaged at
     // most once per `toDay` days (uses delay_days=9999 as dedup marker).
     if (settings.reEngagementDelayMore) {
-      const moreDay = toDay ?? Math.max(...delays, 1);
+      const moreDay = toDay ?? (delays.length > 0 ? Math.max(...delays) : 1);
       const contacts = this.storage.getContactsForReEngagementMore(this.id, moreDay);
       this.logger.info(
         `[TG:${this.name}] re-engagement more (>${moreDay}d) found=${contacts.length}`,

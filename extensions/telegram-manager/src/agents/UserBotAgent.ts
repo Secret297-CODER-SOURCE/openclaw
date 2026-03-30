@@ -35,6 +35,39 @@ const followUpSentAt = new Map<string, number>();
 // when catchUpUnread and the live NewMessage handler race for the same message.
 const processedMsgIds = new Set<string>();
 
+// ── Memory cleanup ─────────────────────────────────────────────────────────
+// Prevent unbounded growth of module-level maps/sets for long-running agents.
+// Runs every 10 minutes; evicts entries older than 1 hour (for timing maps)
+// and caps processedMsgIds at 50k entries.
+const CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
+const TIMING_MAP_TTL_MS = 60 * 60 * 1000; // 1 hour
+const PROCESSED_IDS_MAX = 50_000;
+
+setInterval(() => {
+  const cutoff = Date.now() - TIMING_MAP_TTL_MS;
+  for (const [k, v] of cooldowns) {
+    if (v < cutoff) cooldowns.delete(k);
+  }
+  for (const [k, v] of lastSentAt) {
+    if (v < cutoff) lastSentAt.delete(k);
+  }
+  for (const [k, v] of lastIncomingAt) {
+    if (v < cutoff) lastIncomingAt.delete(k);
+  }
+  for (const [k, v] of followUpSentAt) {
+    if (v < cutoff) followUpSentAt.delete(k);
+  }
+  // processedMsgIds: trim oldest entries when over limit (FIFO by insertion order).
+  if (processedMsgIds.size > PROCESSED_IDS_MAX) {
+    const excess = processedMsgIds.size - PROCESSED_IDS_MAX;
+    let removed = 0;
+    for (const id of processedMsgIds) {
+      processedMsgIds.delete(id);
+      if (++removed >= excess) break;
+    }
+  }
+}, CLEANUP_INTERVAL_MS).unref();
+
 /**
  * Per-chat reply lock: "agentId:chatId" → Promise resolving when current reply is done.
  * Ensures rapid burst messages from the same client are processed one at a time.
@@ -44,19 +77,33 @@ const processedMsgIds = new Set<string>();
  */
 const chatLocks = new Map<string, Promise<void>>();
 
+/** Max time a single chat lock handler can run before being considered stuck. */
+const CHAT_LOCK_TIMEOUT_MS = 90_000; // 90 seconds
+
 /**
  * Serialize async work per chat. `fn` runs only after any in-progress reply for
  * `lockKey` has finished. If `fn` is already queued/running, the second call waits.
+ * Includes a safety timeout to prevent permanent hangs from stuck AI calls.
  */
 function withChatLock(lockKey: string, fn: () => Promise<void>): Promise<void> {
   const prev = chatLocks.get(lockKey) ?? Promise.resolve();
   const next = prev
-    .then(() => fn())
+    .then(() => {
+      // Race fn() against a timeout to prevent permanent hangs
+      return Promise.race([
+        fn(),
+        new Promise<void>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`chat lock timeout (${CHAT_LOCK_TIMEOUT_MS}ms)`)),
+            CHAT_LOCK_TIMEOUT_MS,
+          ),
+        ),
+      ]);
+    })
     .catch(() => {
-      /* individual handlers log their own errors */
+      /* individual handlers log their own errors; timeout errors are swallowed here */
     });
   chatLocks.set(lockKey, next);
-  // Auto-clean: once `next` settles, remove from map if nothing else was chained.
   next.finally(() => {
     if (chatLocks.get(lockKey) === next) chatLocks.delete(lockKey);
   });
@@ -982,6 +1029,7 @@ export class UserBotAgent extends BaseAgent {
             }
           } catch (e) {
             this.logger.warn(`[TG:${this.name}] schema handler failed for ${chatId}: ${String(e)}`);
+            this.pushEvent("error", { action: "schema_handler_fail", chatId, error: String(e) });
           }
         });
       },
@@ -1269,6 +1317,7 @@ export class UserBotAgent extends BaseAgent {
             } catch (e) {
               const errMsg = e instanceof Error ? e.message : String(e);
               this.logger.warn(`[TG:${this.name}] auto_reply AI failed: ${errMsg}`);
+              this.pushEvent("error", { action: "ai_reply_fail", chatId, error: errMsg });
               return;
             }
           } else {
