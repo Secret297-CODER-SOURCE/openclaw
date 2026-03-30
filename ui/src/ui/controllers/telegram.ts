@@ -835,6 +835,8 @@ export type AgentSettings = {
   reEngagementNameOnly?: boolean;
   /** Previously saved re-engagement templates the user can pick from. */
   reEngagementSavedTemplates?: string[];
+  /** Tone of re-engagement AI messages (soft / balanced / hard). */
+  reEngagementTone?: "soft" | "balanced" | "hard";
   // ── Leads group ─────────────────────────────────────────────────────────────
   leadsGroupLink?: string;
   leadsGroupWelcomedLinks?: string[];

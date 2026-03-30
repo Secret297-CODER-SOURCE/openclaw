@@ -1113,6 +1113,37 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                   🤖 ИИ генерирует
                 </label>
               </div>
+
+              <!-- Re-engagement tone — independent of buyer mode, always visible -->
+              <div class="tg-reeng-section-title" style="margin-bottom:8px;">
+                ⚡ Тон реактивации
+              </div>
+              <div class="tg-toggle-group" style="margin-bottom:6px;">
+                <label
+                  class="tg-toggle-option ${(settings.reEngagementTone ?? "balanced") === "soft" ? "tg-toggle-option--active" : ""}"
+                  @click=${() => saveSettings({ reEngagementTone: "soft" })}>
+                  🕊 Мягкий
+                </label>
+                <label
+                  class="tg-toggle-option ${(settings.reEngagementTone ?? "balanced") === "balanced" ? "tg-toggle-option--active" : ""}"
+                  @click=${() => saveSettings({ reEngagementTone: "balanced" })}>
+                  Баланс
+                </label>
+                <label
+                  class="tg-toggle-option ${settings.reEngagementTone === "hard" ? "tg-toggle-option--active" : ""}"
+                  @click=${() => saveSettings({ reEngagementTone: "hard" })}>
+                  🔥 Напористый
+                </label>
+              </div>
+              <div class="tg-setting-hint" style="margin-bottom:12px;">
+                ${
+                  {
+                    soft: "ИИ пишет мягко — пробуждает интерес, не давит, даёт повод ответить самому",
+                    balanced: "Уверенный тон — ты помнишь его ситуацию и пишешь по делу",
+                    hard: "Прямой тон — называет следующий шаг как само собой разумеющееся",
+                  }[settings.reEngagementTone ?? "balanced"]
+                }
+              </div>
               ${
                 settings.reEngagementAiMode === "ai"
                   ? html`
@@ -1506,8 +1537,276 @@ function renderBehaviorsPanel(props: TelegramProps, agent: TelegramAgentRecord) 
 
 // ─── Detail: events panel ─────────────────────────────────────────────────────
 
+/**
+ * Safely extract a string from an event payload value.
+ * Avoids the no-base-to-string lint error by checking the type explicitly.
+ */
+function sp(v: unknown, fallback = ""): string {
+  if (v == null) {
+    return fallback;
+  }
+  if (typeof v === "string") {
+    return v;
+  }
+  if (typeof v === "number" || typeof v === "boolean") {
+    return String(v);
+  }
+  return fallback;
+}
+
+/** Escape a CSV cell value (wrap in quotes, double internal quotes). */
+function csvCell(v: unknown): string {
+  const s = sp(v).replace(/"/g, '""');
+  return `"${s}"`;
+}
+
+/** Trigger a CSV file download in the browser. */
+function downloadCsv(filename: string, rows: string[][]): void {
+  const csv = rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/** Signal → badge color for both UI and HTML export. */
+function signalColor(sig: string): string {
+  if (sig === "close" || sig === "approval") {
+    return "#22c55e";
+  }
+  if (sig === "angry") {
+    return "#ef4444";
+  }
+  if (sig === "price" || sig === "delay") {
+    return "#f97316";
+  }
+  if (sig === "doubt" || sig === "competitor") {
+    return "#a78bfa";
+  }
+  if (sig === "interest" || sig === "details") {
+    return "#38bdf8";
+  }
+  return "#6b7280";
+}
+
+/** Source code → human-readable Russian label. */
+function sourceLabel(src: string): string {
+  const map: Record<string, string> = {
+    "kb-adapted": "📚 База знаний",
+    "kb-decision-adapted": "🔀 База знаний (решение)",
+    "ai-fallback": "🧠 ИИ-фоллбэк",
+    "free-mode": "🌐 Свободный режим",
+  };
+  return map[src] ?? src;
+}
+
+/**
+ * Generate and download a beautiful HTML report for AI reply events.
+ * Each row shows: time, chat, trigger messages, signal, node/source, reply.
+ */
+function downloadAiRepliesHtml(
+  agentId: string,
+  events: Array<{ timestamp: number; payload: Record<string, unknown> }>,
+): void {
+  const ts = new Date().toLocaleString();
+  const rows = events
+    .map((e) => {
+      const p = e.payload;
+      const sig = sp(p["signal"], "neutral");
+      const sigLabel = sp(p["signalLabel"]) || sig;
+      const msgs = Array.isArray(p["clientMessages"])
+        ? (p["clientMessages"] as unknown[]).map(String)
+        : [sp(p["clientText"], "")];
+      const msgHtml = msgs
+        .map(
+          (m, i) =>
+            `<div style="padding:4px 0;${i > 0 ? "border-top:1px solid #2a2a3a;" : ""}">
+              <span style="color:#6b7280;font-size:10px;">сообщение ${i + 1}</span><br>
+              <span style="color:#e2e8f0;">${escHtml(m)}</span>
+             </div>`,
+        )
+        .join("");
+      const col = signalColor(sig);
+      const src = sp(p["source"], "");
+      const node = sp(p["node"], "");
+      return `
+        <tr>
+          <td style="white-space:nowrap;color:#94a3b8;">${new Date(e.timestamp).toLocaleString()}</td>
+          <td style="font-family:monospace;color:#7dd3fc;">${escHtml(sp(p["chatId"], ""))}</td>
+          <td>${msgHtml}</td>
+          <td>
+            <span style="display:inline-block;padding:3px 8px;border-radius:12px;background:${col}22;color:${col};font-size:11px;font-weight:600;border:1px solid ${col}55;">${escHtml(sigLabel)}</span>
+          </td>
+          <td style="color:#94a3b8;">
+            <div style="font-size:11px;">${escHtml(sourceLabel(src))}</div>
+            ${node ? `<div style="margin-top:3px;color:#64748b;font-size:10px;">📍 ${escHtml(node)}</div>` : ""}
+          </td>
+          <td style="color:#f1f5f9;">${escHtml(sp(p["text"], ""))}</td>
+        </tr>`;
+    })
+    .join("\n");
+
+  const html = `<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Лог ответов ИИ · ${escHtml(agentId)}</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0f1117; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 32px; }
+    h1 { font-size: 22px; font-weight: 700; color: #f8fafc; margin-bottom: 4px; }
+    .meta { font-size: 13px; color: #64748b; margin-bottom: 24px; }
+    .summary { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+    .stat { background: #1e2130; border: 1px solid #2d3148; border-radius: 10px; padding: 12px 18px; }
+    .stat-val { font-size: 24px; font-weight: 700; color: #f8fafc; }
+    .stat-lbl { font-size: 11px; color: #64748b; margin-top: 2px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    thead th { background: #1a1f2e; color: #64748b; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; padding: 10px 14px; border-bottom: 2px solid #2d3148; text-align: left; white-space: nowrap; }
+    tbody tr { border-bottom: 1px solid #1e2130; transition: background .15s; }
+    tbody tr:hover { background: #161b27; }
+    tbody td { padding: 10px 14px; vertical-align: top; line-height: 1.5; }
+    .badge { display: inline-block; padding: 3px 9px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+    footer { margin-top: 32px; font-size: 11px; color: #374151; text-align: center; }
+  </style>
+</head>
+<body>
+  <h1>🤖 Лог ответов ИИ</h1>
+  <div class="meta">Агент: <strong>${escHtml(agentId)}</strong> · Экспорт: ${ts} · Записей: ${events.length}</div>
+  <div class="summary">
+    <div class="stat"><div class="stat-val">${events.length}</div><div class="stat-lbl">Всего ответов</div></div>
+    <div class="stat"><div class="stat-val">${new Set(events.map((e) => sp(e.payload["chatId"]))).size}</div><div class="stat-lbl">Уникальных чатов</div></div>
+    <div class="stat"><div class="stat-val">${events.filter((e) => e.payload["signal"] === "close" || e.payload["signal"] === "approval").length}</div><div class="stat-lbl">Сигналов сделки</div></div>
+    <div class="stat"><div class="stat-val">${events.filter((e) => e.payload["signal"] === "price" || e.payload["signal"] === "delay").length}</div><div class="stat-lbl">Возражений</div></div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Время</th>
+        <th>Чат</th>
+        <th>Что написал клиент</th>
+        <th>Сигнал / Вывод ИИ</th>
+        <th>Источник / Узел</th>
+        <th>Ответ агента</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>
+  <footer>Сгенерировано OpenClaw · ${ts}</footer>
+</body>
+</html>`;
+
+  const blob = new Blob([html], { type: "text/html;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `ai-replies-${agentId}-${Date.now()}.html`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/** Escape HTML special characters (for the HTML export only). */
+function escHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * Generate and download a beautiful HTML report for re-engagement events.
+ */
+function downloadReengagementHtml(
+  agentId: string,
+  events: Array<{ timestamp: number; payload: Record<string, unknown> }>,
+): void {
+  const ts = new Date().toLocaleString();
+  const rows = events
+    .map((e) => {
+      const p = e.payload;
+      const modeVal = sp(p["mode"], "template");
+      const modeHtml =
+        modeVal === "ai"
+          ? `<span class="badge" style="background:#1e3a2f;color:#22c55e;border:1px solid #22c55e55;">🤖 AI</span>`
+          : `<span class="badge" style="background:#1e2a3a;color:#60a5fa;border:1px solid #60a5fa55;">📄 Шаблон</span>`;
+      return `
+        <tr>
+          <td style="white-space:nowrap;color:#94a3b8;">${new Date(e.timestamp).toLocaleString()}</td>
+          <td style="font-family:monospace;color:#7dd3fc;">${escHtml(sp(p["chatId"], ""))}</td>
+          <td style="text-align:center;font-weight:700;color:#f8fafc;">${escHtml(sp(p["day"], "—"))}</td>
+          <td>${modeHtml}</td>
+          <td style="color:#f1f5f9;">${escHtml(sp(p["text"], ""))}</td>
+        </tr>`;
+    })
+    .join("\n");
+
+  const html = `<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Лог реактивации · ${escHtml(agentId)}</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0f1117; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 32px; }
+    h1 { font-size: 22px; font-weight: 700; color: #f8fafc; margin-bottom: 4px; }
+    .meta { font-size: 13px; color: #64748b; margin-bottom: 24px; }
+    .summary { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+    .stat { background: #1e2130; border: 1px solid #2d3148; border-radius: 10px; padding: 12px 18px; }
+    .stat-val { font-size: 24px; font-weight: 700; color: #f8fafc; }
+    .stat-lbl { font-size: 11px; color: #64748b; margin-top: 2px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    thead th { background: #1a1f2e; color: #64748b; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; padding: 10px 14px; border-bottom: 2px solid #2d3148; text-align: left; white-space: nowrap; }
+    tbody tr { border-bottom: 1px solid #1e2130; }
+    tbody tr:hover { background: #161b27; }
+    tbody td { padding: 10px 14px; vertical-align: top; line-height: 1.5; }
+    .badge { display: inline-block; padding: 3px 9px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+    footer { margin-top: 32px; font-size: 11px; color: #374151; text-align: center; }
+  </style>
+</head>
+<body>
+  <h1>🔁 Лог реактивации</h1>
+  <div class="meta">Агент: <strong>${escHtml(agentId)}</strong> · Экспорт: ${ts} · Записей: ${events.length}</div>
+  <div class="summary">
+    <div class="stat"><div class="stat-val">${events.length}</div><div class="stat-lbl">Отправлено</div></div>
+    <div class="stat"><div class="stat-val">${new Set(events.map((e) => sp(e.payload["chatId"]))).size}</div><div class="stat-lbl">Уникальных чатов</div></div>
+    <div class="stat"><div class="stat-val">${events.filter((e) => e.payload["mode"] === "ai").length}</div><div class="stat-lbl">AI-режим</div></div>
+    <div class="stat"><div class="stat-val">${events.filter((e) => (e.payload["mode"] ?? "template") === "template").length}</div><div class="stat-lbl">По шаблону</div></div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Время</th>
+        <th>Чат</th>
+        <th>День</th>
+        <th>Режим</th>
+        <th>Текст сообщения</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>
+  <footer>Сгенерировано OpenClaw · ${ts}</footer>
+</body>
+</html>`;
+
+  const blob = new Blob([html], { type: "text/html;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `reengagement-${agentId}-${Date.now()}.html`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function renderEventsPanel(props: TelegramProps, agentId: string) {
   const all = props.recentEvents.filter((e) => e.agentId === agentId);
+
+  // Split into specialised logs and general stream.
+  const aiReplies = all.filter((e) => e.type === "ai_reply");
+  const reengagements = all.filter((e) => e.type === "reengagement");
+  const general = all.filter((e) => e.type !== "ai_reply" && e.type !== "reengagement");
 
   const typeIcon: Record<string, string> = {
     message_in: "📨",
@@ -1567,7 +1866,7 @@ function renderEventsPanel(props: TelegramProps, agentId: string) {
         return `${chatPrefix}[${action ?? "reply"}] ${text}`;
       case "behavior":
         if (action === "schema_advance") {
-          return `${chatPrefix}${String(p["from"])} → ${String(p["to"])}`;
+          return `${chatPrefix}${sp(p["from"])} → ${sp(p["to"])}`;
         }
         if (action === "catchup_process") {
           return `${chatPrefix}обработка догона`;
@@ -1577,10 +1876,10 @@ function renderEventsPanel(props: TelegramProps, agentId: string) {
         }
         return `${chatPrefix}${action ?? ""}`;
       case "reengagement":
-        return `${chatPrefix}день ${String(p["day"])} · ${text}`;
+        return `${chatPrefix}день ${sp(p["day"])} · ${text}`;
       case "followup":
         return action === "scheduled"
-          ? `${chatPrefix}запланирован через ${String(p["inMinutes"])} мин.`
+          ? `${chatPrefix}запланирован через ${sp(p["inMinutes"])} мин.`
           : `${chatPrefix}отправлен · ${text}`;
       case "validation":
         return action === "strict_ok"
@@ -1595,18 +1894,230 @@ function renderEventsPanel(props: TelegramProps, agentId: string) {
     }
   };
 
+  // ── helpers for table rendering ──────────────────────────────────────────
+
+  const thStyle =
+    "padding:6px 10px;font-size:11px;font-weight:600;color:var(--text-muted);border-bottom:1px solid var(--border,#2a2a2a);white-space:nowrap;text-align:left;";
+  const tdStyle =
+    "padding:5px 10px;font-size:12px;vertical-align:top;border-bottom:1px solid var(--border,#1e1e1e);word-break:break-word;";
+  const tableStyle = "width:100%;border-collapse:collapse;margin-top:8px;";
+
+  // ── AI replies log ────────────────────────────────────────────────────────
+
+  const exportAiRepliesCsv = () => {
+    const rows: string[][] = [
+      [
+        "Время",
+        "Чат",
+        "Сообщение 1",
+        "Сообщение 2",
+        "Сообщение 3",
+        "Сигнал",
+        "Расшифровка сигнала",
+        "Источник",
+        "Узел схемы",
+        "Ответ агента",
+      ],
+      ...aiReplies.map((e) => {
+        const p = e.payload;
+        const msgs = Array.isArray(p["clientMessages"])
+          ? (p["clientMessages"] as unknown[]).map(String)
+          : [sp(p["clientText"], "")];
+        return [
+          new Date(e.timestamp).toLocaleString(),
+          sp(p["chatId"], ""),
+          msgs[0] ?? "",
+          msgs[1] ?? "",
+          msgs[2] ?? "",
+          sp(p["signal"], ""),
+          sp(p["signalLabel"], ""),
+          sp(p["source"], ""),
+          sp(p["node"], ""),
+          sp(p["text"], ""),
+        ];
+      }),
+    ];
+    downloadCsv(`ai-replies-${agentId}-${Date.now()}.csv`, rows);
+  };
+
+  const exportAiRepliesHtml = () => {
+    downloadAiRepliesHtml(agentId, aiReplies);
+  };
+
+  const aiRepliesTable =
+    aiReplies.length === 0
+      ? html`
+          <div class="muted" style="padding: 8px 0">Нет ответов ИИ</div>
+        `
+      : html`
+          <div style="overflow-x:auto;">
+            <table style="${tableStyle}">
+              <thead>
+                <tr>
+                  <th style="${thStyle}">Время</th>
+                  <th style="${thStyle}">Чат</th>
+                  <th style="${thStyle}">Что написал клиент</th>
+                  <th style="${thStyle}">Сигнал · Вывод ИИ</th>
+                  <th style="${thStyle}">Источник · Узел</th>
+                  <th style="${thStyle}">Ответ агента</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${aiReplies.slice(0, 200).map((e) => {
+                  const p = e.payload;
+                  const sig = sp(p["signal"], "neutral");
+                  const sigLabel = sp(p["signalLabel"]) || sig;
+                  const col = signalColor(sig);
+                  const msgs = Array.isArray(p["clientMessages"])
+                    ? (p["clientMessages"] as unknown[]).map(String)
+                    : [sp(p["clientText"], "—")];
+                  const src = sp(p["source"], "");
+                  const node = sp(p["node"], "");
+                  return html`
+                    <tr style="border-bottom:1px solid var(--border,#1e1e1e);">
+                      <td style="${tdStyle}color:var(--text-muted);white-space:nowrap;">${new Date(e.timestamp).toLocaleTimeString()}</td>
+                      <td style="${tdStyle}font-family:monospace;font-size:11px;">${sp(p["chatId"], "—")}</td>
+                      <td style="${tdStyle}max-width:240px;">
+                        ${msgs.map(
+                          (m, i) => html`
+                          <div style="padding:3px 0;${i > 0 ? "border-top:1px solid var(--border,#1e1e1e);" : ""}">
+                            <span style="font-size:10px;color:var(--text-muted);">↳ сообщение ${i + 1}</span><br>
+                            <span style="font-size:12px;">${m}</span>
+                          </div>
+                        `,
+                        )}
+                      </td>
+                      <td style="${tdStyle}">
+                        <span style="display:inline-block;padding:3px 8px;border-radius:10px;background:${col}22;color:${col};font-size:11px;font-weight:600;border:1px solid ${col}44;">${sigLabel}</span>
+                      </td>
+                      <td style="${tdStyle}color:var(--text-muted);">
+                        <div style="font-size:11px;">${sourceLabel(src)}</div>
+                        ${node ? html`<div style="margin-top:3px;font-size:10px;color:#555;">📍 ${node}</div>` : nothing}
+                      </td>
+                      <td style="${tdStyle}max-width:280px;color:var(--text-primary,#eee);font-size:12px;">${sp(p["text"], "—")}</td>
+                    </tr>
+                  `;
+                })}
+              </tbody>
+            </table>
+          </div>
+        `;
+
+  // ── Re-engagement log ─────────────────────────────────────────────────────
+
+  const exportReengagementsCsv = () => {
+    const rows: string[][] = [
+      ["Время", "Чат", "День реактивации", "Режим", "Текст сообщения"],
+      ...reengagements.map((e) => {
+        const p = e.payload;
+        return [
+          new Date(e.timestamp).toLocaleString(),
+          sp(p["chatId"], ""),
+          sp(p["day"], ""),
+          sp(p["mode"], "template"),
+          sp(p["text"], ""),
+        ];
+      }),
+    ];
+    downloadCsv(`reengagement-${agentId}-${Date.now()}.csv`, rows);
+  };
+
+  const exportReengagementsHtml = () => {
+    downloadReengagementHtml(agentId, reengagements);
+  };
+
+  const reengagementTable =
+    reengagements.length === 0
+      ? html`
+          <div class="muted" style="padding: 8px 0">Нет реактиваций</div>
+        `
+      : html`
+          <div style="overflow-x:auto;">
+            <table style="${tableStyle}">
+              <thead>
+                <tr>
+                  <th style="${thStyle}">Время</th>
+                  <th style="${thStyle}">Чат</th>
+                  <th style="${thStyle}">День</th>
+                  <th style="${thStyle}">Режим</th>
+                  <th style="${thStyle}">Текст сообщения</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${reengagements.slice(0, 200).map((e) => {
+                  const p = e.payload;
+                  const modeVal = sp(p["mode"], "template");
+                  const modeColor = modeVal === "ai" ? "#22c55e" : "#60a5fa";
+                  return html`
+                    <tr style="border-bottom:1px solid var(--border,#1e1e1e);">
+                      <td style="${tdStyle}color:var(--text-muted);white-space:nowrap;">${new Date(e.timestamp).toLocaleTimeString()}</td>
+                      <td style="${tdStyle}font-family:monospace;font-size:11px;">${sp(p["chatId"], "—")}</td>
+                      <td style="${tdStyle}text-align:center;font-weight:700;">${sp(p["day"], "—")}</td>
+                      <td style="${tdStyle}">
+                        <span style="display:inline-block;padding:3px 8px;border-radius:10px;background:${modeColor}22;color:${modeColor};font-size:11px;font-weight:600;border:1px solid ${modeColor}44;">${modeVal === "ai" ? "🤖 AI" : "📄 шаблон"}</span>
+                      </td>
+                      <td style="${tdStyle}max-width:360px;color:var(--text-primary,#eee);font-size:12px;">${sp(p["text"], "—")}</td>
+                    </tr>
+                  `;
+                })}
+              </tbody>
+            </table>
+          </div>
+        `;
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
   return html`
+    <!-- Лог ответов ИИ -->
+    <section class="card" style="margin-bottom:16px;">
+      <div class="card-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span>🤖 Лог ответов ИИ</span>
+        <span style="font-size:12px;color:var(--text-muted);">${aiReplies.length} записей</span>
+        ${
+          aiReplies.length > 0
+            ? html`
+                <div style="margin-left:auto;display:flex;gap:8px;">
+                  <button class="btn btn--sm" @click=${exportAiRepliesCsv}>⬇ CSV</button>
+                  <button class="btn btn--sm" style="background:var(--accent,#5b6af0)22;border-color:var(--accent,#5b6af0);" @click=${exportAiRepliesHtml}>🗂 HTML-отчёт</button>
+                </div>`
+            : nothing
+        }
+      </div>
+      <div class="card-sub">Триггер-сообщения клиента · сигнал · узел схемы · ответ агента</div>
+      ${aiRepliesTable}
+    </section>
+
+    <!-- Лог реактивации -->
+    <section class="card" style="margin-bottom:16px;">
+      <div class="card-title" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span>🔁 Лог реактивации</span>
+        <span style="font-size:12px;color:var(--text-muted);">${reengagements.length} записей</span>
+        ${
+          reengagements.length > 0
+            ? html`
+                <div style="margin-left:auto;display:flex;gap:8px;">
+                  <button class="btn btn--sm" @click=${exportReengagementsCsv}>⬇ CSV</button>
+                  <button class="btn btn--sm" style="background:var(--accent,#5b6af0)22;border-color:var(--accent,#5b6af0);" @click=${exportReengagementsHtml}>🗂 HTML-отчёт</button>
+                </div>`
+            : nothing
+        }
+      </div>
+      <div class="card-sub">Отправленные реактивационные сообщения с режимом и текстом</div>
+      ${reengagementTable}
+    </section>
+
+    <!-- Общий поток событий -->
     <section class="card">
       <div class="card-title" style="display:flex;align-items:center;gap:10px;">
         <span>${t("ui.panelEvents")}</span>
-        <span style="font-size:12px;color:var(--text-muted);">${all.length} событий</span>
+        <span style="font-size:12px;color:var(--text-muted);">${general.length} событий</span>
       </div>
       <div class="card-sub">${t("ui.eventsDesc")}</div>
       <div class="list" style="margin-top:12px;">
         ${
-          all.length === 0
+          general.length === 0
             ? html`<div class="muted">${t("ui.noEvents")}</div>`
-            : all.slice(0, 200).map((evt) => {
+            : general.slice(0, 200).map((evt) => {
                 const icon = typeIcon[evt.type] ?? "•";
                 const label = typeLabel[evt.type] ?? evt.type;
                 const cls = chipClass[evt.type] ?? "chip";

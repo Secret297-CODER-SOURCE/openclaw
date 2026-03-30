@@ -1734,12 +1734,17 @@ export abstract class BaseAgent extends EventEmitter {
       this.logger.info(
         `[TG:${this.name}] schema reply | chat=${chatId} source=kb-adapted node="${currentNode.text.slice(0, 40)}"`,
       );
+      const _sig1 = this.getSignalId(conversationHistory);
       this.pushEvent("ai_reply", {
         action: "schema_reply",
         chatId,
         source: "kb-adapted",
         node: currentNode.text.slice(0, 60),
         text: reply,
+        clientText: userText.slice(0, 200),
+        signal: _sig1,
+        signalLabel: this.getSignalLabel(_sig1),
+        clientMessages: this.getTriggerMessages(conversationHistory),
       });
       const safeReply = this.enforceWorkingHours(stripPhoneNumbers(reply), settings);
       persistHistory(userText, safeReply);
@@ -1756,12 +1761,17 @@ export abstract class BaseAgent extends EventEmitter {
       this.logger.info(
         `[TG:${this.name}] schema reply | chat=${chatId} source=kb-decision-adapted node="${currentNode.text.slice(0, 40)}"`,
       );
+      const _sig2 = this.getSignalId(conversationHistory);
       this.pushEvent("ai_reply", {
         action: "schema_reply",
         chatId,
         source: "kb-decision-adapted",
         node: currentNode.text.slice(0, 60),
         text: reply,
+        clientText: userText.slice(0, 200),
+        signal: _sig2,
+        signalLabel: this.getSignalLabel(_sig2),
+        clientMessages: this.getTriggerMessages(conversationHistory),
       });
       const safeDecisionReply = this.enforceWorkingHours(stripPhoneNumbers(reply), settings);
       persistHistory(userText, safeDecisionReply);
@@ -2085,12 +2095,17 @@ export abstract class BaseAgent extends EventEmitter {
     this.logger.info(
       `[TG:${this.name}] schema reply | chat=${chatId} source=${replySource} node="${currentNode.text.slice(0, 40)}"`,
     );
+    const _sig3 = this.getSignalId(conversationHistory);
     this.pushEvent("ai_reply", {
       action: "schema_reply",
       chatId,
       source: replySource,
       node: currentNode.text.slice(0, 60),
       text: reply,
+      clientText: userText.slice(0, 200),
+      signal: _sig3,
+      signalLabel: this.getSignalLabel(_sig3),
+      clientMessages: this.getTriggerMessages(conversationHistory),
     });
 
     // ── Auto-save validated data to chat memory ───────────────────────────
@@ -2351,10 +2366,17 @@ export abstract class BaseAgent extends EventEmitter {
         .replace(/\s{2,}/g, " ")
         .trim();
       this.logger.info(`[TG:${this.name}] free-mode reply | chat=${chatId}`);
+      const _sig4 = this.getSignalId(conversationHistory);
       this.pushEvent("ai_reply", {
         action: "free_mode_reply",
         chatId,
+        source: "free-mode",
+        node: "",
         text: rawReply,
+        clientText: userText.slice(0, 200),
+        signal: _sig4,
+        signalLabel: this.getSignalLabel(_sig4),
+        clientMessages: this.getTriggerMessages(conversationHistory),
       });
       // Auto-learn: persist this exchange to the most relevant KB node (fire-and-forget)
       if (safeReply) {
@@ -2693,32 +2715,60 @@ export abstract class BaseAgent extends EventEmitter {
   private async enhanceReEngagementMessage(baseMessage: string, chatKey: string): Promise<string> {
     try {
       const { callAdapterOnce } = await import("../behaviors/AiReplyEngine.js");
-      // Pull recent conversation history for context (last 10 messages)
+      // Load full history — re-engagement needs the whole context to find
+      // what genuinely interested the client and where the deal stopped.
       const allHistory = this.storage.loadConversationHistory(chatKey);
-      const recent = allHistory.slice(-10);
       const historyText =
-        recent.length > 0
-          ? recent.map((m) => `${m.role === "user" ? "Клиент" : "Агент"}: ${m.content}`).join("\n")
+        allHistory.length > 0
+          ? allHistory
+              .map((m) => `${m.role === "user" ? "Клиент" : "Агент"}: ${m.content}`)
+              .join("\n")
           : "(история недоступна)";
 
+      const erSettings = this.getAgentSettings();
+      const erIsBuyer = erSettings.schemaDeliveryStyle === "buyer";
+      // reEngagementTone is the dedicated control; fall back to buyerAggressionLevel
+      // when in buyer mode and no explicit re-engagement tone is set.
+      const erAggression =
+        erSettings.reEngagementTone ??
+        (erIsBuyer ? (erSettings.buyerAggressionLevel ?? "balanced") : "balanced");
+
+      const aggressionLine =
+        erAggression === "hard"
+          ? "Тон прямой и уверенный — называй следующий шаг как само собой разумеющееся."
+          : erAggression === "soft"
+            ? "Тон мягкий — дай человеку самому захотеть продолжить, без давления."
+            : "Тон уверенный, не давящий — ты помнишь его ситуацию, у тебя есть что сказать.";
+
       const systemPrompt =
-        "Ты — менеджер по продажам. Пишешь реактивационное сообщение клиенту который давно молчит. " +
-        "Сообщение живое, персонализированное, вызывает желание ответить. " +
-        "Без клише ('давно не виделись', 'как дела'). 1–2 предложения максимум. " +
-        "Определи язык клиента по истории и пиши на нём. " +
-        "Только текст сообщения — без кавычек, без пояснений.";
+        "Ты — эксперт по реактивации «замёрзших» сделок.\n" +
+        "Клиент давно молчит. Твоя задача: написать ОДНО сообщение которое вернёт его в разговор.\n\n" +
+        "Алгоритм:\n" +
+        "1. Прочитай историю и найди: что этому клиенту было реально интересно или важно — его слова, его задача, его боль.\n" +
+        "2. Найди точку остановки: на чём именно диалог замер (возражение по цене, нужно подумать, ждал условий, отвлёкся, что-то смутило).\n" +
+        "3. НЕ атакуй точку остановки напрямую — зайди с другого угла: дай новую конкретику, результат, или просто напомни о его же цели.\n" +
+        "4. Шаблон используй как скелет — текст перепиши полностью под этого человека.\n\n" +
+        "Правила:\n" +
+        "• Без 'привет', 'как дела', 'давно не общались', 'не забыл о нас'\n" +
+        "• Без общих фраз — только конкретика из этого чата\n" +
+        "• Говори про ЕГО выгоду, ЕГО ситуацию — не про свой продукт\n" +
+        `• ${aggressionLine}\n` +
+        "• 1–2 предложения максимум\n" +
+        "• Пиши на языке клиента (определи по истории)\n" +
+        "• Только готовый текст сообщения — без кавычек, пояснений, заголовков";
 
       const userPrompt =
-        `Базовый шаблон сообщения: "${baseMessage}"\n\n` +
-        `История диалога с клиентом (последние сообщения):\n${historyText}\n\n` +
-        `Напиши улучшенную версию базового шаблона — короткую, живую, персонализированную. ` +
-        `Сохрани суть и призыв к действию, но сделай текст интереснее.`;
+        `Шаблон-скелет: "${baseMessage}"\n\n` +
+        `История диалога:\n${historyText}\n\n` +
+        `Найди его главный интерес и точку остановки — и перепиши шаблон так, чтобы сообщение говорило именно о том, что важно ЕМУ. Призыв к действию сохрани.`;
+
+      // In non-buyer mode the same template applies — professional re-engagement
+      // is equally useful regardless of delivery style.
+      void erIsBuyer; // already embedded in prompt logic above
 
       const enhanced = await callAdapterOnce(userPrompt, systemPrompt);
-      // Strip surrounding quotes the AI sometimes adds
       return enhanced.replace(/^["«»']+|["«»']+$/g, "").trim() || baseMessage;
     } catch {
-      // AI unavailable — fall back to the base template
       return baseMessage;
     }
   }
@@ -2754,17 +2804,49 @@ export abstract class BaseAgent extends EventEmitter {
         contact.firstName ?? (contact.username ? contact.username.replace(/^@/, "") : null);
       const nameHint = name ? `Имя контакта: ${name}.` : "Имя неизвестно.";
 
+      // Use buyer-aware prompt when buyer mode is active.
+      const arSettings = this.getAgentSettings();
+      const arIsBuyer = arSettings.schemaDeliveryStyle === "buyer";
+      // reEngagementTone takes priority; fall back to buyerAggressionLevel in buyer mode.
+      const arAggression =
+        arSettings.reEngagementTone ??
+        (arIsBuyer ? (arSettings.buyerAggressionLevel ?? "balanced") : "balanced");
+
+      const aggressionHint =
+        arAggression === "hard"
+          ? "Тон прямой и уверенный — называй следующий шаг как само собой разумеющееся, без вопросительных интонаций."
+          : arAggression === "soft"
+            ? "Тон мягкий — создай повод ответить потому что ЕМУ интересно, не потому что его дожали."
+            : "Тон уверенный, не давящий — ты помнишь его ситуацию и пишешь по делу.";
+
+      // Single system prompt works for both buyer and non-buyer mode.
+      // The professional re-engagement algorithm is the same in both cases.
+      void arIsBuyer;
+
       const systemPrompt =
-        "Ты — менеджер по продажам. Клиент давно молчит, нужно возобновить диалог. " +
-        "Прочитай историю и напиши одно сообщение строго в тему разговора — " +
-        "без 'привет', без 'как дела', без клише. " +
-        "Зацепи незакрытым вопросом или конкретикой из прошлого общения. " +
-        "1–2 предложения. Язык клиента. Только текст.";
+        "Ты — эксперт по реактивации «замёрзших» сделок.\n" +
+        "Клиент давно молчит. Одно сообщение — вернуть его в разговор.\n\n" +
+        "Шаги (не пиши их — только используй для формулировки):\n" +
+        "① Найди главный интерес клиента из истории: его задачу, боль, цель — его же словами.\n" +
+        "② Найди точку остановки: на чём конкретно замер диалог " +
+        "(цена, нужно подумать, согласование, сомнение, просто отвлёкся).\n" +
+        "③ Выбери угол возврата: НЕ атакуй точку остановки напрямую — " +
+        "зайди через его интерес: новый аргумент в пользу его цели, " +
+        "конкретный результат/кейс, напоминание о его же задаче.\n" +
+        "④ Напиши сообщение которое говорит о ЕГО выгоде — не о продукте.\n\n" +
+        "Правила:\n" +
+        "• Без 'привет', 'как дела', 'давно не общались', 'напоминаю о себе'\n" +
+        "• Ноль обобщений — только конкретика из этого чата\n" +
+        "• Говори его языком (определи по истории)\n" +
+        `• ${aggressionHint}\n` +
+        "• 1–2 предложения максимум\n" +
+        "• Только готовый текст — без кавычек, пояснений, заголовков";
 
       const userPrompt =
         `${nameHint}\n\n` +
         `Полная история диалога:\n${historyText}\n\n` +
-        `Напиши реактивационное сообщение — коротко, в тему, живо.`;
+        `Найди главный интерес этого человека и точку остановки сделки — ` +
+        `напиши одно сообщение которое говорит о ЕГО цели и даёт повод ответить.`;
 
       const result = await callAdapterOnce(userPrompt, systemPrompt);
       return result.replace(/^["«»']+|["«»']+$/g, "").trim() || null;
@@ -2866,6 +2948,7 @@ export abstract class BaseAgent extends EventEmitter {
           action: "sent",
           chatId: contact.chatId,
           day: dayLabel,
+          mode: settings.reEngagementAiMode ?? "template",
           text: message,
         });
       } catch (e) {
@@ -3288,6 +3371,71 @@ export abstract class BaseAgent extends EventEmitter {
       `⚡ Каждый твой ответ должен ПРОДВИГАТЬ клиента к следующему шагу. ` +
       `Не застревай на текущем — веди вперёд.\n`
     );
+  }
+
+  /**
+   * Returns the primary signal ID for the latest client messages.
+   * Same priority logic as detectClientSignals but lightweight — no text blocks,
+   * used only for event logging / observability.
+   */
+  private getSignalId(conversationHistory: Array<{ role: string; content: string }>): string {
+    const clientMsgs = conversationHistory
+      .filter((m) => m.role === "user")
+      .slice(-3)
+      .map((m) => m.content.toLowerCase());
+    if (clientMsgs.length === 0) return "neutral";
+    const text = clientMsgs.join(" ");
+    if (/злой|злит|бесит|раздраж|надоело|достало|хватит|angry|annoyed|frustrated|fed up/.test(text))
+      return "angry";
+    if (/готов|согласен|давай|оформим|беру|где платить|как оплатить|deal\b|i['']?m in/.test(text))
+      return "close";
+    if (/дорого|не по карман|бюджет|скидк|цена|стоимость|expensive|price|cost\b|afford/.test(text))
+      return "price";
+    if (
+      /подумаю|посоветуюсь|позже|не сейчас|потом|надо подумать|i'?ll think|maybe later/.test(text)
+    )
+      return "delay";
+    if (/партнёр|партнер|жена|муж|руководител|согласов|boss|partner|approval/.test(text))
+      return "approval";
+    if (/не уверен|сомневаюсь|риск|гарантии|отзывы|кейс|not sure|doubt|guarantee/.test(text))
+      return "doubt";
+    if (/конкурент|другой вариант|альтернатив|сравни|competitor|alternative/.test(text))
+      return "competitor";
+    if (/сроки|как долго|договор|когда начн|условия сотруд|timeline/.test(text)) return "details";
+    if (/интересно|расскажи|хочу узнать|подробнее|tell me more|interesting/.test(text))
+      return "interest";
+    return "neutral";
+  }
+
+  /** Human-readable Russian label + short reason for a signal ID. */
+  private getSignalLabel(signalId: string): string {
+    const labels: Record<string, string> = {
+      angry: "😡 Раздражение — клиент выразил недовольство",
+      close: "🤝 Готов к сделке — сигнал покупки",
+      price: "💰 Ценовое возражение — упомянул стоимость/бюджет",
+      delay: "⏳ Откладывает — «подумаю», «потом»",
+      approval: "👥 Нужно согласование — партнёр/руководитель",
+      doubt: "🤔 Сомнение — просит гарантии/кейсы",
+      competitor: "⚔️ Сравнивает с конкурентом",
+      details: "📋 Уточняет условия — сроки/договор",
+      interest: "✨ Проявляет интерес — хочет узнать больше",
+      neutral: "💬 Нейтральный диалог",
+    };
+    return labels[signalId] ?? signalId;
+  }
+
+  /**
+   * Returns the last N client messages as an array of strings for event logging.
+   * Gives full context of what triggered the AI response.
+   */
+  private getTriggerMessages(
+    conversationHistory: Array<{ role: string; content: string }>,
+    n = 3,
+  ): string[] {
+    return conversationHistory
+      .filter((m) => m.role === "user")
+      .slice(-n)
+      .map((m) => m.content.slice(0, 300));
   }
 
   /**

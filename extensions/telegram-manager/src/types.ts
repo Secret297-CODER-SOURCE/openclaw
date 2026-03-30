@@ -373,6 +373,17 @@ export interface AgentSettings {
   /** Previously saved re-engagement templates the user can pick from. */
   reEngagementSavedTemplates?: string[];
 
+  /**
+   * Tone of re-engagement messages — controls how assertive the AI is
+   * when writing or enhancing re-engagement texts.
+   * - "soft"     — gentle, curiosity-driven, no pressure
+   * - "balanced" — confident but not pushy (default)
+   * - "hard"     — direct, states the next step as a given
+   *
+   * Independent of buyerAggressionLevel; applies to both buyer and neutral modes.
+   */
+  reEngagementTone?: "soft" | "balanced" | "hard";
+
   // ── Reply delay (schema + free mode) ──────────────────────────────────────
 
   /**
