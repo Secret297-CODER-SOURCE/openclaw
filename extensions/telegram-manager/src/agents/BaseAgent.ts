@@ -2027,14 +2027,17 @@ export abstract class BaseAgent extends EventEmitter {
       if (branchMatch) {
         reply = rawReply.replace(/\nBRANCH:\s*.+$/im, "").trim();
         const chosenLabel = branchMatch[1].trim().toLowerCase();
-        // Case-insensitive partial match on edge label or target node text
-        const matched = nextNodes.find(
-          (x: { edge: DiagramEdge; node: DiagramNode }) =>
-            x.edge.label?.toLowerCase().includes(chosenLabel) ||
-            chosenLabel.includes((x.edge.label ?? "").toLowerCase()) ||
-            x.node.text.toLowerCase().includes(chosenLabel) ||
-            chosenLabel.includes(x.node.text.toLowerCase()),
-        );
+        // Case-insensitive partial match on edge label or target node text.
+        // Guard: skip empty edge labels — `str.includes("")` is always true
+        // and would cause the first unlabelled edge to win every time.
+        const matched = nextNodes.find((x: { edge: DiagramEdge; node: DiagramNode }) => {
+          const eLabel = x.edge.label?.toLowerCase() ?? "";
+          const nText = x.node.text.toLowerCase();
+          return (
+            (eLabel && (eLabel.includes(chosenLabel) || chosenLabel.includes(eLabel))) ||
+            (nText.length <= 60 && (nText.includes(chosenLabel) || chosenLabel.includes(nText)))
+          );
+        });
         chosenNextNodeId = matched?.node.id ?? nextNodes[0].node.id;
       } else {
         // AI didn't include a tag — fall back to the first branch
@@ -2147,13 +2150,14 @@ export abstract class BaseAgent extends EventEmitter {
     }
 
     // ── Advance the state machine (fallback AI path) ─────────────────────
-    // For the non-KB decision path, chosenNextNodeId was resolved from the
-    // BRANCH tag in the AI reply; for all other cases use advanceNode().
-    if (isDecision && chosenNextNodeId) {
+    // BRANCH tag routing applies to BOTH decision and process multi-exit nodes.
+    // Using advanceNode() for multi-exit nodes would make a duplicate AI routing
+    // call and discard the BRANCH tag result that was already embedded in the reply.
+    if (chosenNextNodeId) {
       const chosenNode = nextNodes.find((x) => x.node.id === chosenNextNodeId);
       this.storage.setConversationNodeId(this.id, chatId, chosenNextNodeId);
       this.logger.info(
-        `[TG:${this.name}] schema advance | chat=${chatId} [decision] "${currentNode.text.slice(0, 30)}" → "${chosenNode?.node.text.slice(0, 40) ?? chosenNextNodeId}"`,
+        `[TG:${this.name}] schema advance | chat=${chatId} [${currentNode.type}] "${currentNode.text.slice(0, 30)}" → "${chosenNode?.node.text.slice(0, 40) ?? chosenNextNodeId}"`,
       );
       this.pushEvent("behavior", {
         action: "schema_advance",
@@ -2162,6 +2166,7 @@ export abstract class BaseAgent extends EventEmitter {
         to: chosenNode?.node.text.slice(0, 60) ?? chosenNextNodeId,
       });
     } else {
+      // Single-exit or end node — advanceNode handles trivially or marks __done__.
       await advanceNode(currentNode.type);
     }
 
@@ -2442,12 +2447,32 @@ export abstract class BaseAgent extends EventEmitter {
   ): DiagramNode {
     const currentScore = this.scoreNodeKbMatch(userText, diagram, currentNode.id);
 
+    // Build the set of nodes reachable FORWARD from currentNode by following
+    // edges (BFS). This prevents backward jumps that skip funnel steps or loop
+    // the conversation back to already-completed stages.
+    const forwardReachable = new Set<string>();
+    const visited = new Set<string>();
+    const queue: string[] = [currentNode.id];
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      if (visited.has(id)) continue;
+      visited.add(id);
+      for (const e of diagram.edges) {
+        if (e.sourceId === id) {
+          forwardReachable.add(e.targetId);
+          queue.push(e.targetId);
+        }
+      }
+    }
+
     let bestNode = currentNode;
     let bestScore = currentScore;
 
     for (const node of diagram.nodes) {
       if (node.id === currentNode.id) continue;
       if (node.type === "start" || node.type === "end") continue;
+      // Only consider nodes reachable forward — never jump backwards
+      if (!forwardReachable.has(node.id)) continue;
 
       const score = this.scoreNodeKbMatch(userText, diagram, node.id);
       // Must beat current by at least 2 to avoid random hops
