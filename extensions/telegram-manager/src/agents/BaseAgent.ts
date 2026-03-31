@@ -517,6 +517,12 @@ export abstract class BaseAgent extends EventEmitter {
           `→ Клиент заинтересован — развивай тему, конкретизируй выгоды.\n\n`
         : "";
 
+    // Check if this is a re-engagement reply so we can force a greeting.
+    const isReEngagedOffline = this.isReEngagementReply(chatId, settings);
+
+    // Detect dialog stage before building the prompt so we can inject tactical instructions.
+    const offlineStage = this.detectDialogStage(recentHistory, { isReEngaged: isReEngagedOffline });
+
     // The agent IS the manager — same account, first-person throughout.
     const workStatusLine = isWithinManagerHours
       ? `🟢 Сейчас рабочее время (${from}–${to}). Ты доступен — можешь выйти на звонок сегодня.`
@@ -526,6 +532,12 @@ export abstract class BaseAgent extends EventEmitter {
       `Ты — ${agentDisplayName}, менеджер по продажам. Это ТВОЙ личный аккаунт Telegram — ты и есть тот человек, с кем клиент общается. НЕ бот, НЕ ИИ.\n` +
       `${workStatusLine}\n` +
       `Говори от первого лица: "я позвоню", "я свободен", "давай созвонимся" — НЕ "менеджер позвонит", НЕ "менеджер свяжется".\n\n` +
+      // Re-engagement: client replied to our outreach — must greet first.
+      (isReEngagedOffline
+        ? `## РЕАКТИВАЦИЯ — КЛИЕНТ ОТВЕТИЛ:\n` +
+          `Клиент откликнулся на твоё сообщение после паузы. ОБЯЗАТЕЛЬНО поздоровайся в начале ответа — ` +
+          `одна тёплая и короткая фраза ("Привет!" / "Рад, что ответил!") — и сразу к делу.\n\n`
+        : "") +
       (topicContext ? `## Продукт / услуга (темы для разговора):\n${topicContext}\n\n` : "") +
       objectionContext +
       signalContext +
@@ -541,6 +553,7 @@ export abstract class BaseAgent extends EventEmitter {
       `## СЛЕДУЮЩИЙ ШАГ (звонок):\n${callbackInstruction}\n` +
       (hoursGuard ? `\n## РАСПИСАНИЕ (строго соблюдать):\n${hoursGuard}\n` : "") +
       (customTask ? `\n## Доп. инструкции от компании:\n${customTask}\n` : "") +
+      `\n## ТАКТИКА НА ЭТОМ ЭТАПЕ (${offlineStage.stageLabel}):\n${offlineStage.stageInstruction}\n\n` +
       `\n## СТРОГО ЗАПРЕЩЕНО:\n` +
       (isWithinManagerHours
         ? `• Говорить что ты недоступен или предлагать только завтра — ты работаешь СЕЙЧАС\n`
@@ -550,32 +563,53 @@ export abstract class BaseAgent extends EventEmitter {
       `• Раскрывать что ты ИИ или бот\n` +
       `• Повторять фразы из последних ответов: "${lastAgentReplies.slice(0, 150)}"\n` +
       `• Отправлять одиночный "?" как сообщение\n` +
-      `• Использовать шаблонные фразы: «могу помочь?», «чем могу быть полезен?», «если есть вопросы»\n\n` +
+      `• Использовать шаблонные фразы: «могу помочь?», «чем могу быть полезен?», «если есть вопросы»\n` +
+      `• Упоминать сомнения клиента: "ты сомневался", "ты не был уверен", "колебался" — не сей сомнение\n` +
+      `• Предполагать сферу деятельности (IT, айти, бизнес и т.д.) без явного упоминания клиента\n\n` +
+      `## СОЦИАЛЬНОЕ ДОКАЗАТЕЛЬСТВО (если нужно):\n` +
+      `Используй обобщённые формулировки: "многие наши клиенты / люди в похожей ситуации / ваши коллеги уже..." — ` +
+      `без привязки к конкретной сфере, если клиент её не называл.\n\n` +
       `## Язык ответа: определи по тексту клиента («${allClientText.slice(0, 150)}») и отвечай СТРОГО на нём.\n\n` +
       `Стиль: профессиональный, живой, уверенный. 2–4 предложения. Без пустых строк.`;
 
     const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
     try {
       const raw = await aiReply(userText, chatKey, systemPrompt, this.storage, workspaceTools);
-      const reply = raw
+      const stripped = raw
         .replace(/(?<!\d)(\+?\d[\d\s\-().]{5,}\d)(?!\d)/g, "")
         .replace(/\s{2,}/g, " ")
         .trim();
+      // Apply working hours guard before logging so the logged text matches what was sent.
+      const finalReply = this.enforceWorkingHours(stripped, settings) || null;
+
+      const offlineSignal = this.getSignalId(recentHistory);
+      const replySource = isReEngagedOffline ? "reengagement-reply" : "offline-lead";
       this.logger.info(
-        `[TG:${this.name}] offline-lead | chat=${chatId} ` +
-          `phase=${timeAgreed ? "agreed" : timeProposed ? "proposed" : "init"} ` +
-          `interest=${interestLevel} turns=${turnCount}`,
+        `[TG:${this.name}] offline-lead | chat=${chatId} source=${replySource} ` +
+          `stage=${offlineStage.stage} node="${offlineStage.node}" ` +
+          `interest=${interestLevel} turns=${turnCount} ` +
+          `reEngaged=${isReEngagedOffline} msg="${userText.slice(0, 80)}"`,
       );
-      this.pushEvent("behavior", {
+      // Emit full ai_reply event so replies appear in "🤖 Лог ответов ИИ".
+      this.pushEvent("ai_reply", {
         action: "offline_lead_reply",
         chatId,
+        source: replySource,
+        node: offlineStage.node,
+        stage: offlineStage.stage,
+        stageLabel: offlineStage.stageLabel,
+        text: finalReply ?? stripped,
+        clientText: userText.slice(0, 200),
+        signal: offlineSignal,
+        signalLabel: this.getSignalLabel(offlineSignal),
+        clientMessages: this.getTriggerMessages(recentHistory),
+        reEngaged: isReEngagedOffline,
       });
       // Capture lead on phone detection or when time is confirmed
       if (/(?:\+?[\d][\d\s\-()]{6,}\d)/.test(userText) || timeAgreed) {
         void this.extractAndSaveLead(chatId, chatKey);
       }
-      // Hard guard: replace any reply that mentions out-of-hours time.
-      return this.enforceWorkingHours(reply, settings) || null;
+      return finalReply;
     } catch (e) {
       this.logger.warn(`[TG:${this.name}] offline-lead mode failed: ${String(e)}`);
       return null;
@@ -1193,6 +1227,9 @@ export abstract class BaseAgent extends EventEmitter {
 
     // ── Conversation history + time context ───────────────────────────────
     const conversationHistory = this.storage.loadConversationHistory(chatKey);
+
+    // Detect dialog stage once — used in all pushEvent calls for observability.
+    const dialogStage = this.detectDialogStage(conversationHistory, { isReEngaged });
 
     // Compute time elapsed since the last message — injected into prompts so
     // the agent can say "после нашего разговора вчера..." naturally.
@@ -1814,6 +1851,8 @@ export abstract class BaseAgent extends EventEmitter {
         chatId,
         source: "kb-adapted",
         node: currentNode.text.slice(0, 60),
+        stage: dialogStage.stage,
+        stageLabel: dialogStage.stageLabel,
         text: reply,
         clientText: userText.slice(0, 200),
         signal: _sig1,
@@ -1847,6 +1886,8 @@ export abstract class BaseAgent extends EventEmitter {
         chatId,
         source: "kb-decision-adapted",
         node: currentNode.text.slice(0, 60),
+        stage: dialogStage.stage,
+        stageLabel: dialogStage.stageLabel,
         text: reply,
         clientText: userText.slice(0, 200),
         signal: _sig2,
@@ -1955,6 +1996,9 @@ export abstract class BaseAgent extends EventEmitter {
     // Client signal analysis — tells agent how to react RIGHT NOW
     const signalSection = this.detectClientSignals(conversationHistory);
     if (signalSection) systemPrompt += signalSection + "\n";
+
+    // Stage-specific tactical instruction — tells AI exactly how to behave at this stage.
+    systemPrompt += `## ТАКТИКА НА ЭТОМ ЭТАПЕ (${dialogStage.stageLabel}):\n${dialogStage.stageInstruction}\n\n`;
 
     systemPrompt +=
       `## ТЕКУЩИЙ ШАГ\n` + `[${currentNode.type.toUpperCase()}] "${currentNode.text}"\n\n`;
@@ -2200,6 +2244,8 @@ export abstract class BaseAgent extends EventEmitter {
       chatId,
       source: replySource,
       node: currentNode.text.slice(0, 60),
+      stage: dialogStage.stage,
+      stageLabel: dialogStage.stageLabel,
       text: reply,
       clientText: userText.slice(0, 200),
       signal: _sig3,
@@ -2405,6 +2451,9 @@ export abstract class BaseAgent extends EventEmitter {
     const freeModeSignal = this.detectClientSignals(conversationHistory);
     const isBuyerStyleFree = agentSettings.schemaDeliveryStyle === "buyer";
 
+    // Stage detection for system-prompt injection (same as schema mode).
+    const _stage4 = this.detectDialogStage(conversationHistory);
+
     // Buyer sub-settings (only relevant when isBuyerStyleFree).
     const buyerAggression = agentSettings.buyerAggressionLevel ?? "balanced";
     const buyerClose = agentSettings.buyerCloseStyle ?? "alternative";
@@ -2432,6 +2481,7 @@ export abstract class BaseAgent extends EventEmitter {
         ? `## ⚠️ ПЕТЛЯ (${repeatCountFree + 1}-й раз одно и то же):\n` +
           `Прошлые ответы не сработали. Смени угол: вскрой реальное возражение — "Что конкретно стопорит?"\n\n`
         : "") +
+      `## ТАКТИКА НА ЭТОМ ЭТАПЕ (${_stage4.stageLabel}):\n${_stage4.stageInstruction}\n\n` +
       (chatMemory?.memoryText
         ? `## ПАМЯТЬ О КЛИЕНТЕ (${chatMemory.sessionsCount} сессий):\n${chatMemory.memoryText}\n\n`
         : "") +
@@ -2474,13 +2524,18 @@ export abstract class BaseAgent extends EventEmitter {
         .replace(/(?<!\d)(\+?\d[\d\s\-().]{5,}\d)(?!\d)/g, "")
         .replace(/\s{2,}/g, " ")
         .trim();
-      this.logger.info(`[TG:${this.name}] free-mode reply | chat=${chatId}`);
       const _sig4 = this.getSignalId(conversationHistory);
+      this.logger.info(
+        `[TG:${this.name}] free-mode reply | chat=${chatId} ` +
+          `stage=${_stage4.stage} node="${_stage4.node}"`,
+      );
       this.pushEvent("ai_reply", {
         action: "free_mode_reply",
         chatId,
         source: "free-mode",
-        node: "",
+        node: _stage4.node,
+        stage: _stage4.stage,
+        stageLabel: _stage4.stageLabel,
         text: rawReply,
         clientText: userText.slice(0, 200),
         signal: _sig4,
@@ -2781,6 +2836,7 @@ export abstract class BaseAgent extends EventEmitter {
     chatId: string,
     info: { firstName?: string; lastName?: string; username?: string },
   ): void {
+    if (!chatId) return;
     try {
       this.storage.upsertContact(this.id, chatId, info);
     } catch (e) {
@@ -2809,6 +2865,8 @@ export abstract class BaseAgent extends EventEmitter {
         });
         this.cronJobs.set("re_engagement", task);
         this.logger.info(`[TG:${this.name}] re-engagement cron started`);
+        // Run once on startup so operators don't wait up to 30 minutes.
+        void this.runReEngagementCheck();
       })
       .catch((e) => {
         this.logger.warn(`[TG:${this.name}] re-engagement cron init failed: ${String(e)}`);
@@ -3017,9 +3075,33 @@ export abstract class BaseAgent extends EventEmitter {
     if (delays.length === 0 && !settings.reEngagementDelayMore) return;
 
     const now = Date.now();
-    this.logger.info(
-      `[TG:${this.name}] re-engagement check | delays=${JSON.stringify(delays)} more=${settings.reEngagementDelayMore ?? false}`,
-    );
+
+    // ── Startup contacts snapshot (diagnose found=0 before any window logic) ─
+    {
+      const contacts = this.storage.getAllContactsDebug(this.id);
+      const nowIso = new Date(now).toISOString();
+      this.logger.info(
+        `[TG:${this.name}] re-engagement check | delays=${JSON.stringify(delays)} ` +
+          `more=${settings.reEngagementDelayMore ?? false} ` +
+          `trackedContacts=${contacts.length} now=${nowIso}`,
+      );
+      if (contacts.length === 0) {
+        this.logger.warn(
+          `[TG:${this.name}] re-engagement: NO CONTACTS in tg_contacts for this agent — ` +
+            `saveContactInfo may not be called on incoming messages, or agent never received any.`,
+        );
+      } else {
+        // Log each contact's last-activity so we can see which day-window they'd hit.
+        for (const c of contacts) {
+          const name = c.firstName ?? c.username ?? c.chatId;
+          const silenceDays = ((now - new Date(c.lastClientMsgAt).getTime()) / 86400000).toFixed(2);
+          this.logger.info(
+            `[TG:${this.name}] re-engagement contact | chat=${c.chatId} name="${name}" ` +
+              `last=${c.lastClientMsgAt} silence=${silenceDays}d alreadySent=[${c.sentDays}]`,
+          );
+        }
+      }
+    }
 
     // Window for exact-day matches: ±12 h for all days.
     // This gives each contact a full 24-hour eligibility period so that any cron run
@@ -3114,6 +3196,17 @@ export abstract class BaseAgent extends EventEmitter {
       this.logger.info(
         `[TG:${this.name}] re-engagement day=${days} window=[${windowStart}..${windowEnd}] found=${contacts.length}`,
       );
+      if (contacts.length === 0) {
+        const stats = this.storage.getReEngagementWindowStats(
+          this.id,
+          days,
+          windowStart,
+          windowEnd,
+        );
+        this.logger.info(
+          `[TG:${this.name}] re-engagement day=${days} diagnostics | tracked=${stats.trackedTotal} inWindow=${stats.inWindow} dedupBlocked=${stats.dedupBlocked} eligible=${stats.eligible}`,
+        );
+      }
       for (const contact of contacts) {
         await maybePause();
         await sendReEngagement(contact, days);
@@ -3129,6 +3222,12 @@ export abstract class BaseAgent extends EventEmitter {
       this.logger.info(
         `[TG:${this.name}] re-engagement more (>${moreDay}d) found=${contacts.length}`,
       );
+      if (contacts.length === 0) {
+        const stats = this.storage.getReEngagementMoreStats(this.id, moreDay);
+        this.logger.info(
+          `[TG:${this.name}] re-engagement more (>${moreDay}d) diagnostics | tracked=${stats.trackedTotal} olderThanCutoff=${stats.olderThanCutoff} cooloffBlocked=${stats.cooloffBlocked} eligible=${stats.eligible}`,
+        );
+      }
       for (const contact of contacts) {
         await maybePause();
         await sendReEngagement(contact, 9999);
@@ -3566,6 +3665,209 @@ export abstract class BaseAgent extends EventEmitter {
       .filter((m) => m.role === "user")
       .slice(-n)
       .map((m) => m.content.slice(0, 300));
+  }
+
+  /**
+   * Infer the current dialog stage and a human-readable node label from
+   * conversation history alone — no diagram required.
+   *
+   * Used for event logging AND system-prompt injection in offline-lead,
+   * free-mode, and any path that doesn't have an explicit diagram node.
+   * Detection is keyword-heuristic only (deterministic, no AI call).
+   * Patterns cover RU / EN / TR / ES / FR so the stage is detected
+   * regardless of the client's language.
+   *
+   * Priority order (first match wins):
+   *   callback-confirmed > callback-client-time > callback-scheduling >
+   *   closing > objection > re-engagement > greeting > interest >
+   *   discovery > details > dialogue
+   */
+  protected detectDialogStage(
+    history: Array<{ role: string; content: string }>,
+    opts?: { isReEngaged?: boolean },
+  ): { stage: string; stageLabel: string; node: string; stageInstruction: string } {
+    const clientMsgs = history.filter((m) => m.role === "user");
+    const turnCount = clientMsgs.length;
+    const signal = this.getSignalId(history);
+
+    // Multilingual time-mention pattern: HH:MM universal, "3am/pm", and
+    // prepositions in RU / EN / TR that precede a bare hour number.
+    const timeRegex =
+      /\d{1,2}[:\.]\d{2}|\d{1,2}\s*(?:утра|вечера|дня|ночи|am|pm)|(?:после|в|к|около|after|at|around|saat|às|a las)\s+(\d{1,2})(?!\d)/i;
+
+    const lastAgentWithTime = [...history]
+      .reverse()
+      .find((m) => m.role === "assistant" && timeRegex.test(m.content));
+    const timeProposed = !!lastAgentWithTime;
+
+    // Positive confirmation — RU / EN / TR / ES / FR
+    const positiveReply =
+      /\bда\b|ок\b|окей|хорош|отлич|договор|супер|ладно|давай|согласен|норм|подход|yes\b|ok\b|sure\b|good\b|deal\b|perfect\b|fine\b|agreed?\b|confirmed?\b|tamam\b|olur\b|evet\b|kabul\b|sí\b|claro\b|bueno\b|oui\b|d'accord\b/i;
+
+    const timeAgreed =
+      timeProposed &&
+      (() => {
+        const idx = history.lastIndexOf(lastAgentWithTime!);
+        return history
+          .slice(idx + 1)
+          .some((m) => m.role === "user" && positiveReply.test(m.content));
+      })();
+    const clientMentionedTime = clientMsgs.some((m) => timeRegex.test(m.content));
+
+    // Buying-signal presence — RU / EN / TR
+    const hasBuyingSignal = clientMsgs.some((m) =>
+      /цена|стоимость|сколько|условия|как работ|расскаж|интересно|хочу|могу|попробовать|записат|покупа|заказ|интересует|узнать больше|price\b|cost\b|how much|details|conditions|interested|want to|buy\b|order\b|sign.?up|try\b|book\b|tell me more|more info|how does|fiyat|ücret|ne kadar|koşullar|ilginç|almak|sipariş|bilgi/i.test(
+        m.content,
+      ),
+    );
+
+    // Objection-signal node labels and per-stage tactical instructions.
+    // Instructions go into the AI system prompt to guide behavior at this stage.
+    type StageResult = {
+      stage: string;
+      stageLabel: string;
+      node: string;
+      stageInstruction: string;
+    };
+
+    const objectionMeta: Record<string, { node: string; instruction: string }> = {
+      price: {
+        node: "Ценовое возражение",
+        instruction:
+          "Клиент поднял тему цены/бюджета. Покажи ROI и конкретную ценность — не снижай цену первым. " +
+          "Спроси: «Что для тебя главное: цена или результат?» — и переведи разговор на выгоду.",
+      },
+      delay: {
+        node: "Откладывает решение",
+        instruction:
+          "Клиент откладывает. Вскрой реальную причину одним вопросом: «Что сейчас стопорит?» " +
+          "Не давай давление — создай мягкую срочность через реальный факт (слот, дедлайн).",
+      },
+      doubt: {
+        node: "Сомнения / гарантии",
+        instruction:
+          "Клиент сомневается. Дай конкретное социальное доказательство (кейс, цифра, гарантия). " +
+          "Не говори «не сомневайтесь» — покажи факты. Один аргумент, не пять.",
+      },
+      approval: {
+        node: "Нужно согласование",
+        instruction:
+          "Клиенту нужно согласовать с кем-то. Помоги подготовить аргументы: " +
+          "«Что важно объяснить руководителю/партнёру?» — дай готовую формулировку выгоды.",
+      },
+      competitor: {
+        node: "Сравнение с конкурентом",
+        instruction:
+          "Клиент сравнивает с конкурентом. Подчеркни 1–2 уникальных преимущества, не критикуй других. " +
+          "Спроси: «Что именно сравниваете — цену, условия, скорость?» — конкретизируй.",
+      },
+      angry: {
+        node: "Негатив клиента",
+        instruction:
+          "Клиент раздражён. Сначала признай: «Понимаю, это неприятно». Не спорь, не оправдывайся. " +
+          "Переведи в конструктив: «Что сделать чтобы исправить ситуацию?»",
+      },
+    };
+
+    // ── Priority-ordered stage detection ────────────────────────────────────
+    if (timeAgreed)
+      return {
+        stage: "callback-confirmed",
+        stageLabel: "✅ Созвон подтверждён",
+        node: "Подтверждение договорённости",
+        stageInstruction:
+          "Время созвона уже подтверждено. Коротко подтверди договорённость и тепло заверши диалог. " +
+          "НЕ продолжай продажу, НЕ задавай новые вопросы — договорённость зафиксирована.",
+      };
+    if (clientMentionedTime && !timeProposed)
+      return {
+        stage: "callback-client-time",
+        stageLabel: "📅 Клиент предложил время",
+        node: "Согласование времени",
+        stageInstruction:
+          "Клиент назвал конкретное время. Если оно входит в рабочее окно — подтверди сразу. " +
+          "Если вне окна — вежливо откажи и предложи ближайший доступный слот.",
+      };
+    if (timeProposed)
+      return {
+        stage: "callback-scheduling",
+        stageLabel: "📞 Предложение созвона",
+        node: "Назначение встречи",
+        stageInstruction:
+          "Время созвона уже предложено — не повторяй его снова. " +
+          "Сначала ответь по сути вопроса клиента, затем мягко уточни: «То время ещё актуально?»",
+      };
+    if (signal === "close")
+      return {
+        stage: "closing",
+        stageLabel: "🤝 Готов к сделке",
+        node: "Закрытие",
+        stageInstruction:
+          "Клиент готов к сделке — сигнал покупки получен. НЕ тормози дополнительными вопросами. " +
+          "Назови конкретный следующий шаг: «Отлично, тогда...» и двигай к оформлению/звонку.",
+      };
+    if (signal in objectionMeta) {
+      const meta = objectionMeta[signal]!;
+      return {
+        stage: "objection",
+        stageLabel: `🛡️ Возражение (${signal})`,
+        node: meta.node,
+        stageInstruction: meta.instruction,
+      };
+    }
+    if (opts?.isReEngaged && turnCount <= 2)
+      return {
+        stage: "re-engagement",
+        stageLabel: "🔁 Реактивация — первый ответ",
+        node: "Реактивация",
+        stageInstruction:
+          "Клиент ответил после паузы на твоё сообщение. Поздоровайся — одна тёплая короткая фраза — " +
+          "и сразу к сути. Не затягивай приветствие.",
+      };
+    if (turnCount <= 1)
+      return {
+        stage: "greeting",
+        stageLabel: "👋 Знакомство",
+        node: "Приветствие",
+        stageInstruction:
+          "Первый контакт. Произведи хорошее впечатление: 1 фраза о том чем можешь помочь. " +
+          "НЕ задавай несколько вопросов подряд — максимум один, и только если нужно.",
+      };
+    if (signal === "interest" || (hasBuyingSignal && turnCount >= 2))
+      return {
+        stage: "interest",
+        stageLabel: "✨ Высокий интерес",
+        node: "Развитие интереса",
+        stageInstruction:
+          "Клиент проявляет интерес — покупательская активность высокая. " +
+          "Раскрывай ценность конкретными фактами/цифрами, двигай к следующему шагу (звонок, демо, условия).",
+      };
+    if (signal === "details")
+      return {
+        stage: "details",
+        stageLabel: "📋 Уточнение условий",
+        node: "Детали сделки",
+        stageInstruction:
+          "Клиент уточняет условия (сроки, договор, процесс). Отвечай конкретно и чётко. " +
+          "Избегай расплывчатых «всё обсудим» — называй реальные цифры и сроки.",
+      };
+    if (turnCount <= 5)
+      return {
+        stage: "discovery",
+        stageLabel: "🔍 Выявление потребностей",
+        node: "Квалификация",
+        stageInstruction:
+          "Стадия квалификации. Задавай уточняющие вопросы — по одному. " +
+          "Цель: понять ключевую боль/потребность и показать как ты её решаешь.",
+      };
+    return {
+      stage: "dialogue",
+      stageLabel: "💬 Свободный диалог",
+      node: "Диалог",
+      stageInstruction:
+        "Открытый диалог. Отвечай по сути, не зацикливайся на одной теме. " +
+        "Двигай разговор к конкретному следующему шагу.",
+    };
   }
 
   /**
