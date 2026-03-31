@@ -236,6 +236,18 @@ export class BotAgent extends BaseAgent {
       }
     });
 
+    // Keep contact activity fresh even when users send only media/stickers.
+    this.bot.on("message", (ctx) => {
+      const chatId = String(ctx.chat?.id ?? "");
+      if (!chatId) return;
+      if (typeof ctx.message?.text === "string" && ctx.message.text.length > 0) return;
+      this.saveContactInfo(chatId, {
+        firstName: ctx.from?.first_name,
+        lastName: ctx.from?.last_name,
+        username: ctx.from?.username,
+      });
+    });
+
     this.bot.on("message:text", (ctx) => this.handleText(ctx));
     this.bot.catch((err) =>
       this.logger.error(`[TG:${this.name}] bot error`, {

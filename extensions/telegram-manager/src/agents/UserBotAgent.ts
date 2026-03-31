@@ -795,6 +795,11 @@ export class UserBotAgent extends BaseAgent {
       if (!incomingMsg) continue;
 
       const text = incomingMsg.message || "";
+      this.saveContactInfo(chatId, {
+        firstName: (incomingMsg as any).sender?.firstName,
+        lastName: (incomingMsg as any).sender?.lastName,
+        username: (incomingMsg as any).sender?.username,
+      });
       if (!text) continue;
 
       // Deduplicate: skip if a live handler already processed this exact message.
@@ -952,6 +957,11 @@ export class UserBotAgent extends BaseAgent {
         }
 
         const text = msg.message || "";
+        this.saveContactInfo(chatId, {
+          firstName: (msg as any).sender?.firstName,
+          lastName: (msg as any).sender?.lastName,
+          username: (msg as any).sender?.username,
+        });
         if (!text) return;
 
         // Outside schedule: AI continues lead-processing in offline mode,
@@ -1009,11 +1019,6 @@ export class UserBotAgent extends BaseAgent {
         lastIncomingAt.set(key, Date.now());
         followUpSentAt.delete(key);
         this.trackMessage("in", text, chatId);
-        this.saveContactInfo(chatId, {
-          firstName: (msg as any).sender?.firstName,
-          lastName: (msg as any).sender?.lastName,
-          username: (msg as any).sender?.username,
-        });
         this.detectFollowupRequest(chatId, key, text);
 
         // Serialize per-chat: rapid bursts of messages from the same client must
@@ -1216,6 +1221,11 @@ export class UserBotAgent extends BaseAgent {
         if ((msg as any).sender?.bot) return;
         const text = msg.message || "";
         const chatId = String(msg.chatId || "");
+        this.saveContactInfo(chatId, {
+          firstName: (msg as any).sender?.firstName,
+          lastName: (msg as any).sender?.lastName,
+          username: (msg as any).sender?.username,
+        });
         // Skip master_control authorized chats and active task sessions.
         const mc = this.getBehavior<MasterControlBehavior>("master_control");
         if (mc?.enabled && mc.allowedChatIds.includes(chatId)) return;
