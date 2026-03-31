@@ -845,7 +845,8 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                               {
                                 alternative:
                                   "«Позвонить или написать в WhatsApp?» — даёт выбор, не да/нет",
-                                direct: "«Напиши номер — с тобой свяжутся» — прямо просит контакт",
+                                direct:
+                                  "«Скинь номер — я сам напишу сегодня» — от имени менеджера, не безлично",
                                 "micro-step":
                                   "«Запишу тебя на звонок — в четверг удобно?» — конкретный шаг",
                               }[settings.buyerCloseStyle ?? "alternative"]
