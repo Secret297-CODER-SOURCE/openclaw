@@ -1593,7 +1593,7 @@ function sourceLabel(src: string): string {
  */
 function downloadAiRepliesHtml(
   agentId: string,
-  events: Array<{ timestamp: number; payload: Record<string, unknown> }>,
+  events: Array<{ timestamp: string | number; payload: Record<string, unknown> }>,
 ): void {
   const ts = new Date().toLocaleString();
   const rows = events
@@ -1705,7 +1705,7 @@ function escHtml(s: string): string {
  */
 function downloadReengagementHtml(
   agentId: string,
-  events: Array<{ timestamp: number; payload: Record<string, unknown> }>,
+  events: Array<{ timestamp: string | number; payload: Record<string, unknown> }>,
 ): void {
   const ts = new Date().toLocaleString();
   const rows = events

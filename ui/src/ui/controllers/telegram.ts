@@ -808,6 +808,10 @@ export type AgentSettings = {
   activeDiagramId?: string;
   /** Whether to follow the active diagram as a strict script */
   useSchema: boolean;
+  /** When false: agent is paused and will not send any AI replies. */
+  aiEnabled?: boolean;
+  /** When true: agent starts replying automatically without needing manual activation. */
+  autoStartEnabled?: boolean;
   /** "always" | "schedule" */
   scheduleMode: "always" | "schedule";
   scheduleFrom?: string; // HH:MM
@@ -829,12 +833,23 @@ export type AgentSettings = {
   // ── Re-engagement ───────────────────────────────────────────────────────────
   reEngagementEnabled?: boolean;
   reEngagementDelays?: number[];
+  reEngagementDelayFrom?: number;
+  reEngagementDelayTo?: number;
+  reEngagementDelayMore?: boolean;
+  reEngagementPauseMin?: number;
+  reEngagementPauseMax?: number;
   reEngagementTemplate?: string;
   reEngagementNameOnly?: boolean;
+  /** "template" = use stored template (default); "ai" = full AI generation from history. */
+  reEngagementAiMode?: "template" | "ai";
   /** Previously saved re-engagement templates the user can pick from. */
   reEngagementSavedTemplates?: string[];
   /** Tone of re-engagement AI messages (soft / balanced / hard). */
   reEngagementTone?: "soft" | "balanced" | "hard";
+  // ── Reply delay ─────────────────────────────────────────────────────────────
+  replyDelayMin?: number;
+  /** Actual delay is a random value in [replyDelayMin, replyDelayMax]. */
+  replyDelayMax?: number;
   // ── Leads group ─────────────────────────────────────────────────────────────
   leadsGroupLink?: string;
   leadsGroupWelcomedLinks?: string[];

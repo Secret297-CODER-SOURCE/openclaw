@@ -266,10 +266,10 @@ export interface AgentSettings {
   buyerAggressionLevel?: "soft" | "balanced" | "hard";
 
   /**
-   * Техника захвата лида / закрытия на следующий шаг.
-   * - "alternative" — альтернативный выбор: "Удобнее X или Y?" (default)
-   * - "direct"      — прямое закрытие: "Давай оформим прямо сейчас"
-   * - "micro-step"  — называй следующее действие уверенно, без продажи идеи шага
+   * Техника захвата лида (от имени менеджера).
+   * - "alternative" — выбор без давления: "Удобнее позвонить или написать в WhatsApp?" (default)
+   * - "direct"      — прямо просит контакт: "Скинь номер — я сам напишу сегодня"
+   * - "micro-step"  — конкретный следующий шаг: "Запишу тебя на звонок — в четверг удобно?"
    * Активно только при schemaDeliveryStyle === "buyer".
    */
   buyerCloseStyle?: "alternative" | "direct" | "micro-step";
