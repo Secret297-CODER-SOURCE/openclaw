@@ -25,6 +25,32 @@ const cooldowns = new Map<string, number>();
 const MIN_SEND_INTERVAL_MS = 3_000;
 // How long to back off after a PEER_FLOOD before retrying (ms).
 const PEER_FLOOD_RETRY_MS = 60_000;
+// TCP reconnect backoff: initial delay, max delay, and max consecutive attempts
+// before giving up and setting status to "error".
+const RECONNECT_INITIAL_MS = 2_000;
+const RECONNECT_MAX_MS = 60_000;
+const RECONNECT_MAX_ATTEMPTS = 8;
+// Error codes/messages that indicate a recoverable TCP/network disconnect.
+const RECONNECT_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ECONNABORTED",
+]);
+const RECONNECT_MSG_SNIPPETS = [
+  "connection closed",
+  "socket hang up",
+  "network error",
+  "read econnreset",
+  "write econnreset",
+  "connection lost",
+  "disconnect",
+];
 // Map of chatId → timestamp of last outbound send (module-level, per agent instance key).
 const lastSentAt = new Map<string, number>();
 // Map of agentId:chatId → timestamp of last INCOMING message (for inactivity follow-up).
@@ -189,10 +215,22 @@ const MULTI_MSG_INSTRUCTION =
 // cannot be cloned, causing DataCloneError. WeakMap is invisible to structuredClone.
 const clientStore = new WeakMap<UserBotAgent, TelegramClient>();
 
+/** Check whether an error indicates a recoverable TCP/network disconnect. */
+function isReconnectableError(err: Error): boolean {
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code && RECONNECT_ERROR_CODES.has(code)) return true;
+  const msg = err.message.toLowerCase();
+  return RECONNECT_MSG_SNIPPETS.some((s) => msg.includes(s));
+}
+
 export class UserBotAgent extends BaseAgent {
   private creds: UserbotCredentials;
   /** Manager reference — injected by AgentManager.spawn(); used by master_control. */
   private managerRef: IAgentManager | null;
+  /** TCP reconnect state: true while a reconnect attempt is in progress. */
+  private reconnecting = false;
+  /** Consecutive reconnect attempts (reset on success). */
+  private reconnectAttempts = 0;
 
   constructor(
     record: AgentRecord,
@@ -472,6 +510,8 @@ export class UserBotAgent extends BaseAgent {
 
   async stop(): Promise<void> {
     this.clearCron();
+    this.reconnecting = false;
+    this.reconnectAttempts = 0;
     await this.client?.disconnect();
     this.client = null;
     this.setStatus("stopped");
@@ -653,6 +693,12 @@ export class UserBotAgent extends BaseAgent {
           out: !!m.out,
           mediaType: m.media ? (m.media.className ?? "media") : null,
         }));
+      }
+      case "deleteMessage": {
+        // revoke=true removes the message for everyone (not just locally)
+        const { target, msgId } = args as { target: string; msgId: string };
+        await this.client.deleteMessages(target, [Number(msgId)], { revoke: true });
+        return { ok: true };
       }
       case "getMembers": {
         const { target, limit } = args as any;
@@ -1495,12 +1541,79 @@ export class UserBotAgent extends BaseAgent {
     Object.defineProperty(c, "_errorHandler", {
       value: async (err: unknown) => {
         if (err instanceof Error && err.message === "TIMEOUT") return;
+        // Detect TCP/network errors that indicate a lost connection.
+        if (err instanceof Error && isReconnectableError(err)) {
+          this.logger.warn(`[TG:${this.name}] TCP connection error, scheduling reconnect`, {
+            e: String(err),
+          });
+          void this.handleReconnect();
+          return;
+        }
         this.logger.warn(`[TG:${this.name}] gramjs error`, { e: String(err) });
       },
       writable: true,
       configurable: true,
       enumerable: false, // non-enumerable -> skipped by structuredClone
     });
+  }
+
+  /**
+   * Auto-reconnect with exponential backoff when gramjs reports a TCP error.
+   * Disconnects the stale client, waits, then re-runs start(). Gives up after
+   * RECONNECT_MAX_ATTEMPTS consecutive failures and sets status to "error".
+   */
+  private async handleReconnect(): Promise<void> {
+    // Guard: skip if already reconnecting, stopped, or no session to restore.
+    if (this.reconnecting || this.record.status === "stopped") return;
+    this.reconnecting = true;
+
+    try {
+      // Disconnect the broken client (best-effort).
+      if (this.client) {
+        await this.client.disconnect().catch(() => {});
+        this.client = null;
+      }
+
+      while (this.reconnectAttempts < RECONNECT_MAX_ATTEMPTS) {
+        this.reconnectAttempts++;
+        // Exponential backoff with jitter: delay = min(initial * 2^(attempt-1), max) ± 25%.
+        const base = Math.min(
+          RECONNECT_INITIAL_MS * 2 ** (this.reconnectAttempts - 1),
+          RECONNECT_MAX_MS,
+        );
+        const jitter = base * 0.25 * (Math.random() * 2 - 1);
+        const delay = Math.max(500, Math.round(base + jitter));
+
+        this.logger.info(
+          `[TG:${this.name}] reconnect attempt ${this.reconnectAttempts}/${RECONNECT_MAX_ATTEMPTS} in ${delay}ms`,
+        );
+        await this.delay(delay);
+
+        // Bail if agent was stopped externally (e.g. stop() called) while waiting.
+        // Cast needed: TS narrows after the "starting" assignment below, but stop()
+        // can mutate record.status to "stopped" during the await above.
+        if ((this.record.status as string) === "stopped") return;
+
+        try {
+          // Reset status so start() proceeds (it checks status !== "running").
+          this.record.status = "starting" as const;
+          await this.start();
+          // Success — reset counter.
+          this.reconnectAttempts = 0;
+          this.logger.info(`[TG:${this.name}] reconnected successfully`);
+          return;
+        } catch (e) {
+          this.logger.warn(`[TG:${this.name}] reconnect attempt ${this.reconnectAttempts} failed`, {
+            e: String(e),
+          });
+        }
+      }
+
+      // All attempts exhausted — mark the agent as errored.
+      this.setStatus("error", `TCP reconnect failed after ${RECONNECT_MAX_ATTEMPTS} attempts`);
+    } finally {
+      this.reconnecting = false;
+    }
   }
 
   /**

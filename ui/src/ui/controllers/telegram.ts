@@ -1306,6 +1306,28 @@ export async function generateDiagramFromText(
 }
 
 /**
+ * Export training data (groups + labels + analysisResults) as a downloadable JSON file.
+ * Pure client-side — no gateway call needed.
+ */
+export function exportTrainingJson(state: TelegramScenarioState): void {
+  const snapshot = {
+    groups: state.telegramTrainingGroups,
+    labels: state.telegramTrainingLabels,
+    analysisResults: state.telegramAnalysisResults,
+    exportedAt: new Date().toISOString(),
+  };
+  const json = JSON.stringify(snapshot, null, 2);
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const date = new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `training-${date}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
  * Export a diagram as a downloadable JSON file.
  * Pure client-side — no gateway call needed.
  */

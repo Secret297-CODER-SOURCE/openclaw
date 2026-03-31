@@ -120,6 +120,7 @@ import {
   loadWebchatFolders,
   loadWebchatMessages,
   sendWebchatMessage,
+  deleteWebchatMessage,
   loadLeads,
   deleteTelegramLead,
   saveTelegramLead,
@@ -1362,6 +1363,25 @@ export function renderApp(state: AppViewState) {
                   state.telegramTrainingEditorOpen = false;
                   state.telegramTrainingEditorError = null;
                 },
+                onTrainingExportJson: () => {
+                  const snapshot = {
+                    groups: state.telegramTrainingGroups,
+                    labels: state.telegramTrainingLabels,
+                    analysisResults: state.telegramAnalysisResults,
+                    exportedAt: new Date().toISOString(),
+                  };
+                  const json = JSON.stringify(snapshot, null, 2);
+                  const blob = new Blob([json], { type: "application/json" });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a");
+                  a.href = url;
+                  const scope = state.telegramTrainingScope === "personal" ? "personal" : "shared";
+                  a.download = `training-${scope}-${new Date().toISOString().slice(0, 10)}.json`;
+                  document.body.appendChild(a);
+                  a.click();
+                  a.remove();
+                  URL.revokeObjectURL(url);
+                },
                 onTrainingSelectChat: (id) => {
                   // Save scroll position of the current chat before switching
                   const prevBubbles = document.querySelector(".tg-msng-bubbles");
@@ -1498,6 +1518,13 @@ export function renderApp(state: AppViewState) {
                   }
                   state.telegramWebchatInput = "";
                   await sendWebchatMessage(state, agentId, dialogId, msg);
+                },
+                onWebchatDeleteMessage: async (agentId, msgId) => {
+                  const dialogId = state.telegramWebchatSelectedId;
+                  if (!dialogId) {
+                    return;
+                  }
+                  await deleteWebchatMessage(state, agentId, dialogId, msgId);
                 },
                 onWebchatSearchChange: (q) => {
                   state.telegramWebchatSearchQuery = q;

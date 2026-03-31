@@ -104,11 +104,13 @@ export type WebchatProps = {
   onSelectDialog: (id: string, name: string) => void;
   onInputChange: (v: string) => void;
   onSend: () => void;
+  onDeleteMessage: (msgId: string) => void;
   onSearchChange: (q: string) => void;
   onFolderSelect: (folderId: number | null) => void;
   onTranslateToggle: () => void;
   onTranslateText: (text: string) => void;
   onToggleOriginal: (key: string) => void;
+  onExportChatJson: () => void;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -203,6 +205,7 @@ function renderMessage(
   showOriginals: Record<string, boolean>,
   onTranslateText: (text: string) => void,
   onToggleOriginal: (key: string) => void,
+  onDeleteMessage: (msgId: string) => void,
 ) {
   const cls = msg.out ? "tg-wc-msg tg-wc-msg--out" : "tg-wc-msg";
   const rawText = msg.text || "";
@@ -216,8 +219,24 @@ function renderMessage(
   const showOrig = showOriginals[rawText] ?? false;
   const displayText = translated && !showOrig ? translated : rawText;
 
+  const handleDelete = () => {
+    if (window.confirm("Удалить это сообщение? Оно будет удалено у всех участников чата.")) {
+      onDeleteMessage(msg.id);
+    }
+  };
+
   return html`
     <div class=${cls}>
+      ${
+        msg.out
+          ? html`<button
+              type="button"
+              class="tg-wc-delete-btn"
+              title="Удалить сообщение"
+              @click=${handleDelete}
+            >✕</button>`
+          : nothing
+      }
       <div class="tg-wc-bubble">
         ${displayText || (msg.hasMedia ? html`<em class="tg-wc-media-label">${msg.mediaType ?? "медиа"}</em>` : "—")}
       </div>
@@ -391,6 +410,13 @@ export function renderWebchat(props: WebchatProps) {
                       @click=${props.onTranslateToggle}
                       title="Режим перевода"
                     >🌐 ${translateEnabled ? "Перевод вкл" : "Перевод"}</button>
+                    <button
+                      type="button"
+                      class="tg-translate-btn"
+                      @click=${props.onExportChatJson}
+                      title="Экспорт переписки в JSON"
+                      ?disabled=${messages.length === 0}
+                    >↓ JSON</button>
                   </div>
 
                   <!-- Messages — scrolled to bottom only on initial mount.
@@ -432,6 +458,7 @@ export function renderWebchat(props: WebchatProps) {
                                 showOriginals,
                                 props.onTranslateText,
                                 props.onToggleOriginal,
+                                props.onDeleteMessage,
                               ),
                             )
                     }

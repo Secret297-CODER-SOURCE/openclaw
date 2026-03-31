@@ -112,6 +112,11 @@ export class BotAgent extends BaseAgent {
         return this.bot.api.getMe();
       case "getMessages":
         throw new Error("Bot API does not support getMessages — use a userbot agent");
+      case "deleteMessage": {
+        const { target, msgId } = args as { target: string; msgId: string };
+        await this.bot.api.deleteMessage(Number(target), Number(msgId));
+        return { ok: true };
+      }
       case "resolveEntityId": {
         // Resolve a username/chat identifier to its numeric Telegram chat ID.
         // For bots, getChat works for groups/channels and any user who has

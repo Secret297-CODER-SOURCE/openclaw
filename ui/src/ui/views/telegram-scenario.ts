@@ -56,6 +56,7 @@ export type ScenarioProps = {
   onTrainingEditorChange: (json: string) => void;
   onTrainingEditorSave: (json: string) => void;
   onTrainingEditorClose: () => void;
+  onTrainingExportJson: () => void;
   onTrainingFileLoad: (agentId: string, json: string, fileName: string) => void;
   onTrainingSelectChat: (id: string | null) => void;
   onTrainingSearchChange: (q: string) => void;
@@ -911,6 +912,12 @@ function renderTrainingView(props: ScenarioProps, agent: TelegramAgentRecord) {
                   }
                 }}
               >✏️ Правка</button>
+              <button
+                type="button"
+                class="btn btn--sm"
+                title="Экспортировать данные обучения в JSON файл"
+                @click=${() => props.onTrainingExportJson()}
+              >↓ JSON</button>
             `
           : nothing
       }

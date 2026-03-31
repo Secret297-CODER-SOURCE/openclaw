@@ -235,6 +235,7 @@ export type TelegramProps = {
   onTrainingEditorChange: (json: string) => void;
   onTrainingEditorSave: (json: string) => void;
   onTrainingEditorClose: () => void;
+  onTrainingExportJson: () => void;
   onAddChatNode: (agentId: string, role: "manager" | "client") => void;
   onDeleteChatNode: (agentId: string, nodeId: string) => void;
   onLoadChatNodes: (agentId: string) => void;
@@ -275,6 +276,7 @@ export type TelegramProps = {
   onWebchatSelectDialog: (agentId: string, dialogId: string, dialogName: string) => void;
   onWebchatInputChange: (v: string) => void;
   onWebchatSend: (agentId: string) => void;
+  onWebchatDeleteMessage: (agentId: string, msgId: string) => void;
   onWebchatSearchChange: (q: string) => void;
   onWebchatFolderSelect: (agentId: string, folderId: number | null) => void;
   translateEnabled: boolean;
@@ -2496,6 +2498,7 @@ function renderDetail(props: TelegramProps) {
     onTrainingEditorChange: props.onTrainingEditorChange,
     onTrainingEditorSave: props.onTrainingEditorSave,
     onTrainingEditorClose: props.onTrainingEditorClose,
+    onTrainingExportJson: props.onTrainingExportJson,
     onAddChatNode: props.onAddChatNode,
     onDeleteChatNode: props.onDeleteChatNode,
     onLoadChatNodes: props.onLoadChatNodes,
@@ -2575,11 +2578,34 @@ function renderDetail(props: TelegramProps) {
             onSelectDialog: (id, name) => props.onWebchatSelectDialog(agent.id, id, name),
             onInputChange: props.onWebchatInputChange,
             onSend: () => props.onWebchatSend(agent.id),
+            onDeleteMessage: (msgId) => props.onWebchatDeleteMessage(agent.id, msgId),
             onSearchChange: props.onWebchatSearchChange,
             onFolderSelect: (folderId) => props.onWebchatFolderSelect(agent.id, folderId),
             onTranslateToggle: props.onTranslateToggle,
             onTranslateText: props.onTranslateText,
             onToggleOriginal: props.onToggleOriginal,
+            onExportChatJson: () => {
+              // Export currently loaded chat messages as a JSON file download
+              const dialog = props.webchatDialogs.find((d) => d.id === props.webchatSelectedId);
+              const name = dialog?.name ?? "chat";
+              const safeName = name.replace(/[^а-яёa-z0-9_-]/gi, "_").slice(0, 60) || "chat";
+              const data = {
+                chatId: props.webchatSelectedId,
+                chatName: dialog?.name ?? null,
+                exportedAt: new Date().toISOString(),
+                messages: props.webchatMessages,
+              };
+              const json = JSON.stringify(data, null, 2);
+              const blob = new Blob([json], { type: "application/json" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = `${safeName}-${new Date().toISOString().slice(0, 10)}.json`;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              URL.revokeObjectURL(url);
+            },
           } satisfies WebchatProps)
         : undefined,
   };
