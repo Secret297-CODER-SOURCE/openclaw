@@ -1485,6 +1485,12 @@ type TgExportMsg = {
 
 type TgChat = { type: string; id?: number | string; name?: string; messages?: TgExportMsg[] };
 
+type TrainingImportPayload = {
+  groups: TrainingGroup[];
+  labels?: Record<string, TrainingLabel>;
+  analysisResults?: Record<string, DialogAnalysisResult>;
+};
+
 function flattenText(t: string | unknown[]): string {
   if (typeof t === "string") {
     return t.trim();
@@ -1496,12 +1502,123 @@ function flattenText(t: string | unknown[]): string {
 }
 
 /** Parse a Telegram Desktop JSON export and return pairs grouped by conversation. */
-function extractGroupedPairs(json: string): TrainingGroup[] {
+function extractGroupedPairs(json: string): TrainingImportPayload {
   let data: Record<string, unknown>;
   try {
     data = JSON.parse(json) as Record<string, unknown>;
   } catch {
     throw new Error("Файл не является корректным JSON.");
+  }
+
+  // Snapshot format from inline editor / backup:
+  // { groups: [...], labels?: {...}, analysisResults?: {...} }
+  if (Array.isArray(data.groups)) {
+    const groups = (data.groups as Array<Partial<TrainingGroup>>)
+      .map((g, i) => {
+        const pairs = Array.isArray(g.pairs)
+          ? g.pairs
+              .map((p) => {
+                const input = typeof p?.input === "string" ? p.input.trim() : "";
+                const response = typeof p?.response === "string" ? p.response.trim() : "";
+                return input && response ? { input, response } : null;
+              })
+              .filter((x): x is { input: string; response: string } => x !== null)
+          : [];
+
+        if (pairs.length === 0) {
+          return null;
+        }
+
+        return {
+          chatId: String(g.chatId ?? i),
+          participantName:
+            typeof g.participantName === "string" && g.participantName.trim().length > 0
+              ? g.participantName
+              : "Неизвестный",
+          firstDate: typeof g.firstDate === "string" ? g.firstDate : "",
+          lastDate: typeof g.lastDate === "string" ? g.lastDate : "",
+          pairs,
+          ...(g.label === "success" || g.label === "fail" || g.label === "neutral"
+            ? { label: g.label }
+            : {}),
+        } satisfies TrainingGroup;
+      })
+      .filter((g): g is TrainingGroup => g !== null);
+
+    return {
+      groups,
+      labels:
+        data.labels && typeof data.labels === "object"
+          ? (data.labels as Record<string, TrainingLabel>)
+          : undefined,
+      analysisResults:
+        data.analysisResults && typeof data.analysisResults === "object"
+          ? (data.analysisResults as Record<string, DialogAnalysisResult>)
+          : undefined,
+    };
+  }
+
+  // Generic chat-list JSON:
+  // { chats: [{ id|chatId, name|title|participantName, messages: [{ role, text|content, date? }] }] }
+  // Roles: client/user + manager/assistant
+  if (Array.isArray((data as { chats?: unknown }).chats)) {
+    const chats = (data as { chats: unknown[] }).chats;
+    const groups: TrainingGroup[] = [];
+    for (let i = 0; i < chats.length; i++) {
+      const chat = chats[i] as {
+        id?: string | number;
+        chatId?: string | number;
+        name?: string;
+        title?: string;
+        participantName?: string;
+        messages?: Array<{ role?: string; text?: string; content?: string; date?: string }>;
+      };
+      if (!Array.isArray(chat.messages) || chat.messages.length === 0) {
+        continue;
+      }
+
+      const pairs: Array<{ input: string; response: string }> = [];
+      const dates: string[] = [];
+      let pendingClient: string | null = null;
+
+      for (const m of chat.messages) {
+        const role = String(m.role ?? "").toLowerCase();
+        const text = String(m.text ?? m.content ?? "").trim();
+        if (!text) {
+          continue;
+        }
+        if (typeof m.date === "string") {
+          dates.push(m.date);
+        }
+
+        const isClient = role === "client" || role === "user";
+        const isManager = role === "manager" || role === "assistant";
+        if (!isClient && !isManager) {
+          continue;
+        }
+
+        if (isClient) {
+          pendingClient = text;
+        } else if (pendingClient) {
+          pairs.push({ input: pendingClient, response: text });
+          pendingClient = null;
+        }
+      }
+
+      if (pairs.length === 0) {
+        continue;
+      }
+      const sortedDates = [...dates].toSorted();
+      groups.push({
+        chatId: String(chat.chatId ?? chat.id ?? i),
+        participantName: chat.participantName ?? chat.name ?? chat.title ?? "Неизвестный",
+        firstDate: sortedDates[0] ?? "",
+        lastDate: sortedDates.at(-1) ?? "",
+        pairs,
+      });
+    }
+
+    return { groups };
   }
 
   // Supported formats:
@@ -1534,7 +1651,7 @@ function extractGroupedPairs(json: string): TrainingGroup[] {
   }
 
   if (chats.length === 0) {
-    return [];
+    return { groups: [] };
   }
 
   // For single-chat format: detect manager by from === null or most-frequent sender
@@ -1606,7 +1723,7 @@ function extractGroupedPairs(json: string): TrainingGroup[] {
     }
   }
 
-  return groups;
+  return { groups };
 }
 
 export async function processTelegramTrainingFile(
@@ -1623,7 +1740,8 @@ export async function processTelegramTrainingFile(
   try {
     // Yield to the event loop so "Обработка…" renders before the blocking parse
     await new Promise<void>((r) => setTimeout(r, 32));
-    const newGroups = extractGroupedPairs(json);
+    const imported = extractGroupedPairs(json);
+    const newGroups = imported.groups;
 
     if (newGroups.length === 0) {
       state.telegramTrainingError = "Пары диалога не найдены в файле.";
@@ -1639,6 +1757,20 @@ export async function processTelegramTrainingFile(
     ];
 
     state.telegramTrainingGroups = merged;
+
+    if (imported.labels && typeof imported.labels === "object") {
+      const importedLabels = Object.fromEntries(
+        Object.entries(imported.labels).filter(([chatId]) => newChatIds.has(chatId)),
+      ) as Record<string, TrainingLabel>;
+      state.telegramTrainingLabels = { ...state.telegramTrainingLabels, ...importedLabels };
+    }
+
+    if (imported.analysisResults && typeof imported.analysisResults === "object") {
+      const importedResults = Object.fromEntries(
+        Object.entries(imported.analysisResults).filter(([chatId]) => newChatIds.has(chatId)),
+      ) as Record<string, DialogAnalysisResult>;
+      state.telegramAnalysisResults = { ...state.telegramAnalysisResults, ...importedResults };
+    }
 
     // Rebuild flat pairs list from merged groups
     const now = new Date().toISOString();
@@ -2464,6 +2596,29 @@ export async function sendWebchatMessage(
     // Non-fatal
   } finally {
     state.telegramWebchatSending = false;
+  }
+}
+
+/** Delete a message from the selected dialog (removes from Telegram for everyone) */
+export async function deleteWebchatMessage(
+  state: WebchatState,
+  agentId: string,
+  dialogId: string,
+  msgId: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  try {
+    await state.client!.request("telegram.tool.call", {
+      agentId,
+      tool: "deleteMessage",
+      args: { target: dialogId, msgId },
+    });
+    // Remove from local state immediately for instant UI feedback
+    state.telegramWebchatMessages = state.telegramWebchatMessages.filter((m) => m.id !== msgId);
+  } catch {
+    // Non-fatal — user will see the message still present; they can retry
   }
 }
 
