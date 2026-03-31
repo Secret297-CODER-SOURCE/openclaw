@@ -170,9 +170,27 @@ export abstract class BaseAgent extends EventEmitter {
    */
   protected isReEngagementReply(chatId: string, settings: AgentSettings): boolean {
     if (!settings.reEngagementEnabled) return false;
+    // Feature gate: when reEngagementAiContinue is explicitly false, AI stays silent.
+    if (settings.reEngagementAiContinue === false) return false;
     // Already handled by offline lead mode — no need to double-handle.
     if (settings.offlineReplyEnabled) return false;
     // Look back max delay + 7-day buffer so slow replies still get handled.
+    const delays = settings.reEngagementDelays ?? [1, 2, 3, 5];
+    const maxDays = Math.max(...delays) + 7;
+    return this.storage.wasRecentlyReEngaged(this.id, chatId, maxDays);
+  }
+
+  /**
+   * Returns true when a re-engagement message was recently sent to this chat
+   * AND reEngagementAiContinue is explicitly false.
+   *
+   * Use this to gate the within-schedule auto-reply path: even if the agent
+   * is "online" and auto-reply is ON, it should stay silent after a re-engagement
+   * send so a human manager can take the conversation.
+   */
+  protected isReEngagementSilenced(chatId: string, settings: AgentSettings): boolean {
+    if (!settings.reEngagementEnabled) return false;
+    if (settings.reEngagementAiContinue !== false) return false; // only silence when explicitly OFF
     const delays = settings.reEngagementDelays ?? [1, 2, 3, 5];
     const maxDays = Math.max(...delays) + 7;
     return this.storage.wasRecentlyReEngaged(this.id, chatId, maxDays);

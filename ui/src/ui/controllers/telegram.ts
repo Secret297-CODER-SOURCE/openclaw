@@ -846,6 +846,11 @@ export type AgentSettings = {
   reEngagementSavedTemplates?: string[];
   /** Tone of re-engagement AI messages (soft / balanced / hard). */
   reEngagementTone?: "soft" | "balanced" | "hard";
+  /**
+   * When true (default): AI continues conversation if client replies to re-engagement.
+   * When false: AI stays silent after re-engagement even if general auto-reply is ON.
+   */
+  reEngagementAiContinue?: boolean;
   // ── Reply delay ─────────────────────────────────────────────────────────────
   replyDelayMin?: number;
   /** Actual delay is a random value in [replyDelayMin, replyDelayMax]. */

@@ -407,6 +407,10 @@ export class BotAgent extends BaseAgent {
     // replyTo: "tasks" — only engage with chats that have an active task session.
     if (!this.isAllowedChat(chatId, agentSettings)) return;
 
+    // Re-engagement silence gate: if reEngagementAiContinue is OFF and this chat
+    // received a re-engagement message recently, AI stays silent even within schedule.
+    if (this.isReEngagementSilenced(chatId, agentSettings)) return;
+
     // Schema mode: follow the active diagram as a strict step-by-step script.
     // Bypasses keyword/trigger auto_reply requirements so every message in a
     // schema-mode conversation advances through the script regardless of content.

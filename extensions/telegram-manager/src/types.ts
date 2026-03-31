@@ -366,6 +366,14 @@ export interface AgentSettings {
   reEngagementSavedTemplates?: string[];
 
   /**
+   * When true (default): if a client replies to a re-engagement message, the AI
+   * continues the conversation (both offline and within working hours).
+   * When false: AI stays completely silent after sending a re-engagement message —
+   * even if the general auto-reply is ON. Human manager takes over manually.
+   */
+  reEngagementAiContinue?: boolean;
+
+  /**
    * Tone of re-engagement messages — controls how assertive the AI is
    * when writing or enhancing re-engagement texts.
    * - "soft"     — gentle, curiosity-driven, no pressure

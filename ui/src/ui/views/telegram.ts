@@ -1081,8 +1081,32 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                 }
               </div>
 
+              <!-- After re-engagement: AI continues or stays silent -->
+              <div class="tg-reeng-section-title" style="margin-top:14px;margin-bottom:6px;">
+                💬 Если клиент ответил на реактивацию
+              </div>
+              <div class="tg-toggle-group" style="margin-bottom:6px;">
+                <label
+                  class="tg-toggle-option ${(settings.reEngagementAiContinue ?? true) ? "tg-toggle-option--active" : ""}"
+                  @click=${() => saveSettings({ reEngagementAiContinue: true })}>
+                  🤖 ИИ продолжает
+                </label>
+                <label
+                  class="tg-toggle-option ${!(settings.reEngagementAiContinue ?? true) ? "tg-toggle-option--active" : ""}"
+                  @click=${() => saveSettings({ reEngagementAiContinue: false })}>
+                  🤫 Молчать
+                </label>
+              </div>
+              <div class="tg-setting-hint" style="margin-bottom:12px;">
+                ${
+                  (settings.reEngagementAiContinue ?? true)
+                    ? "ИИ подхватит диалог если клиент ответил — даже вне расписания"
+                    : "ИИ молчит после рассылки — менеджер берёт разговор вручную"
+                }
+              </div>
+
               <!-- AI mode toggle -->
-              <div class="tg-reeng-section-title" style="margin-top:14px;margin-bottom:8px;">
+              <div class="tg-reeng-section-title" style="margin-top:4px;margin-bottom:8px;">
                 Режим сообщения
               </div>
               <div class="tg-toggle-group" style="margin-bottom:10px;">

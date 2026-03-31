@@ -996,6 +996,10 @@ export class UserBotAgent extends BaseAgent {
 
         if (!text) return;
 
+        // Re-engagement silence gate: if reEngagementAiContinue is OFF and this chat
+        // received a re-engagement message recently, AI stays silent even within schedule.
+        if (this.isReEngagementSilenced(chatId, agentSettings)) return;
+
         // Deduplicate: skip if catchUpUnread already processed this message.
         const msgKey = `${this.id}:${chatId}:${msg.id}`;
         if (processedMsgIds.has(msgKey)) return;
@@ -1281,6 +1285,10 @@ export class UserBotAgent extends BaseAgent {
 
         // replyTo: "tasks" — only engage with chats that have an active task session.
         if (!this.isAllowedChat(chatId, agentSettings)) return;
+
+        // Re-engagement silence gate: if reEngagementAiContinue is OFF and this chat
+        // received a re-engagement message recently, AI stays silent even within schedule.
+        if (this.isReEngagementSilenced(chatId, agentSettings)) return;
 
         // Deduplicate: skip if already processed by another handler or catchUpUnread.
         const msgKey = `${this.id}:${chatId}:${msg.id}`;
