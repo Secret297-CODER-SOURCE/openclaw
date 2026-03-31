@@ -2956,11 +2956,12 @@ export abstract class BaseAgent extends EventEmitter {
       `[TG:${this.name}] re-engagement check | delays=${JSON.stringify(delays)} more=${settings.reEngagementDelayMore ?? false}`,
     );
 
-    // Window for exact-day matches: ±8 h for day 0, ±4 h for day 1+.
-    // Wide window ensures contacts whose silence timestamp falls at night or on a
-    // schedule boundary are never permanently missed between cron runs (every 30 min).
-    // period_ref dedup in the DB prevents double-sending within the same window.
-    const windowMs = (d: number) => (d === 0 ? 8 * 60 * 60 * 1000 : 4 * 60 * 60 * 1000);
+    // Window for exact-day matches: ±12 h for all days.
+    // This gives each contact a full 24-hour eligibility period so that any cron run
+    // within that day will find and send to them, regardless of what time of day they
+    // last wrote. period_ref dedup in the DB prevents double-sending per contact per
+    // delay period even if the cron fires many times within the window.
+    const windowMs = (_d: number) => 12 * 60 * 60 * 1000;
 
     // Helper: send a re-engagement message to a contact.
     const sendReEngagement = async (
