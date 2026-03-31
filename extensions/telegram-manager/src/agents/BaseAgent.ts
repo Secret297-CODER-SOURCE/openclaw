@@ -1935,26 +1935,28 @@ export abstract class BaseAgent extends EventEmitter {
         // Dynamic instructions based on the three buyer sub-settings.
         const aggression = agentSettings.buyerAggressionLevel ?? "balanced";
         const closeStyle = agentSettings.buyerCloseStyle ?? "alternative";
-        const productCtx = agentSettings.buyerProductContext ?? "";
+        // AI infers product/niche from conversation history — no manual field needed.
 
+        // Lead-capture instruction: goal is to get contact info / book a call, not close a sale.
         const closeInstruction =
           closeStyle === "direct"
-            ? `• Закрывай прямо: "Давай оформим прямо сейчас — вот реквизиты/ссылка". Без лишних вопросов.\n`
+            ? `• Захвати лид напрямую: "Напиши свой номер/ник — я передам и с тобой свяжутся". Чётко, без лишних вопросов.\n`
             : closeStyle === "micro-step"
-              ? `• Называй следующее действие уверенно, как будто оба уже знают что делать дальше: "Запишу тебя на созвон в четверг" / "Скину расчёт — на какую почту?" — никакого "маленький шаг", "быстро", "просто посмотри".\n`
+              ? `• Называй следующий шаг уверенно: "Запишу тебя на звонок — в четверг удобно?" / "Скинь номер — тебе перезвонят сегодня". Никакого "просто посмотри" или "без обязательств".\n`
               : /* alternative (default) */
-                `• Закрывай альтернативным выбором: "Удобнее X или Y?" — никогда открытым "ну что скажете?".\n`;
+                `• Закрывай на контакт альтернативным выбором: "Удобнее позвонить или написать в WhatsApp?" — никогда открытым "ну что скажете?".\n`;
 
         const aggressionInstruction =
           aggression === "soft"
-            ? `• Стиль: мягкий — больше открытых вопросов, нет давления, фокус на понимании потребности.\n`
+            ? `• Стиль: мягкий — больше вопросов, нет давления, фокус на понимании потребности.\n`
             : aggression === "hard"
-              ? `• Стиль: жёсткий — прямые предложения, минимум вопросов, создавай срочность, двигай к сделке здесь и сейчас.\n`
+              ? `• Стиль: жёсткий — прямые предложения, минимум вопросов, двигай к оставлению контакта здесь и сейчас.\n`
               : /* balanced (default) */
-                `• Стиль: сбалансированный — ROI + умеренная срочность + один вопрос для перехода к следующему шагу.\n`;
+                `• Стиль: сбалансированный — покажи ценность, затем одним вопросом выведи на контакт/созвон.\n`;
 
         systemPrompt +=
-          `\n## КАК АДАПТИРОВАТЬ (стиль баера):\n` +
+          `\n## КАК АДАПТИРОВАТЬ (стиль баера — цель: лид):\n` +
+          `• ЦЕЛЬ ДИАЛОГА — получить контакт или записать на созвон. Не продать, а захватить лида.\n` +
           `• Переведи на язык клиента, сохрани суть и конкретику\n` +
           `• НЕ превращай оффер в вопрос — это ПРЕДЛОЖЕНИЕ которое ты делаешь\n` +
           `• Добавь деталь из текущего разговора чтобы звучало лично\n` +
@@ -1962,11 +1964,8 @@ export abstract class BaseAgent extends EventEmitter {
           `• Убери воду: "я думаю", "возможно", "наверное" — только уверенный тон\n` +
           `• Один скрипт — одно сообщение. Без списков, без заголовков.\n` +
           closeInstruction +
-          `• Срочность — только реальная (слот, дедлайн, изменение условий): никогда не выдумывай.\n` +
           aggressionInstruction +
-          (productCtx
-            ? `\n## ПРОДУКТ / НИША (используй эти цифры в ROI-аргументах):\n${productCtx}\n\n`
-            : `\n`);
+          `\n`;
       } else {
         systemPrompt += `\nАДАПТИРУЙ под язык и контекст клиента — сохрани суть и конкретику оффера.\n\n`;
       }
@@ -2299,14 +2298,15 @@ export abstract class BaseAgent extends EventEmitter {
     // Buyer sub-settings (only relevant when isBuyerStyleFree).
     const buyerAggression = agentSettings.buyerAggressionLevel ?? "balanced";
     const buyerClose = agentSettings.buyerCloseStyle ?? "alternative";
-    const buyerProductCtx = agentSettings.buyerProductContext ?? "";
+    // AI infers product/niche from conversation history — no manual buyerProductCtx.
 
+    // Lead-capture framing for free mode (same goal: get contact / book a call).
     const buyerCloseLineFree =
       buyerClose === "direct"
-        ? `► Закрывай прямо: "Давай оформим прямо сейчас — вот реквизиты/ссылка". Без лишних вопросов.\n`
+        ? `► Захвати лид напрямую: "Напиши номер/ник — передам, с тобой свяжутся". Без лишних вопросов.\n`
         : buyerClose === "micro-step"
-          ? `► Называй следующее действие уверенно, как будто оба уже знают что делать дальше: "Запишу тебя на созвон в четверг" / "Скину расчёт — на какую почту?" — никакого "маленький шаг", "быстро", "просто посмотри".\n`
-          : `► Закрывай альтернативным выбором: "Удобнее X или Y?" — не "ну что думаете?".\n`;
+          ? `► Называй следующий шаг уверенно: "Запишу тебя на звонок — в четверг удобно?" / "Скинь номер — перезвонят сегодня".\n`
+          : `► Закрывай на контакт альтернативным выбором: "Удобнее позвонить или написать в WhatsApp?" — не "ну что думаете?".\n`;
 
     const buyerAggressionLineFree =
       buyerAggression === "soft"
@@ -2336,17 +2336,16 @@ export abstract class BaseAgent extends EventEmitter {
         : "") +
       `\n## Язык: "${allClientText.slice(0, 100)}" — СТРОГО этот язык.\n\n` +
       (isBuyerStyleFree
-        ? `## СТИЛЬ — БАЕР:\n` +
-          `Думай как байер: ROI, конверсия, масштаб. Говори результатами, не обещаниями.\n` +
-          `► Переводи всё в деньги клиента: не "хорошие условия", а "ты зарабатываешь X / экономишь Y за Z".\n` +
+        ? `## СТИЛЬ — БАЕР (цель: лид):\n` +
+          `ЦЕЛЬ ДИАЛОГА — получить контакт или записать на созвон. Не продать, а захватить лида.\n` +
+          `► Нишу и продукт определяй сам из истории переписки — не придумывай.\n` +
+          `► Переводи всё в выгоду клиента: цифры, сроки, конкретный результат — не "хорошие условия".\n` +
           buyerCloseLineFree +
           `► Срочность только реальная — слот, дедлайн, изменение условий. Не выдумывай.\n` +
           buyerAggressionLineFree +
-          (buyerProductCtx
-            ? `\n## ПРОДУКТ / НИША (используй в ROI-аргументах):\n${buyerProductCtx}\n\n`
-            : `\n`)
+          `\n`
         : `## ЗАДАЧА:\nОтветь на "${userText.slice(0, 150)}" — конкретно, без воды.\n` +
-          `Думай как баер: ROI, конверсия, масштаб. Говори результатами, не обещаниями.\n\n`) +
+          `Цель — получить контакт или договориться о следующем шаге. Говори выгодой, не обещаниями.\n\n`) +
       `## НЕЛЬЗЯ:\n` +
       (lastAgentRepliesFree ? `• НЕ повторять: ${lastAgentRepliesFree}\n` : "") +
       (bannedTrailingFree ? `• Запрещённые концовки: ${bannedTrailingFree}\n` : "") +
@@ -2867,13 +2866,11 @@ export abstract class BaseAgent extends EventEmitter {
 
     // "Молчать": if agent is on schedule AND currently outside the window AND
     // offline-lead mode is disabled — do NOT send any re-engagement messages.
-    if (
-      settings.scheduleMode === "schedule" &&
-      !this.isWithinSchedule(settings) &&
-      !settings.offlineReplyEnabled
-    ) {
-      return;
-    }
+    // Re-engagement is a cron-driven outreach — do NOT gate it by the reply schedule.
+    // The schedule restriction is intended for real-time AI replies, not for async
+    // re-engagement messages. Blocking the cron by schedule means contacts whose
+    // silence window falls at night are permanently missed (window ±4 h passes before
+    // working hours begin). Re-engagement fires any time the cron runs.
 
     const template = settings.reEngagementTemplate?.trim();
     // In full-AI mode a template is optional; in template mode it's required.
@@ -2894,9 +2891,11 @@ export abstract class BaseAgent extends EventEmitter {
       `[TG:${this.name}] re-engagement check | delays=${JSON.stringify(delays)} more=${settings.reEngagementDelayMore ?? false}`,
     );
 
-    // Window for exact-day matches: ±2 h for day 0 (fresh contacts), ±1 h for day 1+.
-    // Wider window ensures the every-30-min cron never misses a contact entirely.
-    const windowMs = (d: number) => (d === 0 ? 2 * 60 * 60 * 1000 : 60 * 60 * 1000);
+    // Window for exact-day matches: ±8 h for day 0, ±4 h for day 1+.
+    // Wide window ensures contacts whose silence timestamp falls at night or on a
+    // schedule boundary are never permanently missed between cron runs (every 30 min).
+    // period_ref dedup in the DB prevents double-sending within the same window.
+    const windowMs = (d: number) => (d === 0 ? 8 * 60 * 60 * 1000 : 4 * 60 * 60 * 1000);
 
     // Helper: send a re-engagement message to a contact.
     const sendReEngagement = async (

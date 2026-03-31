@@ -822,14 +822,14 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                         </div>
                       </div>
 
-                      <!-- ── Техника закрытия ────────────────────────────── -->
+                      <!-- ── Захват лида ────────────────────────────────── -->
                       <div class="tg-setting-row" style="padding-left:12px;border-left:2px solid var(--accent,#e8660088);">
-                        <div class="tg-setting-label">🎯 Закрытие</div>
+                        <div class="tg-setting-label">🎯 Захват лида</div>
                         <div class="tg-setting-right">
                           <div class="tg-toggle-group">
                             <label class="tg-toggle-option ${(settings.buyerCloseStyle ?? "alternative") === "alternative" ? "tg-toggle-option--active" : ""}"
                               @click=${() => patchWorkMode({ buyerCloseStyle: "alternative" })}>
-                              X или Y?
+                              Выбор
                             </label>
                             <label class="tg-toggle-option ${settings.buyerCloseStyle === "direct" ? "tg-toggle-option--active" : ""}"
                               @click=${() => patchWorkMode({ buyerCloseStyle: "direct" })}>
@@ -843,33 +843,16 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                           <div class="tg-setting-hint">
                             ${
                               {
-                                alternative: "«Удобнее X или Y?» — альтернативный выбор без да/нет",
-                                direct: "«Давай оформим прямо сейчас» — прямое закрытие",
-                                "micro-step": "«Давай начнём с малого» — снизить барьер входа",
+                                alternative:
+                                  "«Позвонить или написать в WhatsApp?» — даёт выбор, не да/нет",
+                                direct: "«Напиши номер — с тобой свяжутся» — прямо просит контакт",
+                                "micro-step":
+                                  "«Запишу тебя на звонок — в четверг удобно?» — конкретный шаг",
                               }[settings.buyerCloseStyle ?? "alternative"]
                             }
                           </div>
-                        </div>
-                      </div>
-
-                      <!-- ── Контекст продукта / ниши ────────────────────── -->
-                      <div class="tg-setting-row" style="padding-left:12px;border-left:2px solid var(--accent,#e8660088);">
-                        <div class="tg-setting-label">📦 Продукт / ниша</div>
-                        <div class="tg-setting-right">
-                          <textarea
-                            class="input"
-                            rows="2"
-                            style="width:100%;max-width:320px;resize:vertical;font-size:13px;"
-                            placeholder="Курс по трейдингу — ученик выходит в плюс за 2 мес., ROI ×3"
-                            .value=${settings.buyerProductContext ?? ""}
-                            @input=${(e: Event) =>
-                              patchWorkMode({
-                                buyerProductContext:
-                                  (e.target as HTMLTextAreaElement).value.trim() || undefined,
-                              })}
-                          ></textarea>
-                          <div class="tg-setting-hint">
-                            Агент использует эти цифры в ROI-аргументах вместо «X» и «Y»
+                          <div class="tg-setting-hint" style="margin-top:4px;color:var(--text-muted);">
+                            📦 Продукт и нишу ИИ определяет сам из истории переписки
                           </div>
                         </div>
                       </div>
