@@ -1102,6 +1102,34 @@ export abstract class BaseAgent extends EventEmitter {
       return null;
     }
 
+    // Detect re-engagement reply once — used throughout this function to force a
+    // greeting and adjust prompt rules.
+    const isReEngaged = this.isReEngagementReply(chatId, settings);
+
+    // Working-hours gate: if the manager has configured work hours and the current
+    // time is outside that window, stay silent.  The human manager will reply when
+    // available.  (If offlineReplyEnabled is set, the caller routes to
+    // runOfflineLeadMode instead, so we never reach here in that case.)
+    if (settings.managerWorkFrom && settings.managerWorkTo) {
+      const parseMin = (t: string) => {
+        const [h, m] = t.split(":").map(Number);
+        return (h ?? 0) * 60 + (m ?? 0);
+      };
+      const now = new Date();
+      const nowMin = now.getHours() * 60 + now.getMinutes();
+      const wfMin = parseMin(settings.managerWorkFrom);
+      const wtMin = parseMin(settings.managerWorkTo);
+      const withinHours = nowMin >= wfMin && nowMin < wtMin;
+      if (!withinHours) {
+        this.logger.info(
+          `[TG:${this.name}] runScriptStep: outside working hours ` +
+            `(${settings.managerWorkFrom}–${settings.managerWorkTo}), skipping | ` +
+            `chat=${chatId} msg="${userText.slice(0, 80)}"`,
+        );
+        return null;
+      }
+    }
+
     // Working-hours context — injected into adaptScript prompt so KB replies
     // also refuse times outside the configured window.
     const schemaWorkFrom = settings.managerWorkFrom ?? "?";
@@ -1445,11 +1473,15 @@ export abstract class BaseAgent extends EventEmitter {
       // ── Normal path: KB script + bridge sentence ───────────────────────────
       // Check greeting over the FULL conversation history (not just recent slice)
       // so "Рад снова вас видеть" is never repeated even in long conversations.
-      const greetingInFullHistory = conversationHistory.some(
-        (m) =>
-          m.role === "assistant" &&
-          /привет|здравств|рад|добрый|merhaba|hello|hola|bonjour/i.test(m.content),
-      );
+      // Exception: re-engagement replies always start with a greeting even if one
+      // was sent before — the silence period creates a fresh conversational context.
+      const greetingInFullHistory = isReEngaged
+        ? false
+        : conversationHistory.some(
+            (m) =>
+              m.role === "assistant" &&
+              /привет|здравств|рад|добрый|merhaba|hello|hola|bonjour/i.test(m.content),
+          );
 
       // Cliché phrases that professional managers avoid.
       const clicheBlacklist = [
@@ -1566,16 +1598,21 @@ export abstract class BaseAgent extends EventEmitter {
         (isFirstGreeting
           ? `## ПЕРВОЕ СООБЩЕНИЕ:\n` +
             `Поздоровайся + представься: "Привет! Меня зовут ${agentDisplayName}." + 1 фраза о чём можешь помочь. Всё одной мыслью, без вопросов.\n\n`
-          : isReturningClient
-            ? `## ВОЗВРАЩАЮЩИЙСЯ КЛИЕНТ — используй память:\n` +
-              `Упомяни что-то из прошлых разговоров если это к месту. Продолжай как будто давно знакомы.\n\n`
-            : clientSharedPhone
-              ? `Клиент прислал номер — подтверди кратко и назови следующий шаг.\n\n`
-              : clientSharedName
-                ? `Клиент назвал имя — обратись по имени + двигай к сути.\n\n`
-                : clientGaveShortAnswer
-                  ? `Короткий ответ → 1–2 предложения: среагируй + двигай.\n\n`
-                  : `Развёрнутый ответ → 2–3 предложения по делу.\n\n`) +
+          : isReEngaged
+            ? `## РЕАКТИВАЦИЯ — КЛИЕНТ ОТВЕТИЛ:\n` +
+              `Клиент откликнулся на твоё сообщение после паузы. ОБЯЗАТЕЛЬНО поздоровайся — ` +
+              `одна тёплая и короткая фраза ("Привет!" / "Рад, что ответил!") — и сразу переходи к делу. ` +
+              `Не затягивай с приветствием, не делай его многословным.\n\n`
+            : isReturningClient
+              ? `## ВОЗВРАЩАЮЩИЙСЯ КЛИЕНТ — используй память:\n` +
+                `Упомяни что-то из прошлых разговоров если это к месту. Продолжай как будто давно знакомы.\n\n`
+              : clientSharedPhone
+                ? `Клиент прислал номер — подтверди кратко и назови следующий шаг.\n\n`
+                : clientSharedName
+                  ? `Клиент назвал имя — обратись по имени + двигай к сути.\n\n`
+                  : clientGaveShortAnswer
+                    ? `Короткий ответ → 1–2 предложения: среагируй + двигай.\n\n`
+                    : `Развёрнутый ответ → 2–3 предложения по делу.\n\n`) +
         (isLoopQuestion
           ? `## ⚠️ ПЕТЛЯ ДИАЛОГА — ДЕЙСТВУЙ ИНАЧЕ:\n` +
             `Клиент спрашивает одно и то же уже ${repeatCount + 1}-й раз подряд.\n` +
@@ -1602,7 +1639,12 @@ export abstract class BaseAgent extends EventEmitter {
         `- НЕ использовать имена/данные из KB-примера как реальные данные клиента\n` +
         `- НЕ задавать два вопроса подряд\n` +
         `- НЕ раскрывать что ты ИИ\n` +
-        `- НОЛЬ турецких/иностранных слов\n\n` +
+        `- НОЛЬ турецких/иностранных слов\n` +
+        `- ЗАПРЕЩЕНО упоминать сомнения клиента: "ты сомневался", "ты не был уверен", "колебался", "был сомнения в старте" — не сей сомнение своими словами\n` +
+        `- ЗАПРЕЩЕНО предполагать сферу деятельности (IT, айти, бизнес и т.д.) без явного упоминания клиента\n\n` +
+        `## СОЦИАЛЬНОЕ ДОКАЗАТЕЛЬСТВО (если нужно):\n` +
+        `Используй обобщённые формулировки: "многие наши клиенты / люди в похожей ситуации / ваши коллеги уже..." — ` +
+        `без привязки к конкретной сфере, если клиент её не называл.\n\n` +
         `## ТОН:\n` +
         `Деловой партнёр — уверенный, конкретный. НЕ "подстраивающийся".\n` +
         `Одна чёткая мысль на сообщение. Без расплывчатых фраз.\n\n` +
@@ -1760,10 +1802,13 @@ export abstract class BaseAgent extends EventEmitter {
         adaptScript(bestTemplate.response),
         advanceNode(currentNode.type),
       ]);
-      this.logger.info(
-        `[TG:${this.name}] schema reply | chat=${chatId} source=kb-adapted node="${currentNode.text.slice(0, 40)}"`,
-      );
       const _sig1 = this.getSignalId(conversationHistory);
+      this.logger.info(
+        `[TG:${this.name}] schema reply | chat=${chatId} source=kb-adapted ` +
+          `node="${currentNode.text.slice(0, 40)}" trigger="${bestTemplate.input.slice(0, 60)}" ` +
+          `signal=${_sig1}(${this.getSignalLabel(_sig1)}) ` +
+          `reEngaged=${isReEngaged} msg="${userText.slice(0, 100)}"`,
+      );
       this.pushEvent("ai_reply", {
         action: "schema_reply",
         chatId,
@@ -1790,10 +1835,13 @@ export abstract class BaseAgent extends EventEmitter {
         adaptScript(bestTemplate.response),
         advanceNode(currentNode.type),
       ]);
-      this.logger.info(
-        `[TG:${this.name}] schema reply | chat=${chatId} source=kb-decision-adapted node="${currentNode.text.slice(0, 40)}"`,
-      );
       const _sig2 = this.getSignalId(conversationHistory);
+      this.logger.info(
+        `[TG:${this.name}] schema reply | chat=${chatId} source=kb-decision-adapted ` +
+          `node="${currentNode.text.slice(0, 40)}" trigger="${bestTemplate.input.slice(0, 60)}" ` +
+          `signal=${_sig2}(${this.getSignalLabel(_sig2)}) ` +
+          `reEngaged=${isReEngaged} msg="${userText.slice(0, 100)}"`,
+      );
       this.pushEvent("ai_reply", {
         action: "schema_reply",
         chatId,
@@ -1819,9 +1867,13 @@ export abstract class BaseAgent extends EventEmitter {
       .join(" ")
       .concat(" ", userText)
       .slice(0, 400);
-    const greetingWasSentFallback = conversationHistory.some(
-      (m) => m.role === "assistant" && /привет|здравств|рад|добрый|merhaba|hello/i.test(m.content),
-    );
+    // Re-engagement: force greeting even if we've greeted before (fresh conversational context).
+    const greetingWasSentFallback = isReEngaged
+      ? false
+      : conversationHistory.some(
+          (m) =>
+            m.role === "assistant" && /привет|здравств|рад|добрый|merhaba|hello/i.test(m.content),
+        );
 
     // Known facts for system prompt path
     const knownFactsFallback = (() => {
@@ -1867,7 +1919,16 @@ export abstract class BaseAgent extends EventEmitter {
         ? `• Клиент задал вопрос не по теме — ответь коротко, вернись к скрипту.\n`
         : "") +
       `• Никогда не раскрывай, что ты ИИ.\n` +
-      `• ${strict ? "СТРОГО используй скрипты из базы как основу ответа." : "Скрипты из базы — адаптируй под контекст."}\n\n`;
+      `• ЗАПРЕЩЕНО упоминать сомнения клиента: "ты сомневался", "ты не был уверен", "колебался" — не напоминай о сомнениях.\n` +
+      `• ЗАПРЕЩЕНО предполагать сферу деятельности (IT, айти и т.д.) без явного упоминания клиента.\n` +
+      `• Социальное доказательство — без привязки к сфере: "многие наши клиенты / люди в похожей ситуации уже...".\n` +
+      `• ${strict ? "СТРОГО используй скрипты из базы как основу ответа." : "Скрипты из базы — адаптируй под контекст."}\n\n` +
+      (isReEngaged
+        ? `## РЕАКТИВАЦИЯ — КЛИЕНТ ОТВЕТИЛ:\n` +
+          `Клиент откликнулся на твоё сообщение после паузы. ` +
+          `ОБЯЗАТЕЛЬНО поздоровайся в начале ответа — одна тёплая и короткая фраза ` +
+          `("Привет!" / "Рад, что ответил!") — и сразу к делу.\n\n`
+        : "");
 
     if (chatMemory?.memoryText) {
       systemPrompt +=
@@ -2126,10 +2187,14 @@ export abstract class BaseAgent extends EventEmitter {
       }
     }
 
-    this.logger.info(
-      `[TG:${this.name}] schema reply | chat=${chatId} source=${replySource} node="${currentNode.text.slice(0, 40)}"`,
-    );
     const _sig3 = this.getSignalId(conversationHistory);
+    this.logger.info(
+      `[TG:${this.name}] schema reply | chat=${chatId} source=${replySource} ` +
+        `node="${currentNode.text.slice(0, 40)}" ` +
+        `reason=${hasTemplates ? "kb-fallback-sysprompt" : "no-kb-sysprompt"} ` +
+        `signal=${_sig3}(${this.getSignalLabel(_sig3)}) ` +
+        `reEngaged=${isReEngaged} msg="${userText.slice(0, 100)}"`,
+    );
     this.pushEvent("ai_reply", {
       action: "schema_reply",
       chatId,
