@@ -636,15 +636,15 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
         </div>
 
         <!-- Auto-start toggle -->
-        <label class="tg-toggle-row" style="cursor:pointer;display:flex;align-items:center;gap:8px;user-select:none;">
+        <label class="tg-toggle-row">
           <input
             type="checkbox"
             ?checked=${savedSettings.autoStartEnabled !== false}
             @change=${(e: Event) =>
               saveSettings({ autoStartEnabled: (e.target as HTMLInputElement).checked })}
-            style="width:16px;height:16px;cursor:pointer;accent-color:var(--primary);"
+            class="tg-toggle-row__check"
           />
-          <span style="font-size:0.9rem;">Автозапуск при старте gateway</span>
+          <span class="tg-toggle-row__label">Автозапуск при старте gateway</span>
         </label>
       </div>
     </section>
@@ -933,13 +933,13 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
           <div class="tg-reeng-section-title" style="margin-bottom:8px;">Пауза перед ответом агента (сек)</div>
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
             <span style="color:var(--text-muted,#aaa);font-size:13px;">от</span>
-            <input type="number" min="0" max="300" style="width:70px;"
-              class="tg-reeng-input"
+            <input type="number" min="0" max="300"
+              class="input" style="width:70px;padding:4px 8px;font-size:13px;text-align:center;"
               .value=${String(settings.replyDelayMin ?? 0)}
               @input=${(e: Event) => patchWorkMode({ replyDelayMin: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) })} />
             <span style="color:var(--text-muted,#aaa);font-size:13px;">до</span>
-            <input type="number" min="0" max="300" style="width:70px;"
-              class="tg-reeng-input"
+            <input type="number" min="0" max="300"
+              class="input" style="width:70px;padding:4px 8px;font-size:13px;text-align:center;"
               .value=${String(settings.replyDelayMax ?? 0)}
               @input=${(e: Event) => patchWorkMode({ replyDelayMax: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) })} />
             <span style="color:var(--text-muted,#aaa);font-size:13px;">сек</span>
@@ -1297,7 +1297,7 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
             />
             <button
               type="button"
-              class="btn btn-primary"
+              class="btn primary"
               style="white-space:nowrap;font-size:12px;"
               @click=${() => {
                 const input = document.getElementById(
@@ -2642,7 +2642,7 @@ function renderLeadsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
         <div class="card-title" style="margin:0;">🎯 Лиды</div>
         <button
           type="button"
-          class="btn btn-sm"
+          class="btn btn--sm"
           ?disabled=${props.leadsLoading}
           @click=${() => props.onLoadLeads(agent.id)}
         >

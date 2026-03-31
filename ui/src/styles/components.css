@@ -4263,6 +4263,29 @@
   opacity: 1;
 }
 
+/* ── Checkbox-label row (e.g. auto-start) ── */
+.tg-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tg-toggle-row__check {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  cursor: pointer;
+  accent-color: var(--accent, var(--primary, #4a9eff));
+}
+
+.tg-toggle-row__label {
+  font-size: 0.9rem;
+  color: var(--text);
+  line-height: 1.3;
+}
+
 /* Responsive: stack on narrow panels */
 @media (max-width: 500px) {
   .tg-setting-row {
