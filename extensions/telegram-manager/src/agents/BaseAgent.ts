@@ -2,7 +2,12 @@ import EventEmitter from "events";
 // plugins/telegram/src/agents/BaseAgent.ts
 import fs from "fs";
 import path from "path";
-import { aiReply, analyzeOnceDirect } from "../behaviors/AiReplyEngine.js";
+import {
+  aiReply,
+  analyzeOnceDirect,
+  invalidateHistoryCache,
+  updateLastAssistantReply,
+} from "../behaviors/AiReplyEngine.js";
 import { TelegramStorage } from "../storage/TelegramStorage";
 import { createWorkspaceTools } from "../tools/TelegramTools.js";
 import {
@@ -1733,6 +1738,12 @@ export abstract class BaseAgent extends EventEmitter {
       const trimmed = hist.slice(-200);
       this.storage.saveConversationHistory(chatKey, trimmed);
 
+      // Invalidate the aiReply in-memory cache so the next turn's AI call
+      // reloads this freshly written history from storage instead of using
+      // a stale in-memory snapshot. Critical when KB path and fallback AI
+      // path are interleaved across nodes.
+      invalidateHistoryCache(chatKey);
+
       // Periodically compress old exchanges into long-term memory so future
       // sessions can say "как мы говорили раньше".
       // Trigger every 10 turns (20 entries) once we have enough data.
@@ -1770,7 +1781,10 @@ export abstract class BaseAgent extends EventEmitter {
     }
 
     // ── Decision node with KB: adapt template, AI picks branch ───────────────
-    if (isDecision && bestTemplate && nextNodes.length > 1) {
+    // Note: single-exit decision nodes still use the KB template — they just
+    // trivially advance (no branching choice). Removing `nextNodes.length > 1`
+    // fixes the bug where single-exit decision nodes fell to system prompt path.
+    if (isDecision && bestTemplate) {
       // Run reply adaptation and branch routing in parallel.
       const [reply] = await Promise.all([
         adaptScript(bestTemplate.response),
@@ -2189,7 +2203,15 @@ export abstract class BaseAgent extends EventEmitter {
     }
 
     // Final safety: never send phone numbers; block out-of-hours times.
-    return this.enforceWorkingHours(stripPhoneNumbers(reply), settings) || null;
+    const finalReply = this.enforceWorkingHours(stripPhoneNumbers(reply), settings) || null;
+
+    // Patch history to reflect the actual sent reply, not rawReply which may
+    // contain the BRANCH tag and/or the pre-rebuild strict-violation text.
+    if (finalReply && finalReply !== rawReply) {
+      updateLastAssistantReply(chatKey, finalReply, this.storage);
+    }
+
+    return finalReply;
   }
 
   /**

@@ -480,6 +480,37 @@ export function clearHistory(chatKey: string, storage?: ConversationStorage) {
   if (storage) storage.saveConversationHistory(chatKey, []);
 }
 
+/**
+ * Invalidate the in-memory history cache for a chat key WITHOUT clearing storage.
+ * Call this after writing history directly to storage (e.g. via persistHistory in
+ * schema KB path) so the next aiReply() call reloads the freshly written history.
+ */
+export function invalidateHistoryCache(chatKey: string): void {
+  histories.delete(chatKey);
+}
+
+/**
+ * Patch the last assistant entry in the in-memory history cache and persist it.
+ * Used to replace rawReply (saved by aiReply) with the actual sent reply after
+ * BRANCH-stripping, strict rebuild, or enforceWorkingHours post-processing.
+ */
+export function updateLastAssistantReply(
+  chatKey: string,
+  finalReply: string,
+  storage?: ConversationStorage,
+): void {
+  const hist = histories.get(chatKey);
+  if (!hist) return;
+  // Walk backwards to find the most recent assistant turn.
+  for (let i = hist.length - 1; i >= 0; i--) {
+    if (hist[i].role === "assistant") {
+      hist[i] = { role: "assistant", content: finalReply };
+      if (storage) storage.saveConversationHistory(chatKey, hist);
+      return;
+    }
+  }
+}
+
 /** Race a promise against a timeout. Rejects with a clear error on expiry. */
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
