@@ -210,8 +210,8 @@ export abstract class BaseAgent extends EventEmitter {
    * or when all mentioned times are within the window.
    */
   protected enforceWorkingHours(reply: string, settings: AgentSettings): string {
-    const from = settings.managerWorkFrom ?? "?";
-    const to = settings.managerWorkTo ?? "?";
+    const from = settings.managerWorkFrom ?? settings.scheduleFrom ?? "?";
+    const to = settings.managerWorkTo ?? settings.scheduleTo ?? "?";
     if (from === "?" || to === "?") return reply;
 
     const toMinutes = (t: string) => {
@@ -266,6 +266,53 @@ export abstract class BaseAgent extends EventEmitter {
     return (
       `Эх, после ${to} я уже не работаю — рабочий день заканчивается в ${to}. ` +
       `Давай лучше созвонимся ${whenLabel} в ${proposalTime}? Удобно?`
+    );
+  }
+
+  /**
+   * Hard post-processing guard: remove unverified assumptions about the client.
+   *
+   * Example to block: "Ты говоришь, что из айти сферы..." when the client
+   * never mentioned IT. This keeps manager replies factual and confident.
+   */
+  protected enforceNoAssumptiveClaims(
+    reply: string,
+    history: Array<{ role: string; content: string }>,
+    latestUserText?: string,
+  ): string {
+    const clientContext = history
+      .filter((m) => m.role === "user")
+      .map((m) => m.content)
+      .join(" ")
+      .concat(" ", latestUserText ?? "")
+      .toLowerCase();
+
+    const hasItCue = /(^|\W)(айти|it)(\W|$)/i.test(clientContext);
+    const hasDomainCue = /сфер|ниша|отрасл|индустр/i.test(clientContext);
+
+    const sentences = reply.split(/(?<=[.!?])\s+/);
+    const cleaned = sentences
+      .filter((sentence) => {
+        const s = sentence.trim();
+        if (!s) return false;
+        if (/ты\s+говоришь,?\s+что/i.test(s)) return false;
+        if (!hasItCue && /(из|в)\s+(?:айти|it)\s+сфер/i.test(s)) return false;
+        if (!hasDomainCue && /(в|для)\s+(?:твоей|вашей)\s+сфер/i.test(s)) return false;
+        return true;
+      })
+      .join(" ")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+
+    if (cleaned) return cleaned;
+
+    // Last-resort cleanup to avoid returning an empty message.
+    return (
+      reply
+        .replace(/ты\s+говоришь,?\s+что\s*/gi, "")
+        .replace(/(из|в)\s+(?:айти|it)\s+сфер[аы]?[\w-]*/gi, "")
+        .replace(/\s{2,}/g, " ")
+        .trim() || reply
     );
   }
 
@@ -580,8 +627,9 @@ export abstract class BaseAgent extends EventEmitter {
         .replace(/(?<!\d)(\+?\d[\d\s\-().]{5,}\d)(?!\d)/g, "")
         .replace(/\s{2,}/g, " ")
         .trim();
+      const assumptionSafeReply = this.enforceNoAssumptiveClaims(stripped, recentHistory, userText);
       // Apply working hours guard before logging so the logged text matches what was sent.
-      const finalReply = this.enforceWorkingHours(stripped, settings) || null;
+      const finalReply = this.enforceWorkingHours(assumptionSafeReply, settings) || null;
 
       const offlineSignal = this.getSignalId(recentHistory);
       const replySource = isReEngagedOffline ? "reengagement-reply" : "offline-lead";
@@ -599,7 +647,7 @@ export abstract class BaseAgent extends EventEmitter {
         node: offlineStage.node,
         stage: offlineStage.stage,
         stageLabel: offlineStage.stageLabel,
-        text: finalReply ?? stripped,
+        text: finalReply ?? assumptionSafeReply,
         clientText: userText.slice(0, 200),
         signal: offlineSignal,
         signalLabel: this.getSignalLabel(offlineSignal),
@@ -2315,7 +2363,12 @@ export abstract class BaseAgent extends EventEmitter {
     }
 
     // Final safety: never send phone numbers; block out-of-hours times.
-    const finalReply = this.enforceWorkingHours(stripPhoneNumbers(reply), settings) || null;
+    const sanitizedReply = this.enforceNoAssumptiveClaims(
+      stripPhoneNumbers(reply),
+      conversationHistory,
+      userText,
+    );
+    const finalReply = this.enforceWorkingHours(sanitizedReply, settings) || null;
 
     // Patch history to reflect the actual sent reply, not rawReply which may
     // contain the BRANCH tag and/or the pre-rebuild strict-violation text.
@@ -2526,6 +2579,11 @@ export abstract class BaseAgent extends EventEmitter {
         .replace(/(?<!\d)(\+?\d[\d\s\-().]{5,}\d)(?!\d)/g, "")
         .replace(/\s{2,}/g, " ")
         .trim();
+      const assumptionSafeReply = this.enforceNoAssumptiveClaims(
+        safeReply,
+        conversationHistory,
+        userText,
+      );
       const _sig4 = this.getSignalId(conversationHistory);
       this.logger.info(
         `[TG:${this.name}] free-mode reply | chat=${chatId} ` +
@@ -2538,22 +2596,22 @@ export abstract class BaseAgent extends EventEmitter {
         node: _stage4.node,
         stage: _stage4.stage,
         stageLabel: _stage4.stageLabel,
-        text: rawReply,
+        text: assumptionSafeReply,
         clientText: userText.slice(0, 200),
         signal: _sig4,
         signalLabel: this.getSignalLabel(_sig4),
         clientMessages: this.getTriggerMessages(conversationHistory),
       });
       // Auto-learn: persist this exchange to the most relevant KB node (fire-and-forget)
-      if (safeReply) {
-        void this.learnFromFreeMode(userText, safeReply, diagram);
+      if (assumptionSafeReply) {
+        void this.learnFromFreeMode(userText, assumptionSafeReply, diagram);
       }
       // Auto-capture lead if client shared a phone number
       if (/(?:\+?[\d][\d\s\-()]{6,}\d)/.test(userText)) {
         void this.extractAndSaveLead(chatId, chatKey);
       }
       // Hard guard: block any out-of-hours time reference.
-      return this.enforceWorkingHours(safeReply, agentSettings) || null;
+      return this.enforceWorkingHours(assumptionSafeReply, agentSettings) || null;
     } catch (e) {
       this.logger.warn(`[TG:${this.name}] free-mode failed: ${String(e)}`);
       return null;
