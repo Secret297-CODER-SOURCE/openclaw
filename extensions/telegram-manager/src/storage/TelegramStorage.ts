@@ -956,6 +956,69 @@ export class TelegramStorage {
   }
 
   /**
+   * Diagnostic counters for a re-engagement exact-day window.
+   * Helps explain why `found=0` (no contacts in window vs deduped by tg_reengagement).
+   */
+  getReEngagementWindowStats(
+    agentId: string,
+    delayDays: number,
+    windowStart: string,
+    windowEnd: string,
+  ): {
+    trackedTotal: number;
+    inWindow: number;
+    dedupBlocked: number;
+    eligible: number;
+  } {
+    const trackedTotal = Number(
+      (
+        this.db.prepare(`SELECT COUNT(*) AS n FROM tg_contacts WHERE agent_id = ?`).get(agentId) as
+          | { n?: number }
+          | undefined
+      )?.n ?? 0,
+    );
+    const inWindow = Number(
+      (
+        this.db
+          .prepare(
+            `SELECT COUNT(*) AS n
+           FROM tg_contacts
+           WHERE agent_id = ?
+             AND last_client_msg_at >= ?
+             AND last_client_msg_at < ?`,
+          )
+          .get(agentId, windowStart, windowEnd) as { n?: number } | undefined
+      )?.n ?? 0,
+    );
+    const eligible = Number(
+      (
+        this.db
+          .prepare(
+            `SELECT COUNT(*) AS n
+           FROM tg_contacts c
+           WHERE c.agent_id = ?
+             AND c.last_client_msg_at >= ?
+             AND c.last_client_msg_at < ?
+             AND NOT EXISTS (
+               SELECT 1 FROM tg_reengagement r
+               WHERE r.agent_id = c.agent_id
+                 AND r.chat_id = c.chat_id
+                 AND r.delay_days = ?
+                 AND r.period_ref = c.last_client_msg_at
+             )`,
+          )
+          .get(agentId, windowStart, windowEnd, delayDays) as { n?: number } | undefined
+      )?.n ?? 0,
+    );
+    return {
+      trackedTotal,
+      inWindow,
+      dedupBlocked: Math.max(0, inWindow - eligible),
+      eligible,
+    };
+  }
+
+  /**
    * Returns contacts silent for MORE than `olderThanDays` days who haven't
    * received an "и более" re-engagement (delay_days=9999) in the past
    * `olderThanDays` days.
@@ -993,6 +1056,100 @@ export class TelegramStorage {
       lastName: string | null;
       username: string | null;
       lastClientMsgAt: string;
+    }>;
+  }
+
+  /**
+   * Diagnostic counters for `delayMore` mode (>N days inactive).
+   */
+  getReEngagementMoreStats(
+    agentId: string,
+    olderThanDays: number,
+  ): {
+    trackedTotal: number;
+    olderThanCutoff: number;
+    cooloffBlocked: number;
+    eligible: number;
+  } {
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+    const cooloffStart = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+
+    const trackedTotal = Number(
+      (
+        this.db.prepare(`SELECT COUNT(*) AS n FROM tg_contacts WHERE agent_id = ?`).get(agentId) as
+          | { n?: number }
+          | undefined
+      )?.n ?? 0,
+    );
+    const olderThanCutoff = Number(
+      (
+        this.db
+          .prepare(
+            `SELECT COUNT(*) AS n
+           FROM tg_contacts
+           WHERE agent_id = ?
+             AND last_client_msg_at < ?`,
+          )
+          .get(agentId, cutoff) as { n?: number } | undefined
+      )?.n ?? 0,
+    );
+    const eligible = Number(
+      (
+        this.db
+          .prepare(
+            `SELECT COUNT(*) AS n
+           FROM tg_contacts c
+           WHERE c.agent_id = ?
+             AND c.last_client_msg_at < ?
+             AND NOT EXISTS (
+               SELECT 1 FROM tg_reengagement r
+               WHERE r.agent_id = c.agent_id
+                 AND r.chat_id = c.chat_id
+                 AND r.delay_days = 9999
+                 AND r.sent_at >= ?
+             )`,
+          )
+          .get(agentId, cutoff, cooloffStart) as { n?: number } | undefined
+      )?.n ?? 0,
+    );
+
+    return {
+      trackedTotal,
+      olderThanCutoff,
+      cooloffBlocked: Math.max(0, olderThanCutoff - eligible),
+      eligible,
+    };
+  }
+
+  /**
+   * Return all contacts for an agent with their last activity timestamps.
+   * Used for diagnostics when re-engagement finds 0 contacts.
+   */
+  getAllContactsDebug(agentId: string): Array<{
+    chatId: string;
+    firstName: string | null;
+    username: string | null;
+    lastClientMsgAt: string;
+    sentDays: string; // comma-sep list of delay_days already sent
+  }> {
+    return this.db
+      .prepare(
+        `SELECT c.chat_id as chatId, c.first_name as firstName, c.username as username,
+                c.last_client_msg_at as lastClientMsgAt,
+                COALESCE(GROUP_CONCAT(r.delay_days), '') as sentDays
+         FROM tg_contacts c
+         LEFT JOIN tg_reengagement r ON r.agent_id = c.agent_id AND r.chat_id = c.chat_id
+         WHERE c.agent_id = ?
+         GROUP BY c.chat_id
+         ORDER BY c.last_client_msg_at DESC
+         LIMIT 30`,
+      )
+      .all(agentId) as Array<{
+      chatId: string;
+      firstName: string | null;
+      username: string | null;
+      lastClientMsgAt: string;
+      sentDays: string;
     }>;
   }
 
