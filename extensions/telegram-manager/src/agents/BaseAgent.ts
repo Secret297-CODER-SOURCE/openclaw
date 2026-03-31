@@ -1948,11 +1948,11 @@ export abstract class BaseAgent extends EventEmitter {
       for (const p of topPairs) {
         systemPrompt += `[${scoreLabel(p.score)}] ${p.response}\n`;
       }
-      const isBuyerStyle = agentSettings.schemaDeliveryStyle === "buyer";
+      const isBuyerStyle = settings.schemaDeliveryStyle === "buyer";
       if (isBuyerStyle) {
         // Dynamic instructions based on the three buyer sub-settings.
-        const aggression = agentSettings.buyerAggressionLevel ?? "balanced";
-        const closeStyle = agentSettings.buyerCloseStyle ?? "alternative";
+        const aggression = settings.buyerAggressionLevel ?? "balanced";
+        const closeStyle = settings.buyerCloseStyle ?? "alternative";
         // AI infers product/niche from conversation history — no manual field needed.
 
         // Lead-capture instruction: goal is to get contact info / book a call, not close a sale.
@@ -2903,17 +2903,17 @@ export abstract class BaseAgent extends EventEmitter {
   /** Check all delay thresholds and send re-engagement messages to qualifying contacts. */
   private async runReEngagementCheck(): Promise<void> {
     const settings = this.getAgentSettings();
-    // Master AI kill-switch — do nothing when AI is fully disabled.
+    // Master AI kill-switch: skip entirely when AI is fully disabled.
     if (settings.aiEnabled === false) return;
     if (!settings.reEngagementEnabled) return;
 
-    // "Молчать": if agent is on schedule AND currently outside the window AND
-    // offline-lead mode is disabled — do NOT send any re-engagement messages.
-    // Re-engagement is a cron-driven outreach — do NOT gate it by the reply schedule.
-    // The schedule restriction is intended for real-time AI replies, not for async
-    // re-engagement messages. Blocking the cron by schedule means contacts whose
-    // silence window falls at night are permanently missed (window ±4 h passes before
-    // working hours begin). Re-engagement fires any time the cron runs.
+    // NOTE: reEngagementAiContinue does NOT block the send — it only controls
+    // whether the AI responds when the contact replies (see isReEngagementReply /
+    // isReEngagementSilenced). Re-engagement messages are sent regardless.
+    //
+    // NOTE: schedule mode does NOT block the cron — outreach fires any time.
+    // Gating by schedule would permanently miss contacts whose silence window
+    // falls outside working hours (the ±4 h window passes before work begins).
 
     const template = settings.reEngagementTemplate?.trim();
     // In full-AI mode a template is optional; in template mode it's required.

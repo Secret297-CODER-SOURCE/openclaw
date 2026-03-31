@@ -1158,6 +1158,8 @@ export class UserBotAgent extends BaseAgent {
         const lockKey = `${this.id}:${chatId}`;
         withChatLock(lockKey, async () => {
           const agentSettings = this.getAgentSettings();
+          // Re-engagement silence gate: stays silent even in task-session / schema mode.
+          if (this.isReEngagementSilenced(chatId, agentSettings)) return;
           if (agentSettings.useSchema && agentSettings.activeDiagramId) {
             try {
               const scriptReply = await this.runScriptStep(chatId, text, chatKey);
