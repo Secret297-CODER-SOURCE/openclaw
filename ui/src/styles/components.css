@@ -467,7 +467,10 @@
 
 .field input,
 .field textarea,
-.field select {
+.field select,
+input.input,
+textarea.input,
+select.input {
   border: 1px solid var(--input);
   background: var(--card);
   border-radius: var(--radius-md);
@@ -481,7 +484,10 @@
 
 .field input:focus,
 .field textarea:focus,
-.field select:focus {
+.field select:focus,
+input.input:focus,
+textarea.input:focus,
+select.input:focus {
   border-color: var(--ring);
   box-shadow: var(--focus-ring);
 }
@@ -963,7 +969,10 @@
 
 :root[data-theme="light"] .field input,
 :root[data-theme="light"] .field textarea,
-:root[data-theme="light"] .field select {
+:root[data-theme="light"] .field select,
+:root[data-theme="light"] input.input,
+:root[data-theme="light"] textarea.input,
+:root[data-theme="light"] select.input {
   background: var(--card);
   border-color: var(--input);
 }
