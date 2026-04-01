@@ -20,6 +20,8 @@ import {
 } from "../presenter.ts";
 import type { AgentsFilesListResult, CronJob, CronStatus } from "../types.ts";
 import { renderAgentFiles } from "./agents-panels-status-files.ts";
+import { renderBehaviorEditor } from "./telegram-behavior-editor.ts";
+import type { BehaviorConfig } from "./telegram-behavior-editor.ts";
 import { renderChatPanel, renderSchemaPanel } from "./telegram-scenario.ts";
 import type { TelegramChatSubPanel, NodesGraphMode, ScenarioProps } from "./telegram-scenario.ts";
 import type { WebchatProps } from "./telegram-webchat.ts";
@@ -36,7 +38,8 @@ export type TelegramPanel =
   | "tasks"
   | "chat"
   | "schema"
-  | "leads";
+  | "leads"
+  | "prompts";
 
 export type { TelegramChatSubPanel };
 
@@ -62,6 +65,9 @@ export type TelegramProps = {
   // Behavior editor (raw JSON)
   behaviorsJson: string;
   behaviorsJsonError: string | null;
+  // Behavior editor (visual)
+  behaviorsVisual: BehaviorConfig[];
+  behaviorsEditorMode: "visual" | "json";
   // Credentials setup (null = not yet loaded, false = not configured, true = ok)
   apiIdConfigured: boolean | null;
   setupApiId: string;
@@ -102,6 +108,8 @@ export type TelegramProps = {
   onAuthSubmit: (id: string) => void;
   onBehaviorsJsonChange: (v: string) => void;
   onBehaviorsSave: (id: string) => void;
+  onBehaviorsVisualChange: (behaviors: BehaviorConfig[]) => void;
+  onBehaviorsEditorModeChange: (mode: "visual" | "json") => void;
   onSetupApiIdChange: (v: string) => void;
   onSetupApiHashChange: (v: string) => void;
   onSetupProxyIpChange: (v: string) => void;
@@ -307,6 +315,10 @@ export type TelegramProps = {
   onLoadLeads: (agentId: string) => void;
   onDeleteLead: (leadId: string) => void;
   onSaveLead: (lead: import("../controllers/telegram.ts").TelegramLead) => void;
+  // Prompts & filters tab
+  promptSummary: import("../controllers/telegram.ts").PromptSummary | null;
+  promptSummaryLoading: boolean;
+  onLoadPromptSummary: (agentId: string) => void;
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -483,6 +495,7 @@ function renderPanelTabs(props: TelegramProps, agent: TelegramAgentRecord) {
     { id: "chat", label: "Чат" },
     { id: "schema", label: "Схема" },
     { id: "leads", label: "🎯 Лиды" },
+    { id: "prompts", label: "📋 Промпты" },
   ];
 
   return html`
@@ -1511,36 +1524,80 @@ function renderAuthPanel(props: TelegramProps, agent: TelegramAgentRecord) {
 
 function renderBehaviorsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
   const busy = isBusy(props, agent.id);
+  const isVisual = props.behaviorsEditorMode === "visual";
+
+  const modeToggle = html`
+    <div class="tg-be-btn-group" style="margin-bottom: 12px;">
+      <button
+        type="button"
+        class="tg-be-btn ${isVisual ? "active" : ""}"
+        @click=${() => props.onBehaviorsEditorModeChange("visual")}
+      >🎨 Визуальный</button>
+      <button
+        type="button"
+        class="tg-be-btn ${!isVisual ? "active" : ""}"
+        @click=${() => props.onBehaviorsEditorModeChange("json")}
+      >{ } JSON</button>
+    </div>
+  `;
+
+  const jsonEditor = html`
+    <div class="stack" style="margin-top: 8px;">
+      <div class="field">
+        <textarea
+          rows="16"
+          .value=${props.behaviorsJson}
+          @input=${(e: InputEvent) =>
+            props.onBehaviorsJsonChange((e.target as HTMLTextAreaElement).value)}
+        ></textarea>
+      </div>
+      ${
+        props.behaviorsJsonError
+          ? html`<div class="callout danger">${props.behaviorsJsonError}</div>`
+          : nothing
+      }
+      <button
+        class="btn primary"
+        ?disabled=${busy || !!props.behaviorsJsonError}
+        @click=${() => props.onBehaviorsSave(agent.id)}
+      >
+        ${busy ? t("ui.saving") : t("ui.saveBehaviors")}
+      </button>
+    </div>
+  `;
+
+  /** Export current visual behaviors as a JSON download */
+  const exportJson = () => {
+    const blob = new Blob([JSON.stringify(props.behaviorsVisual, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `behaviors-${agent.id}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return html`
     <section class="card">
       <div class="card-title">${t("ui.panelBehaviors")}</div>
       <div class="card-sub">
-        Edit behaviors as JSON. Supported types: <code>auto_reply</code>, <code>monitor</code>,
-        <code>broadcast</code>, <code>parser</code>.
+        Настройте поведения агента: авто-ответ, мониторинг, рассылка, парсер, мастер-контроль.
       </div>
-      <div class="stack" style="margin-top: 16px;">
-        <div class="field">
-          <textarea
-            rows="16"
-            .value=${props.behaviorsJson}
-            @input=${(e: InputEvent) =>
-              props.onBehaviorsJsonChange((e.target as HTMLTextAreaElement).value)}
-          ></textarea>
-        </div>
-        ${
-          props.behaviorsJsonError
-            ? html`<div class="callout danger">${props.behaviorsJsonError}</div>`
-            : nothing
-        }
-        <button
-          class="btn primary"
-          ?disabled=${busy || !!props.behaviorsJsonError}
-          @click=${() => props.onBehaviorsSave(agent.id)}
-        >
-          ${busy ? t("ui.saving") : t("ui.saveBehaviors")}
-        </button>
-      </div>
+      ${modeToggle}
+      ${
+        isVisual
+          ? renderBehaviorEditor({
+              behaviors: props.behaviorsVisual,
+              saving: busy,
+              error: props.behaviorsJsonError,
+              onChange: (b) => props.onBehaviorsVisualChange(b),
+              onSave: () => props.onBehaviorsSave(agent.id),
+              onExportJson: exportJson,
+            })
+          : jsonEditor
+      }
     </section>
   `;
 }
@@ -2644,6 +2701,7 @@ function renderDetail(props: TelegramProps) {
       ${props.activePanel === "chat" ? renderChatPanel(scenarioProps, agent) : nothing}
       ${props.activePanel === "schema" ? renderSchemaPanel(scenarioProps, agent) : nothing}
       ${props.activePanel === "leads" ? renderLeadsPanel(props, agent) : nothing}
+      ${props.activePanel === "prompts" ? renderPromptsPanel(props, agent) : nothing}
     </section>
   `;
 }
@@ -2741,6 +2799,167 @@ function renderLeadsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
           `;
         })}
       </div>
+    </section>
+  `;
+}
+
+// ─── Prompts & filters panel ─────────────────────────────────────────────────
+
+function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
+  const s = props.promptSummary;
+
+  const guardIcon = (active: boolean) => (active ? "✅" : "⬜");
+  const boolLabel = (v: boolean) => (v ? "Да" : "Нет");
+
+  // Helper: one key-value row
+  const row = (key: string, val: string, cls = "") =>
+    html`<div class="tg-prompts-setting">
+      <span class="tg-prompts-setting-key">${key}</span>
+      <span class="tg-prompts-setting-val ${cls}">${val}</span>
+    </div>`;
+
+  return html`
+    <section class="card tg-prompts-panel" style="margin-top: 12px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+        <div class="card-title" style="margin:0;">📋 Промпты и фильтры</div>
+        <button
+          type="button"
+          class="btn btn--sm"
+          ?disabled=${props.promptSummaryLoading}
+          @click=${() => props.onLoadPromptSummary(agent.id)}
+        >
+          ${props.promptSummaryLoading ? "Загрузка…" : "Обновить"}
+        </button>
+      </div>
+
+      ${
+        !s && !props.promptSummaryLoading
+          ? html`
+              <div class="empty-hint">Нажмите «Обновить», чтобы загрузить активные промпты и фильтры агента.</div>
+            `
+          : nothing
+      }
+      ${
+        props.promptSummaryLoading
+          ? html`
+              <div class="muted" style="padding: 12px 0">Загрузка данных…</div>
+            `
+          : nothing
+      }
+
+      ${
+        s
+          ? html`
+              <!-- Guards -->
+              <div class="tg-prompts-section-title">🛡️ Активные фильтры (guards)</div>
+              <div class="tg-prompts-guards">
+                ${s.guards.map(
+                  (g) => html`
+                    <div class="tg-prompts-guard ${g.active ? "active" : "inactive"}">
+                      <div class="tg-prompts-guard-header">
+                        <span class="tg-prompts-guard-icon">${guardIcon(g.active)}</span>
+                        <span class="tg-prompts-guard-name">${g.name}</span>
+                      </div>
+                      <div class="tg-prompts-guard-desc">${g.description}</div>
+                      ${g.details ? html`<div class="tg-prompts-guard-details">${g.details}</div>` : nothing}
+                    </div>
+                  `,
+                )}
+              </div>
+
+              <!-- AI Settings -->
+              <div class="tg-prompts-section-title" style="margin-top: 20px;">⚙️ Настройки ИИ</div>
+              <div class="tg-prompts-settings-grid">
+                ${row("ИИ включён", boolLabel(s.aiSettings.aiEnabled), s.aiSettings.aiEnabled ? "val-ok" : "val-off")}
+                ${row("Автозапуск", boolLabel(s.aiSettings.autoStartEnabled))}
+                ${row("Режим", s.aiSettings.mode)}
+                ${s.aiSettings.activeDiagramId ? row("Активная схема", s.aiSettings.activeDiagramId) : nothing}
+                ${row("Строгая схема", boolLabel(s.aiSettings.schemaStrict))}
+                ${row("Режим покупателя", boolLabel(s.aiSettings.buyerMode))}
+                ${s.aiSettings.buyerMode ? row("Агрессия", s.aiSettings.buyerAggression) : nothing}
+                ${s.aiSettings.buyerMode ? row("Стиль закрытия", s.aiSettings.buyerCloseStyle) : nothing}
+                ${s.aiSettings.buyerProductContext ? row("Продукт (buyer)", s.aiSettings.buyerProductContext) : nothing}
+                ${row("График", s.aiSettings.scheduleMode)}
+                ${
+                  s.aiSettings.scheduleMode === "schedule" && s.aiSettings.scheduleFrom
+                    ? row(
+                        "Окно расписания",
+                        `${s.aiSettings.scheduleFrom} – ${s.aiSettings.scheduleTo ?? "?"}`,
+                      )
+                    : nothing
+                }
+                ${s.aiSettings.workingHours ? row("Рабочие часы (guard)", s.aiSettings.workingHours) : nothing}
+                ${row("Офлайн-ответ", boolLabel(s.aiSettings.offlineReplyEnabled))}
+                ${row("Задержка ответа", s.aiSettings.replyDelayMin != null ? `${s.aiSettings.replyDelayMin}–${s.aiSettings.replyDelayMax}с` : "нет")}
+                ${row("Отвечать на", s.aiSettings.replyTo)}
+                ${s.aiSettings.leadsGroupLink ? row("Группа лидов", s.aiSettings.leadsGroupLink) : nothing}
+              </div>
+              ${
+                s.aiSettings.offlineReplyTemplate
+                  ? html`
+                      <div class="tg-prompts-template-preview" style="margin-top: 8px;">
+                        <div class="tg-prompts-template-label">Шаблон офлайн-ответа:</div>
+                        <div class="tg-prompts-template-text">${s.aiSettings.offlineReplyTemplate}</div>
+                      </div>
+                    `
+                  : nothing
+              }
+
+              <!-- Re-engagement -->
+              <div class="tg-prompts-section-title" style="margin-top: 20px;">🔔 Реактивация</div>
+              <div class="tg-prompts-settings-grid">
+                ${row("Включена", boolLabel(s.reEngagement.enabled), s.reEngagement.enabled ? "val-ok" : "val-off")}
+                ${row("Режим ИИ", s.reEngagement.aiMode)}
+                ${row("Тон", s.reEngagement.tone)}
+                ${row("ИИ продолжает", boolLabel(s.reEngagement.aiContinue))}
+                ${row("Только по имени", boolLabel(s.reEngagement.nameOnly))}
+                ${
+                  s.reEngagement.delayFrom != null
+                    ? row(
+                        "Диапазон молчания",
+                        `${s.reEngagement.delayFrom}–${s.reEngagement.delayTo ?? "?"}д${s.reEngagement.delayMore ? " + далее" : ""}`,
+                      )
+                    : s.reEngagement.delays.length > 0
+                      ? row("Задержки (дн)", s.reEngagement.delays.join(", "))
+                      : nothing
+                }
+                ${
+                  s.reEngagement.pauseMax > 0
+                    ? row(
+                        "Пауза между отправками",
+                        `${s.reEngagement.pauseMin}–${s.reEngagement.pauseMax}с`,
+                      )
+                    : nothing
+                }
+              </div>
+              ${
+                s.reEngagement.template
+                  ? html`
+                      <div class="tg-prompts-template-preview" style="margin-top: 8px;">
+                        <div class="tg-prompts-template-label">Шаблон сообщения реактивации:</div>
+                        <div class="tg-prompts-template-text">${s.reEngagement.template}</div>
+                      </div>
+                    `
+                  : nothing
+              }
+
+              <!-- Forbidden phrases -->
+              <div class="tg-prompts-section-title" style="margin-top: 20px;">🚫 Запрещённые фразы</div>
+              <div class="tg-prompts-phrases">
+                ${s.forbiddenPhrases.map(
+                  (cat) => html`
+                    <div class="tg-prompts-phrase-group">
+                      <div class="tg-prompts-phrase-category">${cat.category}</div>
+                      <div class="tg-prompts-phrase-list">
+                        ${cat.phrases.map((p) => html`<span class="tg-prompts-phrase-chip">${p}</span>`)}
+                      </div>
+                    </div>
+                  `,
+                )}
+              </div>
+            `
+          : nothing
+      }
     </section>
   `;
 }

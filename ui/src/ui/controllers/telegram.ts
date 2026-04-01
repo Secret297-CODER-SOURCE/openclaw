@@ -946,6 +946,9 @@ type TelegramScenarioState = TelegramState & {
   telegramLeads: TelegramLead[];
   telegramLeadsLoading: boolean;
   telegramLeadsError: string | null;
+  /** Prompt/filter summary for the selected agent. */
+  telegramPromptSummary: PromptSummary | null;
+  telegramPromptSummaryLoading: boolean;
 };
 
 export async function loadTelegramChatNodes(
@@ -2641,6 +2644,83 @@ export async function deleteWebchatMessage(
     state.telegramWebchatMessages = state.telegramWebchatMessages.filter((m) => m.id !== msgId);
   } catch {
     // Non-fatal — user will see the message still present; they can retry
+  }
+}
+
+// ─── Prompt summary ───────────────────────────────────────────────────────────
+
+export type PromptGuard = {
+  id: string;
+  name: string;
+  active: boolean;
+  description: string;
+  details: string;
+};
+
+export type PromptSummary = {
+  guards: PromptGuard[];
+  aiSettings: {
+    aiEnabled: boolean;
+    autoStartEnabled: boolean;
+    mode: "disabled" | "schema" | "free";
+    activeDiagramId: string | null;
+    schemaStrict: boolean;
+    buyerMode: boolean;
+    buyerAggression: string;
+    buyerCloseStyle: string;
+    buyerProductContext: string | null;
+    scheduleMode: string;
+    scheduleFrom: string | null;
+    scheduleTo: string | null;
+    workingHours: string | null;
+    managerWorkFrom: string | null;
+    managerWorkTo: string | null;
+    offlineReplyEnabled: boolean;
+    offlineReplyTemplate: string | null;
+    replyDelayMin: number | null;
+    replyDelayMax: number | null;
+    replyTo: string;
+    leadsGroupLink: string | null;
+  };
+  reEngagement: {
+    enabled: boolean;
+    aiMode: string;
+    delays: number[];
+    delayFrom: number | null;
+    delayTo: number | null;
+    delayMore: boolean;
+    pauseMin: number;
+    pauseMax: number;
+    nameOnly: boolean;
+    tone: string;
+    aiContinue: boolean;
+    template: string | null;
+  };
+  forbiddenPhrases: Array<{ category: string; phrases: string[] }>;
+};
+
+export type PromptSummaryState = {
+  client: GatewayBrowserClient | null;
+  telegramPromptSummary: PromptSummary | null;
+  telegramPromptSummaryLoading: boolean;
+};
+
+export async function loadPromptSummary(state: PromptSummaryState, agentId: string): Promise<void> {
+  if (!state.client) {
+    return;
+  }
+  state.telegramPromptSummaryLoading = true;
+  try {
+    const res = await state.client.request<PromptSummary>("telegram.agent.getPromptSummary", {
+      agentId,
+    });
+    state.telegramPromptSummary = (res as unknown as Record<string, unknown>)?.data
+      ? ((res as unknown as Record<string, unknown>).data as PromptSummary)
+      : res;
+  } catch {
+    // non-fatal
+  } finally {
+    state.telegramPromptSummaryLoading = false;
   }
 }
 

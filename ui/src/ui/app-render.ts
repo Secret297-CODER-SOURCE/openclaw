@@ -125,6 +125,7 @@ import {
   deleteTelegramLead,
   saveTelegramLead,
   buildFromTraining,
+  loadPromptSummary,
 } from "./controllers/telegram.ts";
 import { icons } from "./icons.ts";
 import { TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
@@ -580,6 +581,8 @@ export function renderApp(state: AppViewState) {
                 otpPassword: state.telegramOtpPassword,
                 behaviorsJson: state.telegramBehaviorsJson,
                 behaviorsJsonError: state.telegramBehaviorsJsonError,
+                behaviorsVisual: state.telegramBehaviorsVisual,
+                behaviorsEditorMode: state.telegramBehaviorsEditorMode,
                 apiIdConfigured: state.telegramApiIdConfigured,
                 setupApiId: state.telegramSetupApiId,
                 setupApiHash: state.telegramSetupApiHash,
@@ -608,8 +611,11 @@ export function renderApp(state: AppViewState) {
                   state.telegramAuthError = null;
                   // Pre-fill behaviors JSON with current agent's behaviors
                   const agent = state.telegramAgents.find((a) => a.id === id);
-                  state.telegramBehaviorsJson = JSON.stringify(agent?.behaviors ?? [], null, 2);
+                  const behaviors = (agent?.behaviors ??
+                    []) as import("./views/telegram-behavior-editor.ts").BehaviorConfig[];
+                  state.telegramBehaviorsJson = JSON.stringify(behaviors, null, 2);
                   state.telegramBehaviorsJsonError = null;
+                  state.telegramBehaviorsVisual = behaviors;
                   // Reset files state when switching agents
                   state.agentFilesList = null;
                   state.agentFilesError = null;
@@ -670,6 +676,8 @@ export function renderApp(state: AppViewState) {
                     void loadConversationStates(state, id);
                     void loadLeads(state, id);
                   }
+                  // Reset prompt summary when switching agents
+                  state.telegramPromptSummary = null;
                   // Reset webchat state for the new agent
                   if (state._telegramWebchatPollTimer !== null) {
                     clearInterval(state._telegramWebchatPollTimer);
@@ -737,6 +745,9 @@ export function renderApp(state: AppViewState) {
                       state.telegramSchemaScope,
                     );
                   }
+                  if (panel === "prompts" && state.telegramSelectedId) {
+                    void loadPromptSummary(state, state.telegramSelectedId);
+                  }
                 },
                 onCreateNameChange: (v) => {
                   state.telegramCreateName = v;
@@ -792,19 +803,52 @@ export function renderApp(state: AppViewState) {
                 onBehaviorsJsonChange: (v) => {
                   state.telegramBehaviorsJson = v;
                   try {
-                    JSON.parse(v);
+                    const parsed = JSON.parse(v);
                     state.telegramBehaviorsJsonError = null;
+                    // Keep visual in sync when editing JSON
+                    state.telegramBehaviorsVisual = Array.isArray(parsed) ? parsed : [];
                   } catch (e) {
                     state.telegramBehaviorsJsonError = String(e);
                   }
                 },
                 onBehaviorsSave: async (id) => {
                   try {
-                    const parsed = JSON.parse(state.telegramBehaviorsJson);
-                    await setBehaviorsTelegramAgent(state, id, parsed);
+                    // Use visual array in visual mode, parsed JSON otherwise
+                    const behaviors =
+                      state.telegramBehaviorsEditorMode === "visual"
+                        ? state.telegramBehaviorsVisual
+                        : JSON.parse(state.telegramBehaviorsJson);
+                    await setBehaviorsTelegramAgent(state, id, behaviors);
                   } catch (e) {
                     state.telegramBehaviorsJsonError = String(e);
                   }
+                },
+                onBehaviorsVisualChange: (behaviors) => {
+                  state.telegramBehaviorsVisual = behaviors;
+                  // Keep JSON in sync for mode switching
+                  state.telegramBehaviorsJson = JSON.stringify(behaviors, null, 2);
+                  state.telegramBehaviorsJsonError = null;
+                },
+                onBehaviorsEditorModeChange: (mode) => {
+                  // Sync data between modes when switching
+                  if (mode === "visual" && state.telegramBehaviorsEditorMode === "json") {
+                    try {
+                      const parsed = JSON.parse(state.telegramBehaviorsJson);
+                      state.telegramBehaviorsVisual = Array.isArray(parsed) ? parsed : [];
+                      state.telegramBehaviorsJsonError = null;
+                    } catch (e) {
+                      state.telegramBehaviorsJsonError = String(e);
+                      return; // Don't switch if JSON is invalid
+                    }
+                  } else if (mode === "json" && state.telegramBehaviorsEditorMode === "visual") {
+                    state.telegramBehaviorsJson = JSON.stringify(
+                      state.telegramBehaviorsVisual,
+                      null,
+                      2,
+                    );
+                    state.telegramBehaviorsJsonError = null;
+                  }
+                  state.telegramBehaviorsEditorMode = mode;
                 },
                 onSetupApiIdChange: (v) => {
                   state.telegramSetupApiId = v;
@@ -1546,6 +1590,12 @@ export function renderApp(state: AppViewState) {
                 },
                 onSaveLead: (lead) => {
                   void saveTelegramLead(state, lead);
+                },
+                // Prompts & filters tab
+                promptSummary: state.telegramPromptSummary,
+                promptSummaryLoading: state.telegramPromptSummaryLoading,
+                onLoadPromptSummary: (agentId) => {
+                  void loadPromptSummary(state, agentId);
                 },
               })
             : nothing

@@ -4311,7 +4311,7 @@ select.input:focus {
   height: 16px;
   flex-shrink: 0;
   cursor: pointer;
-  accent-color: var(--accent, var(--primary, #4a9eff));
+  accent-color: var(--accent, #4a9eff);
 }
 
 .tg-toggle-row__label {
@@ -4619,3 +4619,314 @@ select.input:focus {
   opacity: 1;
   color: #ff5555;
 }
+
+/* ── Prompts & filters panel ── */
+.tg-prompts-panel {
+  /* inherits .card */
+}
+
+.tg-prompts-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary, var(--text-muted));
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 10px;
+}
+
+.tg-prompts-guards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tg-prompts-guard {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg-muted, rgba(255, 255, 255, 0.03));
+}
+
+.tg-prompts-guard.active {
+  border-color: var(--ok, #3dbb70);
+}
+
+.tg-prompts-guard.inactive {
+  opacity: 0.55;
+}
+
+.tg-prompts-guard-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tg-prompts-guard-icon {
+  font-size: 14px;
+}
+
+.tg-prompts-guard-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tg-prompts-guard-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+  margin-left: 22px;
+}
+
+.tg-prompts-guard-details {
+  font-size: 11px;
+  color: var(--accent, #4a9eff);
+  margin-top: 3px;
+  margin-left: 22px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tg-prompts-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px;
+}
+
+.tg-prompts-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--bg-muted, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.tg-prompts-setting-key {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.tg-prompts-setting-val {
+  font-weight: 600;
+  text-align: right;
+}
+
+.tg-prompts-setting-val.val-ok {
+  color: var(--ok, #3dbb70);
+}
+
+.tg-prompts-setting-val.val-off {
+  color: var(--text-muted);
+}
+
+.tg-prompts-template-preview {
+  margin-top: 10px;
+  background: var(--bg-muted, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.tg-prompts-template-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tg-prompts-template-text {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tg-prompts-phrases {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tg-prompts-phrase-group {
+  background: var(--bg-muted, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.tg-prompts-phrase-category {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary, var(--text-muted));
+  margin-bottom: 6px;
+}
+
+.tg-prompts-phrase-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tg-prompts-phrase-chip {
+  display: inline-block;
+  background: rgba(255, 85, 85, 0.12);
+  border: 1px solid rgba(255, 85, 85, 0.3);
+  color: #ff8888;
+  border-radius: 12px;
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ── Behavior editor (tg-be-*) ── */
+
+.tg-be {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tg-be-section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-muted, rgba(255, 255, 255, 0.03));
+  overflow: hidden;
+}
+
+.tg-be-section-header {
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tg-be-section-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tg-be-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.tg-be-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.tg-be-fields {
+  padding: 0 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.tg-be-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tg-be-field.tg-be-row {
+  flex-direction: row;
+  align-items: center;
+}
+
+.tg-be-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary, var(--text-muted, #999));
+}
+
+.tg-be-hint {
+  font-weight: 400;
+  opacity: 0.6;
+}
+
+.tg-be-input,
+.tg-be-textarea {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input, rgba(0, 0, 0, 0.2));
+  color: inherit;
+  font-size: 13px;
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.tg-be-input:focus,
+.tg-be-textarea:focus {
+  outline: none;
+  border-color: var(--accent, #4a9eff);
+}
+
+.tg-be-input--sm {
+  max-width: 120px;
+}
+
+.tg-be-textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+
+.tg-be-btn-group {
+  display: flex;
+  gap: 4px;
+}
+
+.tg-be-btn {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-muted, rgba(255, 255, 255, 0.03));
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.tg-be-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.tg-be-btn.active {
+  background: var(--accent, #4a9eff);
+  border-color: var(--accent, #4a9eff);
+  color: #fff;
+}
+
+.tg-be-btn.danger {
+  color: #ff5555;
+  border-color: rgba(255, 85, 85, 0.4);
+}
+
+.tg-be-template-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.tg-be-template-row .tg-be-input {
+  flex: 1;
+}
+
+.tg-be-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+

@@ -258,6 +258,9 @@ export class OpenClawApp extends LitElement {
   @state() telegramActivePanel: import("./views/telegram.ts").TelegramPanel = "overview";
   @state() telegramBehaviorsJson = "[]";
   @state() telegramBehaviorsJsonError: string | null = null;
+  @state() telegramBehaviorsVisual: import("./views/telegram-behavior-editor.ts").BehaviorConfig[] =
+    [];
+  @state() telegramBehaviorsEditorMode: "visual" | "json" = "visual";
   // Telegram credentials setup overlay
   @state() telegramApiIdConfigured: boolean | null = null; // null = unknown (not yet loaded)
   @state() telegramSetupApiId = "";
@@ -310,6 +313,8 @@ export class OpenClawApp extends LitElement {
   @state() telegramLeads: import("./controllers/telegram.ts").TelegramLead[] = [];
   @state() telegramLeadsLoading = false;
   @state() telegramLeadsError: string | null = null;
+  @state() telegramPromptSummary: import("./controllers/telegram.ts").PromptSummary | null = null;
+  @state() telegramPromptSummaryLoading = false;
   @state() telegramCoachingTips: Record<string, import("./controllers/telegram.ts").CoachingTips> =
     {};
   @state() telegramCoachingLoading: Set<string> = new Set();

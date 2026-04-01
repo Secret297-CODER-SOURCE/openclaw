@@ -224,6 +224,137 @@ export class TelegramPlugin implements GatewayPlugin {
           break;
         }
 
+        case "telegram.agent.getPromptSummary": {
+          if (!p.agentId) {
+            fail("agentId is required");
+            break;
+          }
+          const s = this.storage.getAgentSettings(String(p.agentId));
+          const workHours =
+            s.managerWorkFrom && s.managerWorkTo ? `${s.managerWorkFrom}–${s.managerWorkTo}` : null;
+          respond({
+            guards: [
+              {
+                id: "enforceWorkingHours",
+                name: "🕐 Рабочие часы",
+                active: !!(s.managerWorkFrom && s.managerWorkTo),
+                description:
+                  "Перехватывает нерабочее время в ответах ИИ и предлагает ближайший доступный слот",
+                details: workHours ?? "не настроены — guard отключён",
+              },
+              {
+                id: "enforceNoAssumptiveClaims",
+                name: "🚫 Без предположений о клиенте",
+                active: true,
+                description:
+                  "Удаляет/переписывает фразы, приписывающие клиенту слова или профессию",
+                details:
+                  "«ты говорил» → «я думаю тебе будет интересно» | «из айти сферы» → удалено",
+              },
+              {
+                id: "enforceFirstPerson",
+                name: "👤 Первое лицо единственного числа",
+                active: true,
+                description:
+                  "Заменяет корпоративное «мы» на личное «я» в реактивационных сообщениях",
+                details: "мы→я | можем→могу | sunabiliriz→sunabilirim | we→I",
+              },
+              {
+                id: "stripPhoneNumbers",
+                name: "📵 Блокировка телефонных номеров",
+                active: true,
+                description: "Удаляет все телефонные номера из ответов ИИ",
+                details: "regex: +7, 8-xxx, международные форматы",
+              },
+              {
+                id: "openEndedTimeGuard",
+                name: "📅 Блокировка «в любое время»",
+                active: !!(s.managerWorkFrom && s.managerWorkTo),
+                description:
+                  "Заменяет открытые предложения времени на конкретный слот в рабочем окне",
+                details: "«подстроюсь под любое» → «давай в HH:MM»",
+              },
+            ],
+            aiSettings: {
+              aiEnabled: s.aiEnabled !== false,
+              autoStartEnabled: s.autoStartEnabled !== false,
+              mode: s.aiEnabled === false ? "disabled" : s.useSchema ? "schema" : "free",
+              activeDiagramId: s.activeDiagramId ?? null,
+              schemaStrict: s.schemaStrictMode ?? false,
+              buyerMode: s.schemaDeliveryStyle === "buyer",
+              buyerAggression: s.buyerAggressionLevel ?? "balanced",
+              buyerCloseStyle: s.buyerCloseStyle ?? "alternative",
+              buyerProductContext: (s as any).buyerProductContext ?? null,
+              scheduleMode: s.scheduleMode,
+              scheduleFrom: s.scheduleFrom ?? null,
+              scheduleTo: s.scheduleTo ?? null,
+              workingHours: workHours,
+              managerWorkFrom: s.managerWorkFrom ?? null,
+              managerWorkTo: s.managerWorkTo ?? null,
+              offlineReplyEnabled: s.offlineReplyEnabled ?? false,
+              offlineReplyTemplate: s.offlineReplyTemplate ?? null,
+              replyDelayMin: s.replyDelayMin ?? null,
+              replyDelayMax: s.replyDelayMax ?? null,
+              replyTo: s.replyTo,
+              leadsGroupLink: s.leadsGroupLink ?? null,
+            },
+            reEngagement: {
+              enabled: s.reEngagementEnabled ?? false,
+              aiMode: s.reEngagementAiMode ?? "template",
+              delays: s.reEngagementDelays ?? [],
+              delayFrom: s.reEngagementDelayFrom ?? null,
+              delayTo: s.reEngagementDelayTo ?? null,
+              delayMore: s.reEngagementDelayMore ?? false,
+              pauseMin: s.reEngagementPauseMin ?? 0,
+              pauseMax: s.reEngagementPauseMax ?? 0,
+              nameOnly: s.reEngagementNameOnly ?? false,
+              tone: s.reEngagementTone ?? "balanced",
+              aiContinue: s.reEngagementAiContinue ?? false,
+              template: s.reEngagementTemplate ? s.reEngagementTemplate.slice(0, 200) : null,
+            },
+            forbiddenPhrases: [
+              {
+                category: "Сомнения клиента",
+                phrases: ["ты сомневался", "ты не был уверен", "колебался"],
+              },
+              {
+                category: "Предположения о сфере деятельности",
+                phrases: ["из айти сферы", "в IT сфере", "как айтишник", "для бизнеса"],
+              },
+              {
+                category: "Нарратив о клиенте",
+                phrases: [
+                  "ты говорил",
+                  "ты писал",
+                  "ты упоминал",
+                  "ты говоришь, что",
+                  "ты хочешь найти",
+                ],
+              },
+              {
+                category: "Открытые предложения времени",
+                phrases: ["подстроюсь под любое", "в любое время", "когда тебе удобно/комфортнее"],
+              },
+              {
+                category: "Корпоративный стиль (мы→я)",
+                phrases: ["мы можем", "мы предлагаем", "sunabiliriz", "we can offer", "we offer"],
+              },
+              {
+                category: "Клише и пустые фразы",
+                phrases: [
+                  "рад помочь",
+                  "отличный вопрос",
+                  "конечно!",
+                  "как дела?",
+                  "чем могу помочь?",
+                  "надеюсь",
+                ],
+              },
+            ],
+          });
+          break;
+        }
+
         case "telegram.agent.setSettings": {
           if (!p.agentId) {
             fail("agentId is required");

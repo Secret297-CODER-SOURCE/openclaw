@@ -176,6 +176,8 @@ export type AppViewState = {
   telegramActivePanel: import("./views/telegram.ts").TelegramPanel;
   telegramBehaviorsJson: string;
   telegramBehaviorsJsonError: string | null;
+  telegramBehaviorsVisual: import("./views/telegram-behavior-editor.ts").BehaviorConfig[];
+  telegramBehaviorsEditorMode: "visual" | "json";
   // Telegram credentials setup overlay
   telegramApiIdConfigured: boolean | null; // null = not yet loaded
   telegramSetupApiId: string;
@@ -229,6 +231,9 @@ export type AppViewState = {
   telegramLeads: import("./controllers/telegram.ts").TelegramLead[];
   telegramLeadsLoading: boolean;
   telegramLeadsError: string | null;
+  /** Prompt/filter summary for the selected agent. */
+  telegramPromptSummary: import("./controllers/telegram.ts").PromptSummary | null;
+  telegramPromptSummaryLoading: boolean;
   /** AI coaching tips per chatId — fetched on demand, persisted to DB. */
   telegramCoachingTips: Record<string, import("./controllers/telegram.ts").CoachingTips>;
   telegramCoachingLoading: Set<string>;
