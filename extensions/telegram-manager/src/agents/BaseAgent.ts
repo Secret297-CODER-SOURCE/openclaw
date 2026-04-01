@@ -295,6 +295,48 @@ export abstract class BaseAgent extends EventEmitter {
    * Example to block: "Ты говоришь, что из айти сферы..." when the client
    * never mentioned IT. This keeps manager replies factual and confident.
    */
+  /**
+   * Post-processing guard: replace first-person plural ("мы/можем") with singular ("я/могу").
+   * Re-engagement messages must always sound like the individual manager, not a company.
+   * Covers Russian, Turkish (biz/sunabiliriz → ben/sunabilirim) and English (we → I).
+   */
+  protected enforceFirstPerson(text: string): string {
+    return (
+      text
+        // Russian: мы → я, нам → мне, нас → меня, наш/нашей/нашу → мой/мне
+        .replace(/\bмы\b/gi, "я")
+        .replace(/\bнам\b/gi, "мне")
+        .replace(/\bнас\b/gi, "меня")
+        .replace(/\bнашег[оа]\b/gi, "моего")
+        .replace(/\bнашей\b/gi, "моей")
+        .replace(/\bнашу\b/gi, "мою")
+        .replace(/\bнаш[иеа]?\b/gi, "мой")
+        // Russian verbs: -им/-ем/-аем/-яем (plural 1st) → -ю/-ю (singular) — common sales verbs
+        .replace(/\bможем\b/gi, "могу")
+        .replace(/\bпредлагаем\b/gi, "предлагаю")
+        .replace(/\bпомогаем\b/gi, "помогаю")
+        .replace(/\bзвоним\b/gi, "звоню")
+        .replace(/\bработаем\b/gi, "работаю")
+        .replace(/\bдаём\b/gi, "даю")
+        .replace(/\bдаем\b/gi, "даю")
+        .replace(/\bделаем\b/gi, "делаю")
+        // Turkish: biz → ben, bizim → benim, -riz/-rız/-riz/-ruz (plural) → -rim/-rım/-rim/-rum (singular)
+        .replace(/\bbiz\b/gi, "ben")
+        .replace(/\bbizim\b/gi, "benim")
+        .replace(/\bsunabiliriz\b/gi, "sunabilirim")
+        .replace(/\byapabiliriz\b/gi, "yapabilirim")
+        .replace(/\bverebiliriz\b/gi, "verebilirim")
+        .replace(/\byardımcı\s+olabiliriz\b/gi, "yardımcı olabilirim")
+        // English: we → I, our → my, we can → I can
+        .replace(/\bwe\b/g, "I")
+        .replace(/\bour\b/g, "my")
+        .replace(/\bwe can\b/gi, "I can")
+        .replace(/\bwe offer\b/gi, "I offer")
+        .replace(/\s{2,}/g, " ")
+        .trim()
+    );
+  }
+
   protected enforceNoAssumptiveClaims(
     reply: string,
     history: Array<{ role: string; content: string }>,
@@ -3068,6 +3110,7 @@ export abstract class BaseAgent extends EventEmitter {
         `• ${aggressionLine}\n` +
         "• 1–2 предложения максимум\n" +
         "• Пиши на языке клиента (определи по истории)\n" +
+        "• СТРОГО первое лицо ЕДИНСТВЕННОГО числа: 'я', 'могу', 'предлагаю', 'звоню' — ЗАПРЕЩЕНО 'мы', 'можем', 'предлагаем' на любом языке\n" +
         "• Только готовый текст сообщения — без кавычек, пояснений, заголовков";
 
       const userPrompt =
@@ -3080,7 +3123,9 @@ export abstract class BaseAgent extends EventEmitter {
       void erIsBuyer; // already embedded in prompt logic above
 
       const enhanced = await callAdapterOnce(userPrompt, systemPrompt);
-      return enhanced.replace(/^["«»']+|["«»']+$/g, "").trim() || baseMessage;
+      return (
+        this.enforceFirstPerson(enhanced.replace(/^["«»']+|["«»']+$/g, "").trim()) || baseMessage
+      );
     } catch {
       return baseMessage;
     }
@@ -3153,6 +3198,7 @@ export abstract class BaseAgent extends EventEmitter {
         "• Говори его языком (определи по истории)\n" +
         `• ${aggressionHint}\n` +
         "• 1–2 предложения максимум\n" +
+        "• СТРОГО первое лицо ЕДИНСТВЕННОГО числа: 'я', 'могу', 'предлагаю' — ЗАПРЕЩЕНО 'мы', 'можем', 'предлагаем' на любом языке\n" +
         "• Только готовый текст — без кавычек, пояснений, заголовков";
 
       const userPrompt =
@@ -3162,7 +3208,7 @@ export abstract class BaseAgent extends EventEmitter {
         `напиши одно сообщение которое говорит о ЕГО цели и даёт повод ответить.`;
 
       const result = await callAdapterOnce(userPrompt, systemPrompt);
-      return result.replace(/^["«»']+|["«»']+$/g, "").trim() || null;
+      return this.enforceFirstPerson(result.replace(/^["«»']+|["«»']+$/g, "").trim()) || null;
     } catch (e) {
       this.logger.warn(
         `[TG:${this.name}] re-engagement AI generation failed | chat=${contact.chatId}: ${String(e)}`,
