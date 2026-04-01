@@ -221,15 +221,20 @@ export abstract class BaseAgent extends EventEmitter {
     const fromMin = toMinutes(from);
     const toMin = toMinutes(to);
 
-    // Check if the AI's reply mentions any time outside the working window.
-    // Fire always — both when online and offline — so the AI never FIRST agrees
-    // to an out-of-hours slot and then reverses course in the next message.
+    // Check if the AI's reply mentions any time outside the working window,
+    // OR makes an open-ended "any time" offer that bypasses the hours constraint
+    // (e.g. "подстроюсь под любое", "в любое время", "когда удобно тебе").
+    const openEndedRe =
+      /подстро(?:юсь|имся)\s+под\s+(?:любое|любой|любую)|в\s+любое\s+врем|когда\s+(?:тебе|вам)\s+(?:удобно|комфортнее?)\s*[.,]?\s*$/i;
+
     const timeRe =
       /(?:после|в|к|около|после\s+\d{1,2}|\b)(\d{1,2})[:\.]\d{2}|(?:после|в|к|около)\s+(\d{1,2})(?!\d)/gi;
 
     let m: RegExpExecArray | null;
     let outsideFound = false;
     let offendingTime = ""; // the specific out-of-hours time the AI mentioned
+    const isOpenEnded = openEndedRe.test(reply);
+
     while ((m = timeRe.exec(reply)) !== null) {
       const rawHour = parseInt(m[1] ?? m[2] ?? "-1", 10);
       if (rawHour < 0) continue;
@@ -242,7 +247,10 @@ export abstract class BaseAgent extends EventEmitter {
       }
     }
 
-    if (!outsideFound) return reply;
+    // Open-ended offers ("any time today") are equivalent to agreeing to out-of-hours
+    // times — replace them with a concrete in-hours slot too.
+    if (!outsideFound && !isOpenEnded) return reply;
+    if (!outsideFound && isOpenEnded) offendingTime = "";
 
     const now = new Date();
     const nowMin = now.getHours() * 60 + now.getMinutes();
@@ -266,13 +274,19 @@ export abstract class BaseAgent extends EventEmitter {
       `[TG:${this.name}] enforceWorkingHours: blocked out-of-hours time (${offendingTime}), redirecting to ${proposalTime} ${whenLabel}`,
     );
 
-    // Natural rejection — mentions the specific bad time and proposes a concrete alternative.
-    // Sounds like the manager catching themselves, not a robotic canned reply.
+    // Natural message — mentions specific bad time if known, or just anchors to a concrete slot.
+    if (offendingTime) {
+      // Specific out-of-hours time detected
+      return within
+        ? `Кстати, ${offendingTime} — это уже за рамками рабочего дня, я работаю до ${to}. ` +
+            `Давай ${whenLabel} в ${proposalTime}? Удобно?`
+        : `Рабочий день уже завершился — работаю с ${from} до ${to}. ` +
+            `Предлагаю завтра в ${proposalTime} — удобно?`;
+    }
+    // Open-ended offer ("любое время") — anchor to a concrete slot without sounding defensive.
     return within
-      ? `Кстати, ${offendingTime} — это уже за рамками рабочего дня, я работаю до ${to}. ` +
-          `Давай ${whenLabel} в ${proposalTime}? Удобно?`
-      : `Рабочий день уже завершился — работаю с ${from} до ${to}. ` +
-          `Предлагаю завтра в ${proposalTime} — удобно?`;
+      ? `Я работаю до ${to}, так что давай ${whenLabel} в ${proposalTime} — удобно?`
+      : `Я буду доступен завтра с ${from}. Давай в ${proposalTime} — удобно?`;
   }
 
   /**
@@ -286,8 +300,9 @@ export abstract class BaseAgent extends EventEmitter {
     history: Array<{ role: string; content: string }>,
     latestUserText?: string,
   ): string {
-    // Rewrite direct "you said/say" references into a softer manager-led style.
-    // Covers past tense (говорил, писал, упоминал) AND present tense (говоришь, что).
+    // Rewrite direct "you said/say" and "you want/seek" narration into manager-led style.
+    // Covers past tense (говорил, писал, упоминал), present tense (говоришь, что),
+    // and client-intent narration (ты хочешь, ты ищешь, ты пытаешься).
     const toneRewritten = reply
       .replace(
         /\b(ты|вы)\s+(?:говорил(?:а|и)?|говоришь|писал(?:а|и)?|упоминал(?:а|и)?)(?:,?\s+что)?\b/gi,
@@ -295,6 +310,11 @@ export abstract class BaseAgent extends EventEmitter {
           pronoun.toLowerCase() === "вы"
             ? "я думаю вам будет интересно"
             : "я думаю тебе будет интересно",
+      )
+      // Narrating client's intent ("ты хочешь найти время...") — replace with manager-led action.
+      .replace(
+        /\b(ты|вы)\s+(?:хочешь|хотите|ищешь|ищете|пытаешься|пытаетесь|стараешься|стараетесь)\s+(?:\w+\s+){0,4}/gi,
+        "",
       )
       .replace(/\bпомнишь,?\s+мы\s+говорили\b/gi, "я думаю тебе будет интересно")
       .replace(/\bкак\s+ты\s+говорил(?:а|и)?\b/gi, "я думаю тебе будет интересно")
@@ -636,7 +656,8 @@ export abstract class BaseAgent extends EventEmitter {
       `• Упоминать сомнения клиента: "ты сомневался", "ты не был уверен", "колебался" — не сей сомнение\n` +
       `• Предполагать сферу деятельности (IT, айти, бизнес и т.д.) без явного упоминания клиента\n` +
       `• Предлагать дешевле, аналоги или «другие варианты» при ценовом возражении — ты уверен в своём предложении, держись его\n` +
-      `• Писать формулировки вида «ты говорил/ты писал/ты упоминал/ты говоришь, что» — вместо этого: «я думаю тебе будет интересно…»\n\n` +
+      `• Писать формулировки вида «ты говорил/ты писал/ты упоминал/ты говоришь, что/ты хочешь найти» — вместо этого говори от себя: «давай созвонимся…»\n` +
+      `• Предлагать «подстроиться под любое время» или «в любое время» — всегда называй конкретное время в рамках рабочего дня\n\n` +
       `## СОЦИАЛЬНОЕ ДОКАЗАТЕЛЬСТВО (если нужно):\n` +
       `Используй обобщённые формулировки: "многие наши клиенты / люди в похожей ситуации / ваши коллеги уже..." — ` +
       `без привязки к конкретной сфере, если клиент её не называл.\n\n` +
@@ -2046,7 +2067,8 @@ export abstract class BaseAgent extends EventEmitter {
       `• Никогда не раскрывай, что ты ИИ.\n` +
       `• ЗАПРЕЩЕНО упоминать сомнения клиента: "ты сомневался", "ты не был уверен", "колебался" — не напоминай о сомнениях.\n` +
       `• ЗАПРЕЩЕНО предполагать сферу деятельности (IT, айти и т.д.) без явного упоминания клиента.\n` +
-      `• ЗАПРЕЩЕНО писать «ты говорил/ты писал/ты упоминал/ты говоришь, что». Используй стиль: «я думаю тебе будет интересно…».\n` +
+      `• ЗАПРЕЩЕНО писать «ты говорил/ты писал/ты упоминал/ты говоришь, что/ты хочешь». Говори от себя: «давай созвонимся / я предлагаю...».\n` +
+      `• ЗАПРЕЩЕНО «подстроюсь под любое время» / «когда тебе удобно» без конкретики — всегда называй конкретный слот.\n` +
       `• Социальное доказательство — без привязки к сфере: "многие наши клиенты / люди в похожей ситуации уже...".\n` +
       (settings.managerWorkFrom && settings.managerWorkTo
         ? `• Предлагай время звонка/встречи ТОЛЬКО в рабочие часы: ${settings.managerWorkFrom}–${settings.managerWorkTo}.\n`
@@ -2607,10 +2629,11 @@ export abstract class BaseAgent extends EventEmitter {
       `• Раскрывать что ты ИИ\n` +
       `• Пустые фразы: "рад помочь", "отличный вопрос", "конечно"\n` +
       `• Предлагать дешевле, аналоги или «другие варианты» при ценовом возражении — держись своей рекомендации\n` +
-      `• Писать «ты говорил/вы говорили/ты писал/ты упоминал/ты говоришь, что» — вместо этого: «я думаю тебе будет интересно…»\n` +
+      `• Писать «ты говорил/ты писал/ты упоминал/ты говоришь/ты хочешь» — говори от себя: «давай созвонимся / я предлагаю...»\n` +
+      `• «Подстроюсь под любое время» / «когда тебе удобно» без конкретики — всегда называй конкретный слот\n` +
       `• Предполагать сферу деятельности клиента (IT, айти, бизнес и т.д.) без явного упоминания\n` +
       (agentSettings.managerWorkFrom && agentSettings.managerWorkTo
-        ? `• Предлагать время за пределами рабочего дня (${agentSettings.managerWorkFrom}–${agentSettings.managerWorkTo}) — только в это окно\n`
+        ? `• Предлагать время за пределами рабочего дня (${agentSettings.managerWorkFrom}–${agentSettings.managerWorkTo}) или говорить «в любое время» — называй конкретный слот в рамках рабочего окна\n`
         : "") +
       `• ${strict ? "Выходить за рамки скрипта." : "Зацикливаться на одном — двигайся дальше."}\n\n` +
       `2–3 предложения. Telegram-стиль. Без пустых строк.`;
