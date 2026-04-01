@@ -830,6 +830,10 @@ export type AgentSettings = {
   buyerAggressionLevel?: "soft" | "balanced" | "hard";
   /** Lead-capture technique in buyer mode: "alternative" | "direct" | "micro-step". */
   buyerCloseStyle?: "alternative" | "direct" | "micro-step";
+  /** Context about the product/service injected into the buyer-mode system prompt. */
+  buyerProductContext?: string;
+  /** Custom phrases/keywords the AI must never say. One per line. */
+  customForbiddenPhrases?: string[];
   // ── Re-engagement ───────────────────────────────────────────────────────────
   reEngagementEnabled?: boolean;
   reEngagementDelays?: number[];

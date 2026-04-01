@@ -275,6 +275,19 @@ export interface AgentSettings {
   buyerCloseStyle?: "alternative" | "direct" | "micro-step";
 
   /**
+   * Free-text description of the product/service injected into buyer-mode system prompts.
+   * Example: "Мы продаём CRM для малого бизнеса — автоматизация лидов, $29/мес"
+   */
+  buyerProductContext?: string;
+
+  /**
+   * Extra phrases/words the AI must never include in replies.
+   * The enforceCustomForbiddenPhrases() guard strips/rewrites any match before sending.
+   * One phrase per array item; case-insensitive substring match.
+   */
+  customForbiddenPhrases?: string[];
+
+  /**
    * When true and scheduleMode === "schedule", the AI continues chatting and
    * processing leads while the manager is offline.  The AI knows the manager's
    * working hours ({от}/{до}) and focuses on qualifying the lead and collecting

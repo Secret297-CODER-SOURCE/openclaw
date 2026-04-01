@@ -401,6 +401,28 @@ export abstract class BaseAgent extends EventEmitter {
   }
 
   /**
+   * Post-processing guard: strip any phrases listed in settings.customForbiddenPhrases.
+   * Uses case-insensitive substring matching and removes the matched segment plus
+   * surrounding whitespace.  Returns the text unchanged when no list is configured.
+   */
+  protected enforceCustomForbiddenPhrases(text: string, settings: AgentSettings): string {
+    const phrases = settings.customForbiddenPhrases;
+    if (!phrases || phrases.length === 0) return text;
+    let result = text;
+    for (const phrase of phrases) {
+      const trimmed = phrase.trim();
+      if (!trimmed) continue;
+      // Escape regex special chars and match case-insensitively
+      const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      result = result
+        .replace(new RegExp(escaped, "gi"), "")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+    }
+    return result;
+  }
+
+  /**
    * AI-driven offline mode: the manager is unavailable, but the AI continues
    * chatting, qualifies the lead, and collects a convenient callback time.
    *
@@ -714,8 +736,9 @@ export abstract class BaseAgent extends EventEmitter {
         .replace(/\s{2,}/g, " ")
         .trim();
       const assumptionSafeReply = this.enforceNoAssumptiveClaims(stripped, recentHistory, userText);
+      const customSafeReply = this.enforceCustomForbiddenPhrases(assumptionSafeReply, settings);
       // Apply working hours guard before logging so the logged text matches what was sent.
-      const finalReply = this.enforceWorkingHours(assumptionSafeReply, settings) || null;
+      const finalReply = this.enforceWorkingHours(customSafeReply, settings) || null;
 
       const offlineSignal = this.getSignalId(recentHistory);
       const replySource = isReEngagedOffline ? "reengagement-reply" : "offline-lead";
@@ -2223,7 +2246,10 @@ export abstract class BaseAgent extends EventEmitter {
         // Dynamic instructions based on the three buyer sub-settings.
         const aggression = settings.buyerAggressionLevel ?? "balanced";
         const closeStyle = settings.buyerCloseStyle ?? "alternative";
-        // AI infers product/niche from conversation history — no manual field needed.
+        const productCtx = settings.buyerProductContext?.trim();
+        if (productCtx) {
+          systemPrompt += `\n## ПРОДУКТ / КОНТЕКСТ:\n${productCtx}\n`;
+        }
 
         // Lead-capture instruction: goal is to get contact info / book a call, not close a sale.
         const closeInstruction =
@@ -2464,13 +2490,14 @@ export abstract class BaseAgent extends EventEmitter {
       await advanceNode(currentNode.type);
     }
 
-    // Final safety: never send phone numbers; block out-of-hours times.
+    // Final safety: never send phone numbers; block out-of-hours times; strip custom phrases.
     const sanitizedReply = this.enforceNoAssumptiveClaims(
       stripPhoneNumbers(reply),
       conversationHistory,
       userText,
     );
-    const finalReply = this.enforceWorkingHours(sanitizedReply, settings) || null;
+    const customSafe = this.enforceCustomForbiddenPhrases(sanitizedReply, settings);
+    const finalReply = this.enforceWorkingHours(customSafe, settings) || null;
 
     // Patch history to reflect the actual sent reply, not rawReply which may
     // contain the BRANCH tag and/or the pre-rebuild strict-violation text.
@@ -2718,8 +2745,9 @@ export abstract class BaseAgent extends EventEmitter {
       if (/(?:\+?[\d][\d\s\-()]{6,}\d)/.test(userText)) {
         void this.extractAndSaveLead(chatId, chatKey);
       }
-      // Hard guard: block any out-of-hours time reference.
-      return this.enforceWorkingHours(assumptionSafeReply, agentSettings) || null;
+      // Hard guard: block out-of-hours times; strip custom forbidden phrases.
+      const customSafeFree = this.enforceCustomForbiddenPhrases(assumptionSafeReply, agentSettings);
+      return this.enforceWorkingHours(customSafeFree, agentSettings) || null;
     } catch (e) {
       this.logger.warn(`[TG:${this.name}] free-mode failed: ${String(e)}`);
       return null;

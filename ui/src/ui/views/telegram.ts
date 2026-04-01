@@ -2806,160 +2806,197 @@ function renderLeadsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
 // ─── Prompts & filters panel ─────────────────────────────────────────────────
 
 function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
-  const s = props.promptSummary;
+  const savedSettings = props.agentSettings ?? {
+    useSchema: false,
+    scheduleMode: "always" as const,
+    replyTo: "all" as const,
+  };
+  const settings = props.workModePending
+    ? { ...savedSettings, ...props.workModePending }
+    : savedSettings;
+  const dirty =
+    props.workModePending !== null && Object.keys(props.workModePending ?? {}).length > 0;
 
-  const guardIcon = (active: boolean) => (active ? "✅" : "⬜");
-  const boolLabel = (v: boolean) => (v ? "Да" : "Нет");
+  const patchWorkMode = (patch: Partial<typeof savedSettings>) => props.onWorkModePatch(patch);
+  const saveNow = (patch: Partial<typeof savedSettings>) =>
+    props.onSaveAgentSettings(agent.id, { ...settings, ...patch });
 
-  // Helper: one key-value row
-  const row = (key: string, val: string, cls = "") =>
-    html`<div class="tg-prompts-setting">
-      <span class="tg-prompts-setting-key">${key}</span>
-      <span class="tg-prompts-setting-val ${cls}">${val}</span>
-    </div>`;
+  const hasWorkingHours = !!(settings.managerWorkFrom && settings.managerWorkTo);
+  const workHoursLabel = hasWorkingHours
+    ? `${settings.managerWorkFrom}–${settings.managerWorkTo}`
+    : "не настроены";
+
+  // Static hardcoded forbidden phrases (cannot be edited)
+  const hardcodedPhrases: Array<{ category: string; phrases: string[] }> = [
+    {
+      category: "Нарратив о клиенте",
+      phrases: ["ты говорил", "ты писал", "ты упоминал", "ты говоришь, что", "ты хочешь найти"],
+    },
+    { category: "Предположения о сфере", phrases: ["из айти сферы", "в IT сфере", "как айтишник"] },
+    {
+      category: "Открытые предложения времени",
+      phrases: ["подстроюсь под любое", "в любое время", "когда тебе комфортнее"],
+    },
+    {
+      category: "Корпоративное «мы»",
+      phrases: ["мы можем", "мы предлагаем", "sunabiliriz", "we can offer"],
+    },
+    {
+      category: "Пустые клише",
+      phrases: ["рад помочь", "отличный вопрос", "чем могу помочь?", "надеюсь"],
+    },
+  ];
+
+  // Custom forbidden phrases as a textarea (one per line)
+  const customPhrasesText = (settings.customForbiddenPhrases ?? []).join("\n");
 
   return html`
     <section class="card tg-prompts-panel" style="margin-top: 12px;">
-      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
         <div class="card-title" style="margin:0;">📋 Промпты и фильтры</div>
-        <button
-          type="button"
-          class="btn btn--sm"
-          ?disabled=${props.promptSummaryLoading}
-          @click=${() => props.onLoadPromptSummary(agent.id)}
-        >
-          ${props.promptSummaryLoading ? "Загрузка…" : "Обновить"}
-        </button>
+        ${
+          dirty
+            ? html`<button
+              type="button"
+              class="btn primary"
+              style="font-size:12px;padding:4px 16px;animation:fadeIn .15s ease;"
+              ?disabled=${props.agentSettingsSaving}
+              @click=${() => props.onWorkModeApply(agent.id)}
+            >${props.agentSettingsSaving ? "⏳ Сохраняю…" : "✅ Применить"}</button>`
+            : nothing
+        }
+      </div>
+      ${
+        props.agentSettingsLoading
+          ? html`
+              <div class="muted" style="padding: 8px 0">Загрузка…</div>
+            `
+          : nothing
+      }
+
+      <!-- ── 🛡️ Guards ──────────────────────────────────────────────────── -->
+      <div class="tg-prompts-section-title" style="margin-top:16px;">🛡️ Активные фильтры</div>
+      <div class="tg-prompts-guards">
+
+        <!-- 1. Рабочие часы -->
+        <div class="tg-prompts-guard ${hasWorkingHours ? "active" : "inactive"}">
+          <div class="tg-prompts-guard-header">
+            <span class="tg-prompts-guard-icon">${hasWorkingHours ? "✅" : "⬜"}</span>
+            <span class="tg-prompts-guard-name">🕐 Рабочие часы</span>
+          </div>
+          <div class="tg-prompts-guard-desc">Перехватывает нерабочее время в ответах ИИ и предлагает ближайший доступный слот</div>
+          <div class="tg-prompts-guard-details" style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <input type="time" class="input" style="width:110px;font-size:12px;"
+              .value=${settings.managerWorkFrom ?? ""}
+              @change=${(e: Event) => patchWorkMode({ managerWorkFrom: (e.target as HTMLInputElement).value || undefined })}
+            />
+            <span style="color:var(--text-muted);font-size:12px;">—</span>
+            <input type="time" class="input" style="width:110px;font-size:12px;"
+              .value=${settings.managerWorkTo ?? ""}
+              @change=${(e: Event) => patchWorkMode({ managerWorkTo: (e.target as HTMLInputElement).value || undefined })}
+            />
+            <span style="font-size:12px;color:var(--text-muted);">${workHoursLabel}</span>
+          </div>
+        </div>
+
+        <!-- 2. Без предположений о клиенте -->
+        <div class="tg-prompts-guard active">
+          <div class="tg-prompts-guard-header">
+            <span class="tg-prompts-guard-icon">✅</span>
+            <span class="tg-prompts-guard-name">🚫 Без предположений о клиенте</span>
+          </div>
+          <div class="tg-prompts-guard-desc">Убирает/переписывает фразы, приписывающие клиенту слова или профессию</div>
+          <div class="tg-prompts-guard-details">«ты говорил» → «я думаю тебе будет интересно» | «из айти сферы» → удалено</div>
+        </div>
+
+        <!-- 3. Первое лицо -->
+        <div class="tg-prompts-guard active">
+          <div class="tg-prompts-guard-header">
+            <span class="tg-prompts-guard-icon">✅</span>
+            <span class="tg-prompts-guard-name">👤 Первое лицо (я, не мы)</span>
+          </div>
+          <div class="tg-prompts-guard-desc">Заменяет корпоративное «мы» на личное «я» в реактивационных сообщениях</div>
+          <div class="tg-prompts-guard-details">мы→я | можем→могу | sunabiliriz→sunabilirim | we→I</div>
+        </div>
+
+        <!-- 4. Блокировка телефонов -->
+        <div class="tg-prompts-guard active">
+          <div class="tg-prompts-guard-header">
+            <span class="tg-prompts-guard-icon">✅</span>
+            <span class="tg-prompts-guard-name">📵 Блокировка телефонных номеров</span>
+          </div>
+          <div class="tg-prompts-guard-desc">Удаляет все телефонные номера из ответов ИИ</div>
+        </div>
+
+        <!-- 5. Открытое время -->
+        <div class="tg-prompts-guard ${hasWorkingHours ? "active" : "inactive"}">
+          <div class="tg-prompts-guard-header">
+            <span class="tg-prompts-guard-icon">${hasWorkingHours ? "✅" : "⬜"}</span>
+            <span class="tg-prompts-guard-name">📅 Блокировка «в любое время»</span>
+          </div>
+          <div class="tg-prompts-guard-desc">Заменяет открытые предложения времени на конкретный слот в рабочем окне</div>
+          <div class="tg-prompts-guard-details">«подстроюсь под любое» → «давай в HH:MM»${hasWorkingHours ? "" : " — нужны рабочие часы выше"}</div>
+        </div>
       </div>
 
-      ${
-        !s && !props.promptSummaryLoading
-          ? html`
-              <div class="empty-hint">Нажмите «Обновить», чтобы загрузить активные промпты и фильтры агента.</div>
-            `
-          : nothing
-      }
-      ${
-        props.promptSummaryLoading
-          ? html`
-              <div class="muted" style="padding: 12px 0">Загрузка данных…</div>
-            `
-          : nothing
-      }
+      <!-- ── 🚫 Запрещённые фразы ──────────────────────────────────────── -->
+      <div class="tg-prompts-section-title" style="margin-top:20px;">🚫 Запрещённые фразы</div>
 
-      ${
-        s
-          ? html`
-              <!-- Guards -->
-              <div class="tg-prompts-section-title">🛡️ Активные фильтры (guards)</div>
-              <div class="tg-prompts-guards">
-                ${s.guards.map(
-                  (g) => html`
-                    <div class="tg-prompts-guard ${g.active ? "active" : "inactive"}">
-                      <div class="tg-prompts-guard-header">
-                        <span class="tg-prompts-guard-icon">${guardIcon(g.active)}</span>
-                        <span class="tg-prompts-guard-name">${g.name}</span>
-                      </div>
-                      <div class="tg-prompts-guard-desc">${g.description}</div>
-                      ${g.details ? html`<div class="tg-prompts-guard-details">${g.details}</div>` : nothing}
-                    </div>
-                  `,
-                )}
+      <!-- Hardcoded list (read-only) -->
+      <div class="tg-prompts-phrases">
+        ${hardcodedPhrases.map(
+          (cat) => html`
+            <div class="tg-prompts-phrase-group">
+              <div class="tg-prompts-phrase-category">${cat.category} <span style="font-size:10px;color:var(--text-muted);margin-left:4px;">(встроено)</span></div>
+              <div class="tg-prompts-phrase-list">
+                ${cat.phrases.map((p) => html`<span class="tg-prompts-phrase-chip">${p}</span>`)}
               </div>
+            </div>
+          `,
+        )}
+      </div>
 
-              <!-- AI Settings -->
-              <div class="tg-prompts-section-title" style="margin-top: 20px;">⚙️ Настройки ИИ</div>
-              <div class="tg-prompts-settings-grid">
-                ${row("ИИ включён", boolLabel(s.aiSettings.aiEnabled), s.aiSettings.aiEnabled ? "val-ok" : "val-off")}
-                ${row("Автозапуск", boolLabel(s.aiSettings.autoStartEnabled))}
-                ${row("Режим", s.aiSettings.mode)}
-                ${s.aiSettings.activeDiagramId ? row("Активная схема", s.aiSettings.activeDiagramId) : nothing}
-                ${row("Строгая схема", boolLabel(s.aiSettings.schemaStrict))}
-                ${row("Режим покупателя", boolLabel(s.aiSettings.buyerMode))}
-                ${s.aiSettings.buyerMode ? row("Агрессия", s.aiSettings.buyerAggression) : nothing}
-                ${s.aiSettings.buyerMode ? row("Стиль закрытия", s.aiSettings.buyerCloseStyle) : nothing}
-                ${s.aiSettings.buyerProductContext ? row("Продукт (buyer)", s.aiSettings.buyerProductContext) : nothing}
-                ${row("График", s.aiSettings.scheduleMode)}
-                ${
-                  s.aiSettings.scheduleMode === "schedule" && s.aiSettings.scheduleFrom
-                    ? row(
-                        "Окно расписания",
-                        `${s.aiSettings.scheduleFrom} – ${s.aiSettings.scheduleTo ?? "?"}`,
-                      )
-                    : nothing
-                }
-                ${s.aiSettings.workingHours ? row("Рабочие часы (guard)", s.aiSettings.workingHours) : nothing}
-                ${row("Офлайн-ответ", boolLabel(s.aiSettings.offlineReplyEnabled))}
-                ${row("Задержка ответа", s.aiSettings.replyDelayMin != null ? `${s.aiSettings.replyDelayMin}–${s.aiSettings.replyDelayMax}с` : "нет")}
-                ${row("Отвечать на", s.aiSettings.replyTo)}
-                ${s.aiSettings.leadsGroupLink ? row("Группа лидов", s.aiSettings.leadsGroupLink) : nothing}
-              </div>
-              ${
-                s.aiSettings.offlineReplyTemplate
-                  ? html`
-                      <div class="tg-prompts-template-preview" style="margin-top: 8px;">
-                        <div class="tg-prompts-template-label">Шаблон офлайн-ответа:</div>
-                        <div class="tg-prompts-template-text">${s.aiSettings.offlineReplyTemplate}</div>
-                      </div>
-                    `
-                  : nothing
-              }
+      <!-- Custom forbidden phrases (editable) -->
+      <div style="margin-top:12px;">
+        <div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:6px;">
+          ✏️ Кастомные запрещённые фразы <span style="font-weight:400;">(одна фраза на строку)</span>
+        </div>
+        <textarea
+          class="input"
+          rows="4"
+          style="width:100%;resize:vertical;font-size:13px;line-height:1.5;"
+          placeholder="например:&#10;рад помочь&#10;хорошего дня&#10;конечно!"
+          .value=${customPhrasesText}
+          @change=${(e: Event) => {
+            const raw = (e.target as HTMLTextAreaElement).value;
+            const phrases = raw
+              .split("\n")
+              .map((s: string) => s.trim())
+              .filter((s: string) => s.length > 0);
+            saveNow({ customForbiddenPhrases: phrases.length > 0 ? phrases : undefined });
+          }}
+        ></textarea>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
+          ИИ не будет использовать эти слова/фразы в ответах. Сохраняется сразу после редактирования.
+        </div>
+      </div>
 
-              <!-- Re-engagement -->
-              <div class="tg-prompts-section-title" style="margin-top: 20px;">🔔 Реактивация</div>
-              <div class="tg-prompts-settings-grid">
-                ${row("Включена", boolLabel(s.reEngagement.enabled), s.reEngagement.enabled ? "val-ok" : "val-off")}
-                ${row("Режим ИИ", s.reEngagement.aiMode)}
-                ${row("Тон", s.reEngagement.tone)}
-                ${row("ИИ продолжает", boolLabel(s.reEngagement.aiContinue))}
-                ${row("Только по имени", boolLabel(s.reEngagement.nameOnly))}
-                ${
-                  s.reEngagement.delayFrom != null
-                    ? row(
-                        "Диапазон молчания",
-                        `${s.reEngagement.delayFrom}–${s.reEngagement.delayTo ?? "?"}д${s.reEngagement.delayMore ? " + далее" : ""}`,
-                      )
-                    : s.reEngagement.delays.length > 0
-                      ? row("Задержки (дн)", s.reEngagement.delays.join(", "))
-                      : nothing
-                }
-                ${
-                  s.reEngagement.pauseMax > 0
-                    ? row(
-                        "Пауза между отправками",
-                        `${s.reEngagement.pauseMin}–${s.reEngagement.pauseMax}с`,
-                      )
-                    : nothing
-                }
-              </div>
-              ${
-                s.reEngagement.template
-                  ? html`
-                      <div class="tg-prompts-template-preview" style="margin-top: 8px;">
-                        <div class="tg-prompts-template-label">Шаблон сообщения реактивации:</div>
-                        <div class="tg-prompts-template-text">${s.reEngagement.template}</div>
-                      </div>
-                    `
-                  : nothing
-              }
-
-              <!-- Forbidden phrases -->
-              <div class="tg-prompts-section-title" style="margin-top: 20px;">🚫 Запрещённые фразы</div>
-              <div class="tg-prompts-phrases">
-                ${s.forbiddenPhrases.map(
-                  (cat) => html`
-                    <div class="tg-prompts-phrase-group">
-                      <div class="tg-prompts-phrase-category">${cat.category}</div>
-                      <div class="tg-prompts-phrase-list">
-                        ${cat.phrases.map((p) => html`<span class="tg-prompts-phrase-chip">${p}</span>`)}
-                      </div>
-                    </div>
-                  `,
-                )}
-              </div>
-            `
-          : nothing
-      }
+      <!-- ── 📦 Продукт и контекст ─────────────────────────────────────── -->
+      <div class="tg-prompts-section-title" style="margin-top:20px;">📦 Продукт и контекст (buyer-режим)</div>
+      <textarea
+        class="input"
+        rows="3"
+        style="width:100%;resize:vertical;font-size:13px;line-height:1.5;"
+        placeholder="Описание продукта/услуги, которое ИИ использует в buyer-стиле.&#10;Например: CRM для малого бизнеса, $29/мес, автоматизация лидов, быстрый старт 1 день"
+        .value=${settings.buyerProductContext ?? ""}
+        @change=${(e: Event) => {
+          const v = (e.target as HTMLTextAreaElement).value.trim();
+          patchWorkMode({ buyerProductContext: v || undefined } as Partial<typeof savedSettings>);
+        }}
+      ></textarea>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
+        Инжектируется в системный промпт buyer-режима. Нажмите «Применить» чтобы сохранить.
+      </div>
     </section>
   `;
 }
