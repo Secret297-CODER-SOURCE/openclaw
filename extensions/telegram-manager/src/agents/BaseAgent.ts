@@ -728,6 +728,11 @@ export abstract class BaseAgent extends EventEmitter {
       `## Язык ответа: определи по тексту клиента («${allClientText.slice(0, 150)}») и отвечай СТРОГО на нём.\n\n` +
       `Стиль: профессиональный, живой, уверенный. 2–4 предложения. Без пустых строк.`;
 
+    // Inject custom instructions from settings (runOfflineLeadMode)
+    if (settings.systemPromptAppend?.trim()) {
+      systemPrompt += `\n\n## ДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ:\n${settings.systemPromptAppend.trim()}`;
+    }
+
     const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
     try {
       const raw = await aiReply(userText, chatKey, systemPrompt, this.storage, workspaceTools);
@@ -2328,6 +2333,11 @@ export abstract class BaseAgent extends EventEmitter {
       `Сначала — реакция на слова клиента (1 предложение), затем — конкретный оффер или следующий шаг.\n` +
       `НЕ начинай с вопроса.`;
 
+    // Inject custom instructions from settings (runScriptStep)
+    if (settings.systemPromptAppend?.trim()) {
+      systemPrompt += `\n\n## ДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ:\n${settings.systemPromptAppend.trim()}`;
+    }
+
     // ── Generate reply ────────────────────────────────────────────────────
     const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
     const rawReply = await aiReply(userText, chatKey, systemPrompt, this.storage, workspaceTools);
@@ -2706,6 +2716,11 @@ export abstract class BaseAgent extends EventEmitter {
         : "") +
       `• ${strict ? "Выходить за рамки скрипта." : "Зацикливаться на одном — двигайся дальше."}\n\n` +
       `2–3 предложения. Telegram-стиль. Без пустых строк.`;
+
+    // Inject custom instructions from settings (runFreeMode)
+    if (agentSettings.systemPromptAppend?.trim()) {
+      systemPrompt += `\n\n## ДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ:\n${agentSettings.systemPromptAppend.trim()}`;
+    }
 
     const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
     try {

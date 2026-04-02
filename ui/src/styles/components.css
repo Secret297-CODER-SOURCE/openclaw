@@ -4898,6 +4898,32 @@ select.input:focus {
   line-height: 1.5;
 }
 
+/* System prompt preview pre */
+.tg-prompts-prompt-pre {
+  margin: 0;
+  padding: 14px 16px;
+  background: var(--bg-muted, #262a35);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+  max-height: 280px;
+}
+
+/* Additional instructions textarea */
+.tg-prompts-append-textarea {
+  width: 100%;
+  resize: vertical;
+  font-size: 13px;
+  line-height: 1.6;
+  min-height: 130px;
+}
+
 /* ── Behavior editor (tg-be-*) ── */
 
 .tg-be {

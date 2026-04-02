@@ -867,6 +867,8 @@ export type AgentSettings = {
   offlineReplyTemplate?: string;
   managerWorkFrom?: string;
   managerWorkTo?: string;
+  /** Extra instructions appended to every AI system prompt as ## ДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ: */
+  systemPromptAppend?: string;
 };
 
 // ─── Scenario controller ──────────────────────────────────────────────────────

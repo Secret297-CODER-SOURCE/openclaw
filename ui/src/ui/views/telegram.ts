@@ -3522,26 +3522,87 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
         </div>
       </div>
 
-      <!-- ── 📝 Системный промпт (превью) ──────────────────────── -->
-      <div class="tg-prompts-section-title">📝 Системный промпт (превью)</div>
-      <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;line-height:1.5;">
-        Приблизительный набор правил, которые ИИ получит на основе текущих настроек. Только для чтения.
+      <!-- ── 📝 Системный промпт ──────────────────────────────── -->
+      <div class="tg-prompts-section-title">📝 Системный промпт</div>
+
+      <!-- Auto-generated preview (read-only) -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <span style="font-size:12px;color:var(--text-muted);">Авто-превью — правила, генерируемые из настроек выше</span>
+        <span style="font-size:11px;color:var(--text-muted);font-style:italic;">только для чтения</span>
       </div>
-      <pre style="
-        margin:0;
-        padding:14px 16px;
-        background:var(--bg-muted,#262a35);
-        border:1px solid var(--border);
-        border-radius:10px;
-        font-family:monospace;
-        font-size:12px;
-        line-height:1.7;
-        color:var(--text-muted);
-        white-space:pre-wrap;
-        word-break:break-word;
-        overflow:auto;
-        max-height:320px;
-      ">${promptPreview}</pre>
+      <pre class="tg-prompts-prompt-pre">${promptPreview}</pre>
+
+      <!-- Editable additional instructions -->
+      <div class="tg-prompts-block" style="margin-top:14px;">
+        <div class="tg-prompts-row" style="padding:10px 14px 4px;border-bottom:none;flex-direction:column;align-items:flex-start;gap:6px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;width:100%;">
+            <span style="font-size:13px;font-weight:600;">✏️ Дополнительные инструкции</span>
+            <div style="display:flex;align-items:center;gap:6px;">
+              ${
+                settings.systemPromptAppend?.trim()
+                  ? html`
+                      <span
+                        style="
+                          font-size: 11px;
+                          padding: 2px 8px;
+                          background: rgba(61, 187, 112, 0.15);
+                          border: 1px solid rgba(61, 187, 112, 0.3);
+                          color: var(--ok, #3dbb70);
+                          border-radius: 10px;
+                        "
+                        >✅ активны</span
+                      >
+                    `
+                  : html`
+                      <span style="font-size: 11px; color: var(--text-muted)">не заданы</span>
+                    `
+              }
+              ${
+                settings.systemPromptAppend?.trim()
+                  ? html`
+                <button type="button" class="btn" style="font-size:11px;padding:2px 10px;color:var(--text-muted);"
+                  @click=${() => saveNow({ systemPromptAppend: undefined })}
+                >🗑️ Очистить</button>
+              `
+                  : nothing
+              }
+            </div>
+          </div>
+          <span style="font-size:11px;color:var(--text-muted);line-height:1.5;">
+            Добавляются в конец каждого системного промпта как <code style="font-size:11px;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px;">## ДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ:</code>
+          </span>
+        </div>
+        <div class="tg-prompts-row row-top" style="border-top:1px solid var(--border);">
+          <div class="tg-prompts-row-ctrl" style="width:100%;flex-direction:column;align-items:flex-start;gap:8px;">
+            <textarea class="input tg-prompts-append-textarea"
+              rows="6"
+              placeholder="Например:&#10;• Всегда упоминай скидку 10% при первом контакте&#10;• Не упоминай конкурентов ни при каких обстоятельствах&#10;• Язык общения — только русский&#10;• Если клиент спрашивает про цену — называй диапазон 500–1500$"
+              .value=${settings.systemPromptAppend ?? ""}
+              @input=${(e: Event) => {
+                // Live-update workModePending so Apply button appears
+                const v = (e.target as HTMLTextAreaElement).value;
+                patchWorkMode({ systemPromptAppend: v || undefined } as Partial<
+                  typeof savedSettings
+                >);
+              }}
+            ></textarea>
+            <div style="display:flex;align-items:center;gap:8px;width:100%;justify-content:flex-end;">
+              <span style="font-size:11px;color:var(--text-muted);flex:1;">
+                Нажмите «Сохранить» чтобы применить. Изменения вступят в силу немедленно.
+              </span>
+              <button type="button" class="btn primary"
+                style="font-size:12px;padding:5px 20px;"
+                ?disabled=${props.agentSettingsSaving}
+                @click=${() => {
+                  const ta = document.querySelector(".tg-prompts-append-textarea");
+                  const v = ta?.value.trim() ?? settings.systemPromptAppend ?? "";
+                  saveNow({ systemPromptAppend: v || undefined });
+                }}
+              >${props.agentSettingsSaving ? "⏳…" : "💾 Сохранить"}</button>
+            </div>
+          </div>
+        </div>
+      </div>
 
     </section>
   `;

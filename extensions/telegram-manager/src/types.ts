@@ -411,6 +411,15 @@ export interface AgentSettings {
    * Default 0 (no delay).
    */
   replyDelayMax?: number;
+
+  /**
+   * Extra instructions appended to every AI system prompt (all three modes:
+   * offline-lead, script-step, free-mode).  Injected as a dedicated
+   * "## ДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ:" section so the AI treats them as
+   * high-priority rules without overriding built-in safety guards.
+   * Supports plain text; keep it concise — injected verbatim.
+   */
+  systemPromptAppend?: string;
 }
 
 // ─── Lead record ──────────────────────────────────────────────────────────────
