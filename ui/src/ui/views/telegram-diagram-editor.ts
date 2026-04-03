@@ -1069,6 +1069,12 @@ export class TgDiagramEditor extends LitElement {
   @property({ attribute: false })
   onDistributeTraining: (() => Promise<void>) | null = null;
 
+  /** Called to save edited knowledge base. */
+  @property({ attribute: false })
+  onSaveKnowledgeBase:
+    | ((entries: import("../controllers/telegram.ts").DiagramNodeKnowledge[]) => Promise<void>)
+    | null = null;
+
   /** Current knowledge base data (injected from parent). */
   @property({ attribute: false })
   knowledgeBase: import("../controllers/telegram.ts").DiagramKnowledgeBase | null = null;
@@ -1076,6 +1082,10 @@ export class TgDiagramEditor extends LitElement {
   /** Whether the knowledge base is being loaded/distributed. */
   @property({ type: Boolean })
   knowledgeBaseLoading = false;
+
+  /** KB edit mode — enables inline editing of pairs. */
+  @state()
+  private kbEditMode = false;
 
   /**
    * Called with a natural-language prompt (and the current diagram for modifications).
@@ -2065,24 +2075,64 @@ export class TgDiagramEditor extends LitElement {
     const loading = this.knowledgeBaseLoading;
     const scopeLabel = this.scope === "shared" ? "Общая" : "Личная";
     const scoreStars = (s: number) => (s === 3 ? "★★★" : s === 2 ? "★★" : "★");
+    const editMode = this.kbEditMode;
 
     return html`
       <div class="kb-panel">
         <div class="kb-panel__header">
           <span class="kb-panel__title">📚 База знаний — ${scopeLabel}</span>
           <div class="kb-panel__actions">
-            <button class="kb-btn-distribute"
-              ?disabled=${loading || !this.onDistributeTraining}
-              title="ИИ автоматически распределяет пары из раздела «Обучение» по узлам схемы"
-              @click=${async () => {
-                if (this.onDistributeTraining) {
-                  await this.onDistributeTraining();
-                }
-              }}>
-              ${loading ? "⏳ Обработка…" : "🤖 Автораспределить"}
-            </button>
+            ${
+              editMode
+                ? html`
+                    <button class="kb-btn-save"
+                      ?disabled=${loading}
+                      title="Сохранить изменения"
+                      @click=${async () => {
+                        if (this.onSaveKnowledgeBase && kb) {
+                          await this.onSaveKnowledgeBase(kb.entries);
+                          this.kbEditMode = false;
+                        }
+                      }}>
+                      💾 Сохранить
+                    </button>
+                    <button class="kb-btn-cancel"
+                      ?disabled=${loading}
+                      title="Отменить редактирование"
+                      @click=${async () => {
+                        this.kbEditMode = false;
+                        // Reload KB to discard changes
+                        if (this.onLoadKnowledgeBase) {
+                          await this.onLoadKnowledgeBase();
+                        }
+                      }}>
+                      ❌ Отмена
+                    </button>
+                  `
+                : html`
+                    <button class="kb-btn-edit"
+                      ?disabled=${loading || !kb || kb.entries.length === 0}
+                      title="Редактировать базу знаний"
+                      @click=${() => {
+                        this.kbEditMode = true;
+                      }}>
+                      ✏️ Редактировать
+                    </button>
+                    <button class="kb-btn-distribute"
+                      ?disabled=${loading || !this.onDistributeTraining}
+                      title="ИИ автоматически распределяет пары из раздела «Обучение» по узлам схемы"
+                      @click=${async () => {
+                        if (this.onDistributeTraining) {
+                          await this.onDistributeTraining();
+                        }
+                      }}>
+                      ${loading ? "⏳ Обработка…" : "🤖 Автораспределить"}
+                    </button>
+                  `
+            }
             <button class="kb-btn-close" @click=${() => {
               this.kbPanelOpen = false;
+              this.kbEditMode = false;
             }}
               title="Закрыть">✕</button>
           </div>
@@ -2113,26 +2163,102 @@ export class TgDiagramEditor extends LitElement {
             ? html`
               <div class="kb-entries">
                 ${kb.entries.map(
-                  (entry) => html`
+                  (entry, entryIdx) => html`
                     <div class="kb-node">
                       <div class="kb-node__title">
                         <span class="kb-node__name">${entry.nodeText}</span>
                         <span class="kb-node__count">${entry.pairs.length} пар</span>
+                        ${
+                          editMode
+                            ? html`
+                                <button class="kb-node-add-pair"
+                                  title="Добавить пару"
+                                  @click=${() => {
+                                    if (!kb) {return;}
+                                    const newPair = { input: "", response: "", score: 2 };
+                                    kb.entries[entryIdx].pairs.push(newPair);
+                                    this.requestUpdate();
+                                  }}>
+                                  ➕ Добавить пару
+                                </button>
+                              `
+                            : nothing
+                        }
                       </div>
                       <div class="kb-pairs">
-                        ${entry.pairs.slice(0, 5).map(
-                          (pair) => html`
-                            <div class="kb-pair">
-                              <span class="kb-pair__score" title="Оценка качества">${scoreStars(pair.score)}</span>
-                              <div class="kb-pair__content">
-                                <div class="kb-pair__q">${pair.input}</div>
-                                <div class="kb-pair__a">→ ${pair.response}</div>
-                              </div>
+                        ${(editMode ? entry.pairs : entry.pairs.slice(0, 5)).map(
+                          (pair, pairIdx) => html`
+                            <div class="kb-pair ${editMode ? "kb-pair--edit" : ""}">
+                              ${
+                                !editMode
+                                  ? html`
+                                      <span class="kb-pair__score" title="Оценка качества">${scoreStars(pair.score)}</span>
+                                      <div class="kb-pair__content">
+                                        <div class="kb-pair__q">${pair.input}</div>
+                                        <div class="kb-pair__a">→ ${pair.response}</div>
+                                      </div>
+                                    `
+                                  : html`
+                                      <div class="kb-pair__edit-content">
+                                        <div class="kb-pair__edit-row">
+                                          <label class="kb-pair__label">Вопрос:</label>
+                                          <textarea class="kb-pair__input"
+                                            rows="2"
+                                            .value=${pair.input}
+                                            @input=${(e: Event) => {
+                                              if (!kb) {return;}
+                                              kb.entries[entryIdx].pairs[pairIdx].input = (
+                                                e.target as HTMLTextAreaElement
+                                              ).value;
+                                            }}
+                                          ></textarea>
+                                        </div>
+                                        <div class="kb-pair__edit-row">
+                                          <label class="kb-pair__label">Ответ:</label>
+                                          <textarea class="kb-pair__input"
+                                            rows="2"
+                                            .value=${pair.response}
+                                            @input=${(e: Event) => {
+                                              if (!kb) {return;}
+                                              kb.entries[entryIdx].pairs[pairIdx].response = (
+                                                e.target as HTMLTextAreaElement
+                                              ).value;
+                                            }}
+                                          ></textarea>
+                                        </div>
+                                        <div class="kb-pair__edit-row">
+                                          <label class="kb-pair__label">Оценка:</label>
+                                          <select class="kb-pair__score-select"
+                                            .value=${String(pair.score)}
+                                            @change=${(e: Event) => {
+                                              if (!kb) {return;}
+                                              kb.entries[entryIdx].pairs[pairIdx].score = parseInt(
+                                                (e.target as HTMLSelectElement).value,
+                                                10,
+                                              );
+                                            }}>
+                                            <option value="1">★ (1)</option>
+                                            <option value="2">★★ (2)</option>
+                                            <option value="3">★★★ (3)</option>
+                                          </select>
+                                          <button class="kb-pair__delete"
+                                            title="Удалить пару"
+                                            @click=${() => {
+                                              if (!kb) {return;}
+                                              kb.entries[entryIdx].pairs.splice(pairIdx, 1);
+                                              this.requestUpdate();
+                                            }}>
+                                            🗑️ Удалить
+                                          </button>
+                                        </div>
+                                      </div>
+                                    `
+                              }
                             </div>
                           `,
                         )}
                         ${
-                          entry.pairs.length > 5
+                          !editMode && entry.pairs.length > 5
                             ? html`<div class="kb-more">+ ещё ${entry.pairs.length - 5} пар…</div>`
                             : nothing
                         }

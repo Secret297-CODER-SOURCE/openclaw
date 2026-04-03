@@ -102,6 +102,10 @@ export class TelegramPlugin implements GatewayPlugin {
   private storage!: TelegramStorage;
   private manager!: AgentManager;
 
+  /** Resolves once init() completes; handlers await this instead of hard-failing. */
+  private initDone: Promise<void> | null = null;
+  private resolveInit!: () => void;
+
   /** Allowed core file names — validated before any file I/O */
   private static readonly CORE_FILE_NAMES = [
     "AGENTS.md",
@@ -117,6 +121,11 @@ export class TelegramPlugin implements GatewayPlugin {
   // ─── Plugin lifecycle ─────────────────────────────────────────────────────
 
   async init(ctx: IGatewayContext): Promise<void> {
+    // Create init gate so handleMessage can await it instead of failing immediately.
+    this.initDone = new Promise<void>((resolve) => {
+      this.resolveInit = resolve;
+    });
+
     this.ctx = ctx;
     this.storage = new TelegramStorage(path.join(ctx.dataDir, "telegram"));
     this.manager = new AgentManager(this.storage, ctx.logger);
@@ -138,6 +147,7 @@ export class TelegramPlugin implements GatewayPlugin {
     });
 
     ctx.logger.info("[TelegramPlugin] initialized");
+    this.resolveInit();
   }
 
   async destroy(): Promise<void> {
@@ -157,9 +167,20 @@ export class TelegramPlugin implements GatewayPlugin {
 
     const fail = (error: string) => reply({ id: msg.id, method: msg.method, error });
 
-    // Guard against requests arriving before init() completes (race on startup).
+    // Wait for init() to finish instead of hard-failing on startup race.
+    if (this.initDone) {
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Plugin init timed out")), 15_000),
+      );
+      try {
+        await Promise.race([this.initDone, timeout]);
+      } catch {
+        fail("Plugin still initializing — please retry in a moment");
+        return true;
+      }
+    }
     if (!this.storage || !this.manager) {
-      fail("Plugin still initializing — please retry in a moment");
+      fail("Plugin not initialized");
       return true;
     }
 
@@ -232,12 +253,64 @@ export class TelegramPlugin implements GatewayPlugin {
           const s = this.storage.getAgentSettings(String(p.agentId));
           const workHours =
             s.managerWorkFrom && s.managerWorkTo ? `${s.managerWorkFrom}–${s.managerWorkTo}` : null;
+
+          // Helper: resolve guard active state from user overrides
+          const guardActive = (id: string, defaultActive: boolean): boolean => {
+            const ov = s.builtinGuardsOverrides;
+            if (ov && id in ov) return !!ov[id];
+            return defaultActive;
+          };
+
+          // Default built-in forbidden phrases (overridable via builtinForbiddenCategories)
+          const defaultForbidden = [
+            {
+              category: "Сомнения клиента",
+              phrases: ["ты сомневался", "ты не был уверен", "колебался"],
+            },
+            {
+              category: "Предположения о сфере деятельности",
+              phrases: ["из айти сферы", "в IT сфере", "как айтишник", "для бизнеса"],
+            },
+            {
+              category: "Нарратив о клиенте",
+              phrases: [
+                "ты говорил",
+                "ты писал",
+                "ты упоминал",
+                "ты говоришь, что",
+                "ты хочешь найти",
+              ],
+            },
+            {
+              category: "Открытые предложения времени",
+              phrases: ["подстроюсь под любое", "в любое время", "когда тебе удобно/комфортнее"],
+            },
+            {
+              category: "Корпоративный стиль (мы→я)",
+              phrases: ["мы можем", "мы предлагаем", "sunabiliriz", "we can offer", "we offer"],
+            },
+            {
+              category: "Клише и пустые фразы",
+              phrases: [
+                "рад помочь",
+                "отличный вопрос",
+                "конечно!",
+                "как дела?",
+                "чем могу помочь?",
+                "надеюсь",
+              ],
+            },
+          ];
+
           respond({
             guards: [
               {
                 id: "enforceWorkingHours",
                 name: "🕐 Рабочие часы",
-                active: !!(s.managerWorkFrom && s.managerWorkTo),
+                active: guardActive(
+                  "enforceWorkingHours",
+                  !!(s.managerWorkFrom && s.managerWorkTo),
+                ),
                 description:
                   "Перехватывает нерабочее время в ответах ИИ и предлагает ближайший доступный слот",
                 details: workHours ?? "не настроены — guard отключён",
@@ -245,7 +318,7 @@ export class TelegramPlugin implements GatewayPlugin {
               {
                 id: "enforceNoAssumptiveClaims",
                 name: "🚫 Без предположений о клиенте",
-                active: true,
+                active: guardActive("enforceNoAssumptiveClaims", true),
                 description:
                   "Удаляет/переписывает фразы, приписывающие клиенту слова или профессию",
                 details:
@@ -254,7 +327,7 @@ export class TelegramPlugin implements GatewayPlugin {
               {
                 id: "enforceFirstPerson",
                 name: "👤 Первое лицо единственного числа",
-                active: true,
+                active: guardActive("enforceFirstPerson", true),
                 description:
                   "Заменяет корпоративное «мы» на личное «я» в реактивационных сообщениях",
                 details: "мы→я | можем→могу | sunabiliriz→sunabilirim | we→I",
@@ -262,18 +335,26 @@ export class TelegramPlugin implements GatewayPlugin {
               {
                 id: "stripPhoneNumbers",
                 name: "📵 Блокировка телефонных номеров",
-                active: true,
+                active: guardActive("stripPhoneNumbers", true),
                 description: "Удаляет все телефонные номера из ответов ИИ",
                 details: "regex: +7, 8-xxx, международные форматы",
               },
               {
                 id: "openEndedTimeGuard",
                 name: "📅 Блокировка «в любое время»",
-                active: !!(s.managerWorkFrom && s.managerWorkTo),
+                active: guardActive("openEndedTimeGuard", !!(s.managerWorkFrom && s.managerWorkTo)),
                 description:
                   "Заменяет открытые предложения времени на конкретный слот в рабочем окне",
                 details: "«подстроюсь под любое» → «давай в HH:MM»",
               },
+              // Include user-defined custom guards
+              ...(s.customGuards ?? []).map((g) => ({
+                id: g.id,
+                name: g.name,
+                active: g.enabled,
+                description: g.description,
+                details: g.details ?? "",
+              })),
             ],
             aiSettings: {
               aiEnabled: s.aiEnabled !== false,
@@ -313,44 +394,20 @@ export class TelegramPlugin implements GatewayPlugin {
               template: s.reEngagementTemplate ? s.reEngagementTemplate.slice(0, 200) : null,
             },
             forbiddenPhrases: [
-              {
-                category: "Сомнения клиента",
-                phrases: ["ты сомневался", "ты не был уверен", "колебался"],
-              },
-              {
-                category: "Предположения о сфере деятельности",
-                phrases: ["из айти сферы", "в IT сфере", "как айтишник", "для бизнеса"],
-              },
-              {
-                category: "Нарратив о клиенте",
-                phrases: [
-                  "ты говорил",
-                  "ты писал",
-                  "ты упоминал",
-                  "ты говоришь, что",
-                  "ты хочешь найти",
-                ],
-              },
-              {
-                category: "Открытые предложения времени",
-                phrases: ["подстроюсь под любое", "в любое время", "когда тебе удобно/комфортнее"],
-              },
-              {
-                category: "Корпоративный стиль (мы→я)",
-                phrases: ["мы можем", "мы предлагаем", "sunabiliriz", "we can offer", "we offer"],
-              },
-              {
-                category: "Клише и пустые фразы",
-                phrases: [
-                  "рад помочь",
-                  "отличный вопрос",
-                  "конечно!",
-                  "как дела?",
-                  "чем могу помочь?",
-                  "надеюсь",
-                ],
-              },
+              // Use overridden built-in categories if set, otherwise defaults
+              ...(s.builtinForbiddenCategories ?? defaultForbidden),
+              // Append user-defined custom categories
+              ...(s.customForbiddenCategories ?? []),
             ],
+            // Surface re-engagement prompt settings so UI can show current state
+            reEngagementPrompts: {
+              systemPrompt: s.reEngagementSystemPrompt ?? null,
+              context: s.reEngagementContext ?? null,
+              antiHallucination: s.reEngagementAntiHallucination ?? null,
+              append: s.reEngagementAppend ?? null,
+              applyGuards: s.reEngagementApplyGuards ?? true,
+              templateGenPrompt: s.reEngagementTemplateGenPrompt ?? null,
+            },
           });
           break;
         }
@@ -408,45 +465,53 @@ export class TelegramPlugin implements GatewayPlugin {
           const agentName = agentRecord?.name ?? "AI-менеджер";
 
           // Adapt template generation to buyer mode if active.
-          // Note: no chat history here — this is a generic skeleton.
-          // The enhance step (sendReEngagement → enhanceReEngagementMessage) will
-          // later personalise it using the actual conversation history.
           const rtSettings = this.storage.getAgentSettings(String(p.agentId));
           const rtIsBuyer = rtSettings.schemaDeliveryStyle === "buyer";
           const rtAggression = rtSettings.buyerAggressionLevel ?? "balanced";
 
-          const systemPrompt = rtIsBuyer
-            ? "Ты баер-копирайтер. Создай реактивационный шаблон-скелет — уверенный, без воды. " +
-              "Шаблон будет персонализирован под конкретного клиента позже, " +
-              "поэтому он должен легко адаптироваться под любую нишу и ситуацию. " +
-              "Никакого 'как дела', 'давно не виделись', пустых вопросов. " +
-              (rtAggression === "hard"
-                ? "Тон прямой, без сантиментов. "
-                : rtAggression === "soft"
-                  ? "Тон мягкий: пробуди интерес, не дави. "
-                  : "Тон уверенный, не давящий. ") +
-              "1–2 предложения. Плейсхолдер {имя}. Только текст — без кавычек, пояснений, markdown."
-            : "Ты эксперт по продажам и копирайтингу. Создай короткий, живой и цепляющий шаблон " +
-              "сообщения для реактивации клиента, который давно молчал. " +
-              "Шаблон должен: быть персонализированным (используй плейсхолдер {имя}), " +
-              "создавать срочность или интерес, быть 1-2 предложения максимум, " +
-              "содержать эмодзи для оживления. " +
-              "Отвечай ТОЛЬКО текстом шаблона, без кавычек, без пояснений, без markdown.";
+          // Use custom template-gen prompt if user has set one
+          let systemPrompt: string;
+          let userPrompt: string;
 
-          const userPrompt = rtIsBuyer
-            ? `Агент: ${agentName}\n` +
-              `Напиши реактивационный шаблон в баер-стиле. Плейсхолдер {имя} в начале.\n` +
-              `Шаблон должен звучать как начало конкретного разговора, не как напоминалка.\n` +
-              `Примеры правильного духа:\n` +
-              `- "{имя}, вопрос: ты ещё в теме или уже нет? Потому что ситуация изменилась 📌"\n` +
-              `- "{имя} — помнишь о чём говорили? Есть конкретика, отвечу сразу"\n` +
-              `- "{имя}, смотри — пока думал, расклад поменялся 🔥 Актуально?"`
-            : `Агент называется: ${agentName}\n` +
-              `Создай цепляющий шаблон реактивации. Используй плейсхолдер {имя} в начале.\n` +
-              `Примеры хороших шаблонов:\n` +
-              `- "Привет {имя}! 🔥 Горит сделка с профитом 37%, последние места — ты с нами?"\n` +
-              `- "{имя}, привет! Помнишь наш разговор? Сегодня особые условия — только сегодня 🎯"\n` +
-              `- "Эй {имя}! Пока ты думал, 5 человек уже зашли 💸 Успеваешь?"`;
+          if (rtSettings.reEngagementTemplateGenPrompt?.trim()) {
+            // Custom prompt — user controls both system + user as a single block
+            systemPrompt = rtSettings.reEngagementTemplateGenPrompt.trim();
+            userPrompt = `Агент: ${agentName}. Создай шаблон реактивации с плейсхолдером {имя}.`;
+          } else {
+            // Default hardcoded prompts (buyer vs neutral)
+            systemPrompt = rtIsBuyer
+              ? "Ты баер-копирайтер. Создай реактивационный шаблон-скелет — уверенный, без воды. " +
+                "Шаблон будет персонализирован под конкретного клиента позже, " +
+                "поэтому он должен легко адаптироваться под любую нишу и ситуацию. " +
+                "Никакого 'как дела', 'давно не виделись', пустых вопросов. " +
+                (rtAggression === "hard"
+                  ? "Тон прямой, без сантиментов. "
+                  : rtAggression === "soft"
+                    ? "Тон мягкий: пробуди интерес, не дави. "
+                    : "Тон уверенный, не давящий. ") +
+                "1–2 предложения. Плейсхолдер {имя}. Только текст — без кавычек, пояснений, markdown."
+              : "Ты эксперт по продажам и копирайтингу. Создай короткий, живой и цепляющий шаблон " +
+                "сообщения для реактивации клиента, который давно молчал. " +
+                "Шаблон должен: быть персонализированным (используй плейсхолдер {имя}), " +
+                "создавать срочность или интерес, быть 1-2 предложения максимум, " +
+                "содержать эмодзи для оживления. " +
+                "Отвечай ТОЛЬКО текстом шаблона, без кавычек, без пояснений, без markdown.";
+
+            userPrompt = rtIsBuyer
+              ? `Агент: ${agentName}\n` +
+                `Напиши реактивационный шаблон в баер-стиле. Плейсхолдер {имя} в начале.\n` +
+                `Шаблон должен звучать как начало конкретного разговора, не как напоминалка.\n` +
+                `Примеры правильного духа:\n` +
+                `- "{имя}, вопрос: ты ещё в теме или уже нет? Потому что ситуация изменилась 📌"\n` +
+                `- "{имя} — помнишь о чём говорили? Есть конкретика, отвечу сразу"\n` +
+                `- "{имя}, смотри — пока думал, расклад поменялся 🔥 Актуально?"`
+              : `Агент называется: ${agentName}\n` +
+                `Создай цепляющий шаблон реактивации. Используй плейсхолдер {имя} в начале.\n` +
+                `Примеры хороших шаблонов:\n` +
+                `- "Привет {имя}! 🔥 Горит сделка с профитом 37%, последние места — ты с нами?"\n` +
+                `- "{имя}, привет! Помнишь наш разговор? Сегодня особые условия — только сегодня 🎯"\n` +
+                `- "Эй {имя}! Пока ты думал, 5 человек уже зашли 💸 Успеваешь?"`;
+          }
 
           try {
             const template = await callAdapterOnce(userPrompt, systemPrompt);

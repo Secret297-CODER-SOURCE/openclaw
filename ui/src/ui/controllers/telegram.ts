@@ -869,6 +869,45 @@ export type AgentSettings = {
   managerWorkTo?: string;
   /** Extra instructions appended to every AI system prompt as ## ДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ: */
   systemPromptAppend?: string;
+  /** User-defined guards (filters) — shown in Prompts panel alongside built-in ones. */
+  customGuards?: Array<{
+    id: string;
+    name: string;
+    description: string;
+    enabled: boolean;
+    details?: string;
+  }>;
+  /** Per-built-in-guard enabled/disabled overrides. Keys are guard IDs; missing = default. */
+  builtinGuardsOverrides?: Record<string, boolean>;
+  /** User-defined forbidden-phrase categories — shown alongside built-in categories. */
+  customForbiddenCategories?: Array<{
+    category: string;
+    phrases: string[];
+  }>;
+  /** Overrides for built-in forbidden-phrase categories. null = use defaults. */
+  builtinForbiddenCategories?: Array<{
+    category: string;
+    phrases: string[];
+  }>;
+  /** Full system prompt override — replaces the auto-generated preview when set. */
+  systemPromptOverride?: string;
+  /** Anti-hallucination rules: what the AI must never invent or assume. */
+  antiHallucinationRules?: string;
+  /** Context/facts that the AI must always know (product info, company details, etc.). */
+  contextInstructions?: string;
+  // ── Re-engagement prompt customization ──────────────────────────────────────
+  /** Full system prompt override for re-engagement AI. Replaces the hardcoded prompt. */
+  reEngagementSystemPrompt?: string;
+  /** Context/facts for re-engagement prompt. Falls back to global contextInstructions. */
+  reEngagementContext?: string;
+  /** Anti-hallucination rules for re-engagement. Falls back to global antiHallucinationRules. */
+  reEngagementAntiHallucination?: string;
+  /** Additional instructions appended to re-engagement prompt. Falls back to global systemPromptAppend. */
+  reEngagementAppend?: string;
+  /** Whether to apply post-processing guards to re-engagement output. Default true. */
+  reEngagementApplyGuards?: boolean;
+  /** Custom system prompt for "Generate template" button. Replaces the hardcoded prompt. */
+  reEngagementTemplateGenPrompt?: string;
 };
 
 // ─── Scenario controller ──────────────────────────────────────────────────────
@@ -3008,6 +3047,34 @@ export async function loadKnowledgeBase(
     state.telegramKnowledgeBase = result ?? null;
   } catch {
     state.telegramKnowledgeBase = null;
+  } finally {
+    state.telegramKnowledgeBaseLoading = false;
+  }
+}
+
+/**
+ * Save edited knowledge base entries back to the gateway.
+ */
+export async function saveKnowledgeBase(
+  state: TelegramScenarioState,
+  agentId: string,
+  scope: TrainingScope,
+  entries: DiagramNodeKnowledge[],
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  state.telegramKnowledgeBaseLoading = true;
+  try {
+    await state.client!.request("telegram.scenario.saveKnowledgeBase", {
+      agentId,
+      scope,
+      entries,
+    });
+    // Reload to get updated timestamp
+    await loadKnowledgeBase(state, agentId, scope);
+  } catch (e) {
+    console.error("Failed to save knowledge base:", e);
   } finally {
     state.telegramKnowledgeBaseLoading = false;
   }

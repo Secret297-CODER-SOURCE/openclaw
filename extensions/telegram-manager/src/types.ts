@@ -420,6 +420,108 @@ export interface AgentSettings {
    * Supports plain text; keep it concise — injected verbatim.
    */
   systemPromptAppend?: string;
+
+  /**
+   * User-defined guards (filters) that post-process AI replies.
+   * Each guard has an id, human-readable name, description, and an enabled flag.
+   * Custom guards are shown alongside the built-in ones in the Prompts panel.
+   */
+  customGuards?: CustomGuard[];
+
+  /**
+   * Per-built-in-guard enabled/disabled overrides.
+   * Keys are guard IDs (e.g. "enforceNoAssumptiveClaims"); values are booleans.
+   * Missing keys default to the guard's original active state.
+   */
+  builtinGuardsOverrides?: Record<string, boolean>;
+
+  /**
+   * User-defined forbidden-phrase categories.
+   * Each category has a name and a list of phrases; shown alongside built-in
+   * categories in the Prompts panel. Phrases are stripped from AI replies.
+   */
+  customForbiddenCategories?: ForbiddenCategory[];
+
+  /**
+   * Overrides for built-in forbidden-phrase categories.
+   * When present, replaces the hardcoded default phrases.
+   * null/undefined = use defaults.
+   */
+  builtinForbiddenCategories?: ForbiddenCategory[];
+
+  /**
+   * Full system prompt override. When non-empty, replaces the auto-generated
+   * prompt preview entirely. Supports live editing from the Prompts panel.
+   */
+  systemPromptOverride?: string;
+
+  /**
+   * Anti-hallucination rules injected into the system prompt as
+   * "## АНТИ-ГАЛЛЮЦИНАЦИИ:". Tells the AI what it must NEVER invent,
+   * assume, or fabricate (e.g. prices, dates, phone numbers, facts).
+   */
+  antiHallucinationRules?: string;
+
+  /**
+   * Context / facts injected into the system prompt as "## КОНТЕКСТ:".
+   * Product details, company info, pricing, team members — anything the
+   * AI should always know and reference accurately.
+   */
+  contextInstructions?: string;
+
+  // ── Re-engagement prompt customization ──────────────────────────────────────
+
+  /**
+   * Full system prompt override for re-engagement AI.
+   * When set, replaces the hardcoded re-engagement system prompt entirely.
+   */
+  reEngagementSystemPrompt?: string;
+
+  /**
+   * Context/facts injected into re-engagement system prompt as "## КОНТЕКСТ:".
+   * When undefined, falls back to the global `contextInstructions`.
+   */
+  reEngagementContext?: string;
+
+  /**
+   * Anti-hallucination rules injected into re-engagement prompt.
+   * When undefined, falls back to the global `antiHallucinationRules`.
+   */
+  reEngagementAntiHallucination?: string;
+
+  /**
+   * Additional instructions appended to re-engagement prompt.
+   * When undefined, falls back to global `systemPromptAppend`.
+   */
+  reEngagementAppend?: string;
+
+  /**
+   * Whether to apply post-processing guards (forbidden phrases, phone strip,
+   * no-assumptions) to re-engagement output. Default true.
+   */
+  reEngagementApplyGuards?: boolean;
+
+  /**
+   * Custom system prompt for the "Generate template" button in re-engagement UI.
+   * When set, replaces the hardcoded buyer/neutral template generation prompt.
+   */
+  reEngagementTemplateGenPrompt?: string;
+}
+
+/** A user-defined guard (filter) for AI reply post-processing. */
+export interface CustomGuard {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  /** Optional details shown in the UI (e.g. regex or example). */
+  details?: string;
+}
+
+/** A user-defined forbidden-phrase category. */
+export interface ForbiddenCategory {
+  category: string;
+  phrases: string[];
 }
 
 // ─── Lead record ──────────────────────────────────────────────────────────────

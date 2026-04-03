@@ -1435,8 +1435,8 @@ export function renderApp(state: AppViewState) {
                       prevBubbles.scrollTop;
                   }
                   state.telegramTrainingSelectedChatId = id;
-                  // Restore or reset scroll after Lit renders the new chat
-                  void state.updateComplete.then(() => {
+                  // Restore or reset scroll after Lit renders the new chat (double-rAF waits for paint)
+                  requestAnimationFrame(() => {
                     requestAnimationFrame(() => {
                       const bubbles = document.querySelector(".tg-msng-bubbles");
                       if (!bubbles) {

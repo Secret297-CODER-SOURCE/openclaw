@@ -117,6 +117,10 @@ export type ScenarioProps = {
   onLoadKnowledgeBase: (() => Promise<void>) | null;
   /** Run AI distribution of training pairs across diagram nodes. */
   onDistributeTraining: (() => Promise<void>) | null;
+  /** Save edited knowledge base entries. */
+  onSaveKnowledgeBase:
+    | ((entries: import("../controllers/telegram.ts").DiagramNodeKnowledge[]) => Promise<void>)
+    | null;
   /** Current knowledge base (from state). */
   knowledgeBase: import("../controllers/telegram.ts").DiagramKnowledgeBase | null;
   /** Whether KB is loading. */
@@ -1595,6 +1599,7 @@ export function renderSchemaPanel(props: ScenarioProps, agent: TelegramAgentReco
         .onSaveAnthropicKey=${props.onSaveAnthropicKey}
         .onLoadKnowledgeBase=${props.onLoadKnowledgeBase}
         .onDistributeTraining=${props.onDistributeTraining}
+        .onSaveKnowledgeBase=${props.onSaveKnowledgeBase}
         .knowledgeBase=${props.knowledgeBase}
         .knowledgeBaseLoading=${props.knowledgeBaseLoading}
         .onGenerateDiagramFromText=${props.onGenerateDiagramFromText}

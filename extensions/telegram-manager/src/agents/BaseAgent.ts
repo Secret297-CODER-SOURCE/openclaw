@@ -713,7 +713,7 @@ export abstract class BaseAgent extends EventEmitter {
       ? `🟢 Сейчас рабочее время (${from}–${to}). Ты доступен — можешь выйти на звонок сегодня.`
       : `🔴 Сейчас нерабочее время. Ты доступен для звонков завтра с ${from} до ${to}.`;
 
-    const systemPrompt =
+    let systemPrompt =
       `Ты — ${agentDisplayName}, менеджер по продажам. Это ТВОЙ личный аккаунт Telegram — ты и есть тот человек, с кем клиент общается. НЕ бот, НЕ ИИ.\n` +
       `${workStatusLine}\n` +
       `Говори от первого лица: "я позвоню", "я свободен", "давай созвонимся" — НЕ "менеджер позвонит", НЕ "менеджер свяжется".\n\n` +
@@ -759,6 +759,11 @@ export abstract class BaseAgent extends EventEmitter {
       `без привязки к конкретной сфере, если клиент её не называл.\n\n` +
       `## Язык ответа: определи по тексту клиента («${allClientText.slice(0, 150)}») и отвечай СТРОГО на нём.\n\n` +
       `Стиль: профессиональный, живой, уверенный. 2–4 предложения. Без пустых строк.`;
+
+    // Apply full system prompt override if configured (replaces auto-generated static rules)
+    if (settings.systemPromptOverride?.trim()) {
+      systemPrompt = settings.systemPromptOverride.trim();
+    }
 
     // Inject custom instructions from settings (runOfflineLeadMode)
     if (settings.systemPromptAppend?.trim()) {
@@ -2381,6 +2386,11 @@ export abstract class BaseAgent extends EventEmitter {
       `Сначала — реакция на слова клиента (1 предложение), затем — конкретный оффер или следующий шаг.\n` +
       `НЕ начинай с вопроса.`;
 
+    // Apply full system prompt override if configured (runScriptStep)
+    if (settings.systemPromptOverride?.trim()) {
+      systemPrompt = settings.systemPromptOverride.trim();
+    }
+
     // Inject custom instructions from settings (runScriptStep)
     if (settings.systemPromptAppend?.trim()) {
       systemPrompt += `\n\n## ДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ:\n${settings.systemPromptAppend.trim()}`;
@@ -2722,7 +2732,7 @@ export abstract class BaseAgent extends EventEmitter {
           ? `► Стиль: жёсткий — прямые предложения, минимум вопросов, максимум давления к решению.\n`
           : `► Стиль: сбалансированный — ROI + умеренная срочность + один переходный вопрос.\n`;
 
-    const systemPrompt =
+    let systemPrompt =
       `Ты — ${agentDisplayName}, опытный менеджер по продажам. Живой человек, не ИИ.\n` +
       `Скрипт завершён. Теперь свободный диалог — отвечай как живой человек, по делу.\n\n` +
       (isLoopFree
@@ -2771,6 +2781,11 @@ export abstract class BaseAgent extends EventEmitter {
         : "") +
       `• ${strict ? "Выходить за рамки скрипта." : "Зацикливаться на одном — двигайся дальше."}\n\n` +
       `2–3 предложения. Telegram-стиль. Без пустых строк.`;
+
+    // Apply full system prompt override if configured (runFreeMode)
+    if (agentSettings.systemPromptOverride?.trim()) {
+      systemPrompt = agentSettings.systemPromptOverride.trim();
+    }
 
     // Inject custom instructions from settings (runFreeMode)
     if (agentSettings.systemPromptAppend?.trim()) {
@@ -3449,7 +3464,7 @@ export abstract class BaseAgent extends EventEmitter {
           const matchingDays: number[] = [];
           for (const days of delays) {
             const targetMs = days * 24 * 60 * 60 * 1000;
-            const wMs = 12 * 60 * 60 * 1000;
+            const wMs = 36 * 60 * 60 * 1000; // ±36 hours window
             const windowStartMs = now - targetMs - wMs;
             const windowEndMs = now - targetMs + wMs;
             if (lastMsgTime >= windowStartMs && lastMsgTime < windowEndMs) {
@@ -3466,12 +3481,12 @@ export abstract class BaseAgent extends EventEmitter {
       }
     }
 
-    // Window for exact-day matches: ±12 h for all days.
-    // This gives each contact a full 24-hour eligibility period so that any cron run
-    // within that day will find and send to them, regardless of what time of day they
-    // last wrote. period_ref dedup in the DB prevents double-sending per contact per
-    // delay period even if the cron fires many times within the window.
-    const windowMs = (_d: number) => 12 * 60 * 60 * 1000;
+    // Window for exact-day matches: ±36 h for all days.
+    // This gives each contact a 72-hour eligibility period (3 days worth) so that contacts
+    // will more reliably fall into the target window even if their silence time is slightly
+    // off from the exact day count. period_ref dedup in the DB prevents double-sending per
+    // contact per delay period even if the cron fires many times within the window.
+    const windowMs = (_d: number) => 36 * 60 * 60 * 1000;
 
     // Helper: send a re-engagement message to a contact.
     // Returns true if a message was actually sent (used for pause counting).
