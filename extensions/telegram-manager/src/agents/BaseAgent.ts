@@ -3421,16 +3421,30 @@ export abstract class BaseAgent extends EventEmitter {
     // falls outside working hours (the ±4 h window passes before work begins).
 
     const template = settings.reEngagementTemplate?.trim();
+    // Effective mode: default to "ai" when not explicitly set so that
+    // users who just enable re-engagement without configuring a template
+    // still get messages generated from chat history.
+    const effectiveMode = settings.reEngagementAiMode ?? "ai";
     // In full-AI mode a template is optional; in template mode it's required.
-    if (settings.reEngagementAiMode !== "ai" && !template) return;
+    if (effectiveMode !== "ai" && !template) {
+      this.logger.warn(
+        `[TG:${this.name}] re-engagement: режим "Шаблон" выбран, но шаблон не задан — ` +
+          `реактивация пропущена. Введите шаблон в Промпты → Реактивация или переключитесь на ИИ-режим.`,
+      );
+      return;
+    }
 
     // Build delays array: prefer range (from/to) over legacy chips array.
+    // Fall back to [1, 2, 3, 5, 7] when neither range nor legacy array is configured
+    // (e.g. user enabled re-engagement but never explicitly saved the interval inputs).
     const fromDay = settings.reEngagementDelayFrom ?? null;
     const toDay = settings.reEngagementDelayTo ?? null;
     const delays: number[] =
       fromDay !== null && toDay !== null
         ? Array.from({ length: Math.max(0, toDay - fromDay + 1) }, (_, i) => fromDay + i)
-        : (settings.reEngagementDelays ?? []);
+        : (settings.reEngagementDelays?.length
+            ? settings.reEngagementDelays
+            : [1, 2, 3, 5, 7]); // sensible default when interval was never explicitly saved
 
     if (delays.length === 0 && !settings.reEngagementDelayMore) return;
 
@@ -3506,11 +3520,23 @@ export abstract class BaseAgent extends EventEmitter {
       const chatKey = `${this.id}:${contact.chatId}`;
       let message: string;
 
-      if (settings.reEngagementAiMode === "ai") {
-        // Full AI mode: generate entirely from chat history, no template
+      if (effectiveMode === "ai") {
+        // Full AI mode: generate from chat history; fall back to template when history is empty.
         const aiMsg = await this.generateAiReEngagement(contact, chatKey);
-        if (!aiMsg) return false; // no history or AI failed — skip contact
-        message = aiMsg;
+        if (!aiMsg) {
+          if (!template) return false; // no history, no template — skip
+          // Fallback: use template with AI enhancement
+          const baseMessage = this.formatReEngagementMessage(
+            template,
+            contact.firstName,
+            contact.lastName,
+            contact.username,
+          );
+          if (!baseMessage) return false;
+          message = await this.enhanceReEngagementMessage(baseMessage, chatKey);
+        } else {
+          message = aiMsg;
+        }
       } else {
         // Template mode (default): fill template + AI enhance
         const baseMessage = this.formatReEngagementMessage(
@@ -3539,7 +3565,7 @@ export abstract class BaseAgent extends EventEmitter {
           action: "sent",
           chatId: contact.chatId,
           day: dayLabel,
-          mode: settings.reEngagementAiMode ?? "template",
+          mode: effectiveMode,
           text: message,
         });
         return true;

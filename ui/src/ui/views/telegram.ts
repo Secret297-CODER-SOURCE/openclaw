@@ -2745,7 +2745,13 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
               <label class="tg-toggle-option ${settings.reEngagementEnabled ? "tg-toggle-option--active" : ""}">
                 <input type="radio" name="reeng-prompts-${agent.id}"
                   ?checked=${!!settings.reEngagementEnabled}
-                  @change=${() => saveNow({ reEngagementEnabled: true })}
+                  @change=${() => saveNow({
+                    reEngagementEnabled: true,
+                    // Save interval defaults so cron has a non-empty delays array from the start
+                    reEngagementDelayFrom: settings.reEngagementDelayFrom ?? 1,
+                    reEngagementDelayTo: settings.reEngagementDelayTo ?? 7,
+                    reEngagementAiMode: settings.reEngagementAiMode ?? "ai",
+                  })}
                   style="display:none;" />
                 ✅ Включить
               </label>
@@ -2903,14 +2909,14 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
               </div>
               <div class="tg-toggle-group" style="margin-bottom:10px;">
                 <label
-                  class="tg-toggle-option ${(settings.reEngagementAiMode ?? "template") === "template" ? "tg-toggle-option--active" : ""}"
-                  @click=${() => saveNow({ reEngagementAiMode: "template" })}>
-                  📝 Шаблон
-                </label>
-                <label
-                  class="tg-toggle-option ${settings.reEngagementAiMode === "ai" ? "tg-toggle-option--active" : ""}"
+                  class="tg-toggle-option ${(settings.reEngagementAiMode ?? "ai") === "ai" ? "tg-toggle-option--active" : ""}"
                   @click=${() => saveNow({ reEngagementAiMode: "ai" })}>
                   🤖 ИИ генерирует
+                </label>
+                <label
+                  class="tg-toggle-option ${settings.reEngagementAiMode === "template" ? "tg-toggle-option--active" : ""}"
+                  @click=${() => saveNow({ reEngagementAiMode: "template" })}>
+                  📝 Шаблон
                 </label>
               </div>
 
@@ -2945,7 +2951,7 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                 }
               </div>
               ${
-                settings.reEngagementAiMode === "ai"
+                (settings.reEngagementAiMode ?? "ai") === "ai"
                   ? html`
                       <div class="tg-setting-hint" style="margin-bottom: 10px">
                         ИИ читает всю историю чата и пишет уникальное сообщение с нуля — в тему прошлого разговора, на
