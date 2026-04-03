@@ -202,6 +202,20 @@ export abstract class BaseAgent extends EventEmitter {
   }
 
   /**
+   * Check whether a built-in guard is enabled for the given settings.
+   * Falls back to `defaultActive` when no user override exists.
+   */
+  protected isBuiltinGuardEnabled(
+    guardId: string,
+    settings: AgentSettings,
+    defaultActive = true,
+  ): boolean {
+    const overrides = settings.builtinGuardsOverrides;
+    if (overrides && guardId in overrides) return !!overrides[guardId];
+    return defaultActive;
+  }
+
+  /**
    * Hard post-processing guard: if the generated reply contains ANY time that
    * falls outside the configured working window, replace it with a firm redirect.
    *
@@ -210,6 +224,8 @@ export abstract class BaseAgent extends EventEmitter {
    * or when all mentioned times are within the window.
    */
   protected enforceWorkingHours(reply: string, settings: AgentSettings): string {
+    // Respect user override for this built-in guard
+    if (!this.isBuiltinGuardEnabled("enforceWorkingHours", settings, true)) return reply;
     const from = settings.managerWorkFrom ?? settings.scheduleFrom ?? "?";
     const to = settings.managerWorkTo ?? settings.scheduleTo ?? "?";
     if (from === "?" || to === "?") return reply;
@@ -300,7 +316,11 @@ export abstract class BaseAgent extends EventEmitter {
    * Re-engagement messages must always sound like the individual manager, not a company.
    * Covers Russian, Turkish (biz/sunabiliriz → ben/sunabilirim) and English (we → I).
    */
-  protected enforceFirstPerson(text: string): string {
+  protected enforceFirstPerson(text: string, settings?: AgentSettings): string {
+    // Respect user override for this built-in guard
+    if (settings && !this.isBuiltinGuardEnabled("enforceFirstPerson", settings, true)) {
+      return text;
+    }
     return (
       text
         // Russian: мы → я, нам → мне, нас → меня, наш/нашей/нашу → мой/мне
@@ -341,7 +361,12 @@ export abstract class BaseAgent extends EventEmitter {
     reply: string,
     history: Array<{ role: string; content: string }>,
     latestUserText?: string,
+    settings?: AgentSettings,
   ): string {
+    // Respect user override for this built-in guard
+    if (settings && !this.isBuiltinGuardEnabled("enforceNoAssumptiveClaims", settings, true)) {
+      return reply;
+    }
     // Rewrite direct "you said/say" and "you want/seek" narration into manager-led style.
     // Covers past tense (говорил, писал, упоминал), present tense (говоришь, что),
     // and client-intent narration (ты хочешь, ты ищешь, ты пытаешься).
@@ -406,10 +431,17 @@ export abstract class BaseAgent extends EventEmitter {
    * surrounding whitespace.  Returns the text unchanged when no list is configured.
    */
   protected enforceCustomForbiddenPhrases(text: string, settings: AgentSettings): string {
-    const phrases = settings.customForbiddenPhrases;
-    if (!phrases || phrases.length === 0) return text;
+    // Collect all forbidden phrases: flat list + built-in categories + custom categories
+    const allPhrases: string[] = [...(settings.customForbiddenPhrases ?? [])];
+    for (const cat of settings.builtinForbiddenCategories ?? []) {
+      allPhrases.push(...cat.phrases);
+    }
+    for (const cat of settings.customForbiddenCategories ?? []) {
+      allPhrases.push(...cat.phrases);
+    }
+    if (allPhrases.length === 0) return text;
     let result = text;
-    for (const phrase of phrases) {
+    for (const phrase of allPhrases) {
       const trimmed = phrase.trim();
       if (!trimmed) continue;
       // Escape regex special chars and match case-insensitively
@@ -732,15 +764,29 @@ export abstract class BaseAgent extends EventEmitter {
     if (settings.systemPromptAppend?.trim()) {
       systemPrompt += `\n\n## ДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ:\n${settings.systemPromptAppend.trim()}`;
     }
+    if (settings.contextInstructions?.trim()) {
+      systemPrompt += `\n\n## КОНТЕКСТ:\n${settings.contextInstructions.trim()}`;
+    }
+    if (settings.antiHallucinationRules?.trim()) {
+      systemPrompt += `\n\n## АНТИ-ГАЛЛЮЦИНАЦИИ (СТРОГО):\n${settings.antiHallucinationRules.trim()}`;
+    }
 
     const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
     try {
       const raw = await aiReply(userText, chatKey, systemPrompt, this.storage, workspaceTools);
-      const stripped = raw
-        .replace(/(?<!\d)(\+?\d[\d\s\-().]{5,}\d)(?!\d)/g, "")
-        .replace(/\s{2,}/g, " ")
-        .trim();
-      const assumptionSafeReply = this.enforceNoAssumptiveClaims(stripped, recentHistory, userText);
+      // Strip phone numbers unless the guard is disabled by user
+      const stripped = this.isBuiltinGuardEnabled("stripPhoneNumbers", settings, true)
+        ? raw
+            .replace(/(?<!\d)(\+?\d[\d\s\-().]{5,}\d)(?!\d)/g, "")
+            .replace(/\s{2,}/g, " ")
+            .trim()
+        : raw;
+      const assumptionSafeReply = this.enforceNoAssumptiveClaims(
+        stripped,
+        recentHistory,
+        userText,
+        settings,
+      );
       const customSafeReply = this.enforceCustomForbiddenPhrases(assumptionSafeReply, settings);
       // Apply working hours guard before logging so the logged text matches what was sent.
       const finalReply = this.enforceWorkingHours(customSafeReply, settings) || null;
@@ -1531,11 +1577,14 @@ export abstract class BaseAgent extends EventEmitter {
      * Strip phone-number-like sequences from a manager reply.
      * Managers must never share phone numbers in their messages.
      */
-    const stripPhoneNumbers = (text: string): string =>
-      text
+    const stripPhoneNumbers = (text: string): string => {
+      // Respect user override for phone-stripping guard
+      if (!this.isBuiltinGuardEnabled("stripPhoneNumbers", settings, true)) return text;
+      return text
         .replace(/(?<!\d)(\+?\d[\d\s\-().]{5,}\d)(?!\d)/g, "")
         .replace(/\s{2,}/g, " ")
         .trim();
+    };
 
     const adaptScript = async (template: string): Promise<string> => {
       // Last 50 messages — preserve as much context as possible.
@@ -2029,14 +2078,12 @@ export abstract class BaseAgent extends EventEmitter {
         this.enforceWorkingHours(stripPhoneNumbers(reply), settings),
         conversationHistory,
         userText,
+        settings,
       );
       persistHistory(userText, safeReply);
       return safeReply;
     }
 
-    // ── Decision node with KB: adapt template, AI picks branch ───────────────
-    // Note: single-exit decision nodes still use the KB template — they just
-    // trivially advance (no branching choice). Removing `nextNodes.length > 1`
     // fixes the bug where single-exit decision nodes fell to system prompt path.
     if (isDecision && bestTemplate) {
       // Run reply adaptation and branch routing in parallel.
@@ -2069,6 +2116,7 @@ export abstract class BaseAgent extends EventEmitter {
         this.enforceWorkingHours(stripPhoneNumbers(reply), settings),
         conversationHistory,
         userText,
+        settings,
       );
       persistHistory(userText, safeDecisionReply);
       return safeDecisionReply;
@@ -2337,6 +2385,12 @@ export abstract class BaseAgent extends EventEmitter {
     if (settings.systemPromptAppend?.trim()) {
       systemPrompt += `\n\n## ДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ:\n${settings.systemPromptAppend.trim()}`;
     }
+    if (settings.contextInstructions?.trim()) {
+      systemPrompt += `\n\n## КОНТЕКСТ:\n${settings.contextInstructions.trim()}`;
+    }
+    if (settings.antiHallucinationRules?.trim()) {
+      systemPrompt += `\n\n## АНТИ-ГАЛЛЮЦИНАЦИИ (СТРОГО):\n${settings.antiHallucinationRules.trim()}`;
+    }
 
     // ── Generate reply ────────────────────────────────────────────────────
     const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
@@ -2505,6 +2559,7 @@ export abstract class BaseAgent extends EventEmitter {
       stripPhoneNumbers(reply),
       conversationHistory,
       userText,
+      settings,
     );
     const customSafe = this.enforceCustomForbiddenPhrases(sanitizedReply, settings);
     const finalReply = this.enforceWorkingHours(customSafe, settings) || null;
@@ -2721,20 +2776,29 @@ export abstract class BaseAgent extends EventEmitter {
     if (agentSettings.systemPromptAppend?.trim()) {
       systemPrompt += `\n\n## ДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ:\n${agentSettings.systemPromptAppend.trim()}`;
     }
+    if (agentSettings.contextInstructions?.trim()) {
+      systemPrompt += `\n\n## КОНТЕКСТ:\n${agentSettings.contextInstructions.trim()}`;
+    }
+    if (agentSettings.antiHallucinationRules?.trim()) {
+      systemPrompt += `\n\n## АНТИ-ГАЛЛЮЦИНАЦИИ (СТРОГО):\n${agentSettings.antiHallucinationRules.trim()}`;
+    }
 
     const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
     try {
       const rawReply = await aiReply(userText, chatKey, systemPrompt, this.storage, workspaceTools);
-      const safeReply = rawReply
-        .replace(/(?<!\d)(\+?\d[\d\s\-().]{5,}\d)(?!\d)/g, "")
-        .replace(/\s{2,}/g, " ")
-        .trim();
+      // Strip phone numbers unless the guard is disabled by user
+      const safeReply = this.isBuiltinGuardEnabled("stripPhoneNumbers", agentSettings, true)
+        ? rawReply
+            .replace(/(?<!\d)(\+?\d[\d\s\-().]{5,}\d)(?!\d)/g, "")
+            .replace(/\s{2,}/g, " ")
+            .trim()
+        : rawReply;
       const assumptionSafeReply = this.enforceNoAssumptiveClaims(
         safeReply,
         conversationHistory,
         userText,
+        agentSettings,
       );
-      const _sig4 = this.getSignalId(conversationHistory);
       this.logger.info(
         `[TG:${this.name}] free-mode reply | chat=${chatId} ` +
           `stage=${_stage4.stage} node="${_stage4.node}"`,
@@ -3106,6 +3170,69 @@ export abstract class BaseAgent extends EventEmitter {
   }
 
   /**
+   * Build the full system prompt for re-engagement AI calls.
+   * Uses the custom override if set, otherwise the hardcoded base prompt
+   * with context/anti-hallucination/append injected from re-engagement
+   * settings (falling back to global manager settings).
+   */
+  private buildReEngagementSystemPrompt(
+    basePrompt: string,
+    settings: import("../types.js").AgentSettings,
+  ): string {
+    // Full override replaces everything
+    if (settings.reEngagementSystemPrompt?.trim()) {
+      return settings.reEngagementSystemPrompt.trim();
+    }
+
+    let prompt = basePrompt;
+
+    // Inject context (re-engagement-specific or fallback to global)
+    const ctx = settings.reEngagementContext?.trim() || settings.contextInstructions?.trim();
+    if (ctx) {
+      prompt += `\n\n## КОНТЕКСТ:\n${ctx}`;
+    }
+
+    // Inject anti-hallucination rules
+    const ah =
+      settings.reEngagementAntiHallucination?.trim() || settings.antiHallucinationRules?.trim();
+    if (ah) {
+      prompt += `\n\n## АНТИ-ГАЛЛЮЦИНАЦИИ (СТРОГО):\n${ah}`;
+    }
+
+    // Inject additional instructions
+    const append = settings.reEngagementAppend?.trim() || settings.systemPromptAppend?.trim();
+    if (append) {
+      prompt += `\n\n## ДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ:\n${append}`;
+    }
+
+    return prompt;
+  }
+
+  /**
+   * Apply post-processing guards to a re-engagement message.
+   * Respects the reEngagementApplyGuards toggle (default: true).
+   */
+  private applyReEngagementGuards(
+    text: string,
+    settings: import("../types.js").AgentSettings,
+  ): string {
+    let result = this.enforceFirstPerson(text, settings);
+
+    // Skip other guards if explicitly disabled
+    if (settings.reEngagementApplyGuards === false) return result;
+
+    result = this.enforceNoAssumptiveClaims(result, settings);
+    result = this.enforceCustomForbiddenPhrases(result, settings);
+
+    // Strip phone numbers if guard is enabled
+    if (this.isBuiltinGuardEnabled("stripPhoneNumbers", settings)) {
+      result = result.replace(/(?:\+?\d[\d\s\-()]{6,}\d)/g, "[номер скрыт]");
+    }
+
+    return result;
+  }
+
+  /**
    * Use AI to personalise and make a re-engagement message more compelling.
    * Takes the base template (already substituted) and recent conversation history,
    * and returns a short, human-feeling message.
@@ -3138,7 +3265,7 @@ export abstract class BaseAgent extends EventEmitter {
             ? "Тон мягкий — дай человеку самому захотеть продолжить, без давления."
             : "Тон уверенный, не давящий — ты помнишь его ситуацию, у тебя есть что сказать.";
 
-      const systemPrompt =
+      const baseSystemPrompt =
         "Ты — эксперт по реактивации «замёрзших» сделок.\n" +
         "Клиент давно молчит. Твоя задача: написать ОДНО сообщение которое вернёт его в разговор.\n\n" +
         "Алгоритм:\n" +
@@ -3156,6 +3283,8 @@ export abstract class BaseAgent extends EventEmitter {
         "• СТРОГО первое лицо ЕДИНСТВЕННОГО числа: 'я', 'могу', 'предлагаю', 'звоню' — ЗАПРЕЩЕНО 'мы', 'можем', 'предлагаем' на любом языке\n" +
         "• Только готовый текст сообщения — без кавычек, пояснений, заголовков";
 
+      const systemPrompt = this.buildReEngagementSystemPrompt(baseSystemPrompt, erSettings);
+
       const userPrompt =
         `Шаблон-скелет: "${baseMessage}"\n\n` +
         `История диалога:\n${historyText}\n\n` +
@@ -3166,9 +3295,8 @@ export abstract class BaseAgent extends EventEmitter {
       void erIsBuyer; // already embedded in prompt logic above
 
       const enhanced = await callAdapterOnce(userPrompt, systemPrompt);
-      return (
-        this.enforceFirstPerson(enhanced.replace(/^["«»']+|["«»']+$/g, "").trim()) || baseMessage
-      );
+      const cleaned = enhanced.replace(/^["«»']+|["«»']+$/g, "").trim();
+      return this.applyReEngagementGuards(cleaned, erSettings) || baseMessage;
     } catch {
       return baseMessage;
     }
@@ -3221,10 +3349,9 @@ export abstract class BaseAgent extends EventEmitter {
             : "Тон уверенный, не давящий — ты помнишь его ситуацию и пишешь по делу.";
 
       // Single system prompt works for both buyer and non-buyer mode.
-      // The professional re-engagement algorithm is the same in both cases.
       void arIsBuyer;
 
-      const systemPrompt =
+      const baseSystemPrompt =
         "Ты — эксперт по реактивации «замёрзших» сделок.\n" +
         "Клиент давно молчит. Одно сообщение — вернуть его в разговор.\n\n" +
         "Шаги (не пиши их — только используй для формулировки):\n" +
@@ -3244,6 +3371,8 @@ export abstract class BaseAgent extends EventEmitter {
         "• СТРОГО первое лицо ЕДИНСТВЕННОГО числа: 'я', 'могу', 'предлагаю' — ЗАПРЕЩЕНО 'мы', 'можем', 'предлагаем' на любом языке\n" +
         "• Только готовый текст — без кавычек, пояснений, заголовков";
 
+      const systemPrompt = this.buildReEngagementSystemPrompt(baseSystemPrompt, arSettings);
+
       const userPrompt =
         `${nameHint}\n\n` +
         `Полная история диалога:\n${historyText}\n\n` +
@@ -3251,7 +3380,8 @@ export abstract class BaseAgent extends EventEmitter {
         `напиши одно сообщение которое говорит о ЕГО цели и даёт повод ответить.`;
 
       const result = await callAdapterOnce(userPrompt, systemPrompt);
-      return this.enforceFirstPerson(result.replace(/^["«»']+|["«»']+$/g, "").trim()) || null;
+      const cleaned = result.replace(/^["«»']+|["«»']+$/g, "").trim();
+      return this.applyReEngagementGuards(cleaned, arSettings) || null;
     } catch (e) {
       this.logger.warn(
         `[TG:${this.name}] re-engagement AI generation failed | chat=${contact.chatId}: ${String(e)}`,
@@ -3298,6 +3428,7 @@ export abstract class BaseAgent extends EventEmitter {
       this.logger.info(
         `[TG:${this.name}] re-engagement check | delays=${JSON.stringify(delays)} ` +
           `more=${settings.reEngagementDelayMore ?? false} ` +
+          `pause=${settings.reEngagementPauseMin ?? 0}-${settings.reEngagementPauseMax ?? 0}s ` +
           `trackedContacts=${contacts.length} now=${nowIso}`,
       );
       if (contacts.length === 0) {
@@ -3309,10 +3440,27 @@ export abstract class BaseAgent extends EventEmitter {
         // Log each contact's last-activity so we can see which day-window they'd hit.
         for (const c of contacts) {
           const name = c.firstName ?? c.username ?? c.chatId;
-          const silenceDays = ((now - new Date(c.lastClientMsgAt).getTime()) / 86400000).toFixed(2);
+          const lastMsgTime = new Date(c.lastClientMsgAt).getTime();
+          const silenceMs = now - lastMsgTime;
+          const silenceDays = (silenceMs / 86400000).toFixed(2);
+          const silenceHours = (silenceMs / 3600000).toFixed(1);
+
+          // Check which day windows this contact would match
+          const matchingDays: number[] = [];
+          for (const days of delays) {
+            const targetMs = days * 24 * 60 * 60 * 1000;
+            const wMs = 12 * 60 * 60 * 1000;
+            const windowStartMs = now - targetMs - wMs;
+            const windowEndMs = now - targetMs + wMs;
+            if (lastMsgTime >= windowStartMs && lastMsgTime < windowEndMs) {
+              matchingDays.push(days);
+            }
+          }
+
           this.logger.info(
             `[TG:${this.name}] re-engagement contact | chat=${c.chatId} name="${name}" ` +
-              `last=${c.lastClientMsgAt} silence=${silenceDays}d alreadySent=[${c.sentDays}]`,
+              `last=${c.lastClientMsgAt} silence=${silenceDays}d (${silenceHours}h) ` +
+              `alreadySent=[${c.sentDays}] matchingWindows=[${matchingDays.join(",")}]`,
           );
         }
       }
@@ -3326,6 +3474,7 @@ export abstract class BaseAgent extends EventEmitter {
     const windowMs = (_d: number) => 12 * 60 * 60 * 1000;
 
     // Helper: send a re-engagement message to a contact.
+    // Returns true if a message was actually sent (used for pause counting).
     const sendReEngagement = async (
       contact: {
         chatId: string;
@@ -3335,9 +3484,9 @@ export abstract class BaseAgent extends EventEmitter {
         lastClientMsgAt: string;
       },
       dayLabel: number,
-    ) => {
+    ): Promise<boolean> => {
       const resolvedName = contact.firstName ?? contact.username ?? null;
-      if (settings.reEngagementNameOnly && !resolvedName) return;
+      if (settings.reEngagementNameOnly && !resolvedName) return false;
 
       const chatKey = `${this.id}:${contact.chatId}`;
       let message: string;
@@ -3345,7 +3494,7 @@ export abstract class BaseAgent extends EventEmitter {
       if (settings.reEngagementAiMode === "ai") {
         // Full AI mode: generate entirely from chat history, no template
         const aiMsg = await this.generateAiReEngagement(contact, chatKey);
-        if (!aiMsg) return; // no history or AI failed — skip contact
+        if (!aiMsg) return false; // no history or AI failed — skip contact
         message = aiMsg;
       } else {
         // Template mode (default): fill template + AI enhance
@@ -3355,7 +3504,7 @@ export abstract class BaseAgent extends EventEmitter {
           contact.lastName,
           contact.username,
         );
-        if (!baseMessage) return;
+        if (!baseMessage) return false;
         message = await this.enhanceReEngagementMessage(baseMessage, chatKey);
       }
 
@@ -3378,10 +3527,12 @@ export abstract class BaseAgent extends EventEmitter {
           mode: settings.reEngagementAiMode ?? "template",
           text: message,
         });
+        return true;
       } catch (e) {
         this.logger.warn(
           `[TG:${this.name}] re-engagement failed | chat=${contact.chatId}: ${String(e)}`,
         );
+        return false;
       }
     };
 
@@ -3389,9 +3540,17 @@ export abstract class BaseAgent extends EventEmitter {
     const pauseMin = (settings.reEngagementPauseMin ?? 0) * 1000;
     const pauseMax = Math.max(pauseMin, (settings.reEngagementPauseMax ?? 0) * 1000);
     let sentCount = 0;
+    if (pauseMax > 0) {
+      this.logger.info(
+        `[TG:${this.name}] re-engagement pause config | min=${pauseMin}ms max=${pauseMax}ms`,
+      );
+    }
     const maybePause = async () => {
       if (sentCount === 0 || pauseMax === 0) return;
       const delay = pauseMin + Math.random() * (pauseMax - pauseMin);
+      this.logger.info(
+        `[TG:${this.name}] re-engagement pause | ${Math.round(delay)}ms before next send (sent=${sentCount})`,
+      );
       await new Promise((r) => setTimeout(r, delay));
     };
 
@@ -3408,8 +3567,18 @@ export abstract class BaseAgent extends EventEmitter {
         windowStart,
         windowEnd,
       );
+
+      // Enhanced logging with human-readable window boundaries
+      const windowStartDate = new Date(windowStart);
+      const windowEndDate = new Date(windowEnd);
+      const windowDurationHours = (
+        (windowEndDate.getTime() - windowStartDate.getTime()) /
+        3600000
+      ).toFixed(1);
+
       this.logger.info(
-        `[TG:${this.name}] re-engagement day=${days} window=[${windowStart}..${windowEnd}] found=${contacts.length}`,
+        `[TG:${this.name}] re-engagement day=${days} window=[${windowStart}..${windowEnd}] ` +
+          `duration=${windowDurationHours}h found=${contacts.length}`,
       );
       if (contacts.length === 0) {
         const stats = this.storage.getReEngagementWindowStats(
@@ -3424,8 +3593,8 @@ export abstract class BaseAgent extends EventEmitter {
       }
       for (const contact of contacts) {
         await maybePause();
-        await sendReEngagement(contact, days);
-        sentCount++;
+        const sent = await sendReEngagement(contact, days);
+        if (sent) sentCount++;
       }
     }
 
@@ -3445,8 +3614,8 @@ export abstract class BaseAgent extends EventEmitter {
       }
       for (const contact of contacts) {
         await maybePause();
-        await sendReEngagement(contact, 9999);
-        sentCount++;
+        const sent = await sendReEngagement(contact, 9999);
+        if (sent) sentCount++;
       }
     }
   }
