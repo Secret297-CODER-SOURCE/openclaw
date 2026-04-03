@@ -2818,6 +2818,18 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                 Агент пишет контактам, молчавшим от <b>${settings.reEngagementDelayFrom ?? 1}</b>
                 до <b>${settings.reEngagementDelayTo ?? 7}</b> дней${settings.reEngagementDelayMore ? `, а также всем кто молчит дольше` : ""}.
               </div>
+              <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:8px 12px;margin-top:8px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <span style="font-size:20px;">⚠️</span>
+                  <div style="flex:1;">
+                    <div style="font-size:12px;font-weight:600;color:#ef4444;margin-bottom:2px;">Требуется рестарт агента</div>
+                    <div style="font-size:11px;color:var(--text-muted);line-height:1.4;">
+                      Изменения интервала применяются только после рестарта агента.
+                      <br>Остановите и запустите агента заново во вкладке «Обзор».
+                    </div>
+                  </div>
+                </div>
+              </div>
 
               <!-- Pause between messages -->
               <div class="tg-reeng-section-title" style="margin-top:14px;">Задержка между сообщениями</div>
