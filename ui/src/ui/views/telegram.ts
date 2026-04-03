@@ -198,6 +198,9 @@ export type TelegramProps = {
   onSaveAnthropicKey: ((key: string) => Promise<{ ok: boolean; error?: string }>) | null;
   onLoadKnowledgeBase: (() => Promise<void>) | null;
   onDistributeTraining: (() => Promise<void>) | null;
+  onSaveKnowledgeBase:
+    | ((entries: import("../controllers/telegram.ts").DiagramNodeKnowledge[]) => Promise<void>)
+    | null;
   knowledgeBase: import("../controllers/telegram.ts").DiagramKnowledgeBase | null;
   knowledgeBaseLoading: boolean;
   onGenerateDiagramFromText:
@@ -719,202 +722,6 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
         </div>
       </div>
 
-      <!-- ── 2. Режим общения ───────────────────────────────────────── -->
-      <div class="tg-setting-row">
-        <div class="tg-setting-label">💬 Режим общения</div>
-        <div class="tg-setting-right">
-          <div class="tg-toggle-group">
-            <label class="tg-toggle-option ${settings.useSchema ? "tg-toggle-option--active" : ""}"
-              @click=${() => patchWorkMode({ useSchema: true })}>
-              По схеме
-            </label>
-            <label class="tg-toggle-option ${!settings.useSchema ? "tg-toggle-option--active" : ""}"
-              @click=${() => patchWorkMode({ useSchema: false })}>
-              Свободно
-            </label>
-          </div>
-          ${
-            settings.useSchema && !settings.activeDiagramId
-              ? html`
-                  <div class="tg-setting-hint tg-setting-hint--warn">⚠ Выберите схему выше</div>
-                `
-              : settings.useSchema
-                ? html`
-                    <div class="tg-setting-hint">Строго по шагам выбранной схемы</div>
-                  `
-                : html`
-                    <div class="tg-setting-hint">Свободный AI-ответ</div>
-                  `
-          }
-        </div>
-      </div>
-
-      <!-- ── 2b. Строгость схемы (visible only when useSchema is on) ─── -->
-      ${
-        settings.useSchema
-          ? html`
-              <div class="tg-setting-row">
-                <div class="tg-setting-label">🎯 Строгость</div>
-                <div class="tg-setting-right">
-                  <div class="tg-toggle-group">
-                    <label class="tg-toggle-option ${settings.schemaStrictMode ? "tg-toggle-option--active" : ""}"
-                      @click=${() => patchWorkMode({ schemaStrictMode: true })}>
-                      Строгий
-                    </label>
-                    <label class="tg-toggle-option ${!settings.schemaStrictMode ? "tg-toggle-option--active" : ""}"
-                      @click=${() => patchWorkMode({ schemaStrictMode: false })}>
-                      Гибкий
-                    </label>
-                  </div>
-                  ${
-                    settings.schemaStrictMode
-                      ? html`
-                          <div class="tg-setting-hint">
-                            Шаблоны KB обязательны · ответы проверяются · нарушения пересобираются
-                          </div>
-                        `
-                      : html`
-                          <div class="tg-setting-hint">Шаблоны KB как подсказка · без проверки</div>
-                        `
-                  }
-                </div>
-              </div>
-
-              <!-- ── Стиль подачи скриптов ──────────────────────────────── -->
-              <div class="tg-setting-row">
-                <div class="tg-setting-label">🗣 Стиль подачи</div>
-                <div class="tg-setting-right">
-                  <div class="tg-toggle-group">
-                    <label class="tg-toggle-option ${(settings.schemaDeliveryStyle ?? "neutral") === "neutral" ? "tg-toggle-option--active" : ""}"
-                      @click=${() => patchWorkMode({ schemaDeliveryStyle: "neutral" })}>
-                      Стандарт
-                    </label>
-                    <label class="tg-toggle-option ${settings.schemaDeliveryStyle === "buyer" ? "tg-toggle-option--active" : ""}"
-                      @click=${() => patchWorkMode({ schemaDeliveryStyle: "buyer" })}>
-                      🔥 Баер
-                    </label>
-                  </div>
-                  <div class="tg-setting-hint">
-                    ${
-                      settings.schemaDeliveryStyle === "buyer"
-                        ? "Скрипты подаются в стиле баера: цифры, ROI, без воды, уверенный тон"
-                        : "Стандартная адаптация скриптов под язык и контекст клиента"
-                    }
-                  </div>
-                </div>
-              </div>
-
-              ${
-                settings.schemaDeliveryStyle === "buyer"
-                  ? html`
-                      <!-- ── Агрессивность баера ──────────────────────────── -->
-                      <div class="tg-setting-row" style="padding-left:12px;border-left:2px solid var(--accent,#e8660088);">
-                        <div class="tg-setting-label">⚡ Напористость</div>
-                        <div class="tg-setting-right">
-                          <div class="tg-toggle-group">
-                            <label class="tg-toggle-option ${(settings.buyerAggressionLevel ?? "balanced") === "soft" ? "tg-toggle-option--active" : ""}"
-                              @click=${() => patchWorkMode({ buyerAggressionLevel: "soft" })}>
-                              Мягкий
-                            </label>
-                            <label class="tg-toggle-option ${(settings.buyerAggressionLevel ?? "balanced") === "balanced" ? "tg-toggle-option--active" : ""}"
-                              @click=${() => patchWorkMode({ buyerAggressionLevel: "balanced" })}>
-                              Баланс
-                            </label>
-                            <label class="tg-toggle-option ${settings.buyerAggressionLevel === "hard" ? "tg-toggle-option--active" : ""}"
-                              @click=${() => patchWorkMode({ buyerAggressionLevel: "hard" })}>
-                              🔥 Жёсткий
-                            </label>
-                          </div>
-                          <div class="tg-setting-hint">
-                            ${
-                              {
-                                soft: "Больше вопросов, мягкое давление — фокус на понимании",
-                                balanced: "Стандартный баер: ROI, срочность, альтернативный выбор",
-                                hard: "Прямые предложения, минимум вопросов, максимум давления",
-                              }[settings.buyerAggressionLevel ?? "balanced"]
-                            }
-                          </div>
-                        </div>
-                      </div>
-
-                      <!-- ── Захват лида ────────────────────────────────── -->
-                      <div class="tg-setting-row" style="padding-left:12px;border-left:2px solid var(--accent,#e8660088);">
-                        <div class="tg-setting-label">🎯 Захват лида</div>
-                        <div class="tg-setting-right">
-                          <div class="tg-toggle-group">
-                            <label class="tg-toggle-option ${(settings.buyerCloseStyle ?? "alternative") === "alternative" ? "tg-toggle-option--active" : ""}"
-                              @click=${() => patchWorkMode({ buyerCloseStyle: "alternative" })}>
-                              Выбор
-                            </label>
-                            <label class="tg-toggle-option ${settings.buyerCloseStyle === "direct" ? "tg-toggle-option--active" : ""}"
-                              @click=${() => patchWorkMode({ buyerCloseStyle: "direct" })}>
-                              Напрямую
-                            </label>
-                            <label class="tg-toggle-option ${settings.buyerCloseStyle === "micro-step" ? "tg-toggle-option--active" : ""}"
-                              @click=${() => patchWorkMode({ buyerCloseStyle: "micro-step" })}>
-                              Микрошаг
-                            </label>
-                          </div>
-                          <div class="tg-setting-hint">
-                            ${
-                              {
-                                alternative:
-                                  "«Позвонить или написать в WhatsApp?» — даёт выбор, не да/нет",
-                                direct:
-                                  "«Скинь номер — я сам напишу сегодня» — от имени менеджера, не безлично",
-                                "micro-step":
-                                  "«Запишу тебя на звонок — в четверг удобно?» — конкретный шаг",
-                              }[settings.buyerCloseStyle ?? "alternative"]
-                            }
-                          </div>
-                          <div class="tg-setting-hint" style="margin-top:4px;color:var(--text-muted);">
-                            📦 Продукт и нишу ИИ определяет сам из истории переписки
-                          </div>
-                        </div>
-                      </div>
-                    `
-                  : html``
-              }
-            `
-          : html``
-      }
-
-      <!-- ── 3. Расписание ──────────────────────────────────────────── -->
-      <div class="tg-setting-row">
-        <div class="tg-setting-label">🕐 Время ответов</div>
-        <div class="tg-setting-right">
-          <div class="tg-toggle-group">
-            <label class="tg-toggle-option ${settings.scheduleMode === "always" ? "tg-toggle-option--active" : ""}"
-              @click=${() => patchWorkMode({ scheduleMode: "always" })}>
-              Всегда
-            </label>
-            <label class="tg-toggle-option ${settings.scheduleMode === "schedule" ? "tg-toggle-option--active" : ""}"
-              @click=${() => patchWorkMode({ scheduleMode: "schedule" })}>
-              По расписанию
-            </label>
-          </div>
-          ${
-            settings.scheduleMode === "schedule"
-              ? html`<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;">
-                  <span style="font-size:13px;color:var(--text-muted);">С</span>
-                  <input type="time" class="input" style="width:110px;"
-                    .value=${settings.scheduleFrom ?? "09:00"}
-                    @input=${(e: Event) =>
-                      patchWorkMode({ scheduleFrom: (e.target as HTMLInputElement).value })} />
-                  <span style="font-size:13px;color:var(--text-muted);">до</span>
-                  <input type="time" class="input" style="width:110px;"
-                    .value=${settings.scheduleTo ?? "18:00"}
-                    @input=${(e: Event) =>
-                      patchWorkMode({ scheduleTo: (e.target as HTMLInputElement).value })} />
-                  <span class="tg-setting-hint">(время сервера)</span>
-                </div>`
-              : html`
-                  <div class="tg-setting-hint">Отвечает в любое время</div>
-                `
-          }
-        </div>
-      </div>
-
       <!-- ── 4. Кому отвечать ───────────────────────────────────────── -->
       <div class="tg-setting-row">
         <div class="tg-setting-label">👥 Кому отвечать</div>
@@ -937,351 +744,6 @@ function renderOverviewPanel(props: TelegramProps, agent: TelegramAgentRecord) {
               : html`
                   <div class="tg-setting-hint">Все входящие сообщения</div>
                 `
-          }
-        </div>
-      </div>
-
-      <!-- ── 5. Задержка ответа ────────────────────────────────────── -->
-      <div class="tg-setting-row">
-        <div class="tg-setting-label">⏱ Задержка ответа</div>
-        <div class="tg-setting-right">
-          <div class="tg-reeng-section-title" style="margin-bottom:8px;">Пауза перед ответом агента (сек)</div>
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-            <span style="color:var(--text-muted,#aaa);font-size:13px;">от</span>
-            <input type="number" min="0" max="300"
-              class="input" style="width:70px;padding:4px 8px;font-size:13px;text-align:center;"
-              .value=${String(settings.replyDelayMin ?? 0)}
-              @input=${(e: Event) => patchWorkMode({ replyDelayMin: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) })} />
-            <span style="color:var(--text-muted,#aaa);font-size:13px;">до</span>
-            <input type="number" min="0" max="300"
-              class="input" style="width:70px;padding:4px 8px;font-size:13px;text-align:center;"
-              .value=${String(settings.replyDelayMax ?? 0)}
-              @input=${(e: Event) => patchWorkMode({ replyDelayMax: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) })} />
-            <span style="color:var(--text-muted,#aaa);font-size:13px;">сек</span>
-          </div>
-          <div class="tg-setting-hint" style="margin-top:6px;">
-            ${
-              (settings.replyDelayMin ?? 0) === 0 && (settings.replyDelayMax ?? 0) === 0
-                ? "Без задержки — агент отвечает мгновенно"
-                : `Агент выждет ${settings.replyDelayMin ?? 0}–${settings.replyDelayMax ?? 0} сек. перед каждым ответом`
-            }
-          </div>
-        </div>
-      </div>
-
-      <!-- ── 6. Реактивация лидов ──────────────────────────────────── -->
-      <div class="tg-setting-row">
-        <div class="tg-setting-label">🔁 Реактивация</div>
-        <div class="tg-setting-right">
-
-          <!-- Header: toggle + description -->
-          <div class="tg-reeng-header">
-            <div class="tg-toggle-group">
-              <label class="tg-toggle-option ${settings.reEngagementEnabled ? "tg-toggle-option--active" : ""}">
-                <input type="radio" name="reeng-${agent.id}"
-                  ?checked=${!!settings.reEngagementEnabled}
-                  @change=${() => saveSettings({ reEngagementEnabled: true })}
-                  style="display:none;" />
-                ✅ Включить
-              </label>
-              <label class="tg-toggle-option ${!settings.reEngagementEnabled ? "tg-toggle-option--active" : ""}">
-                <input type="radio" name="reeng-${agent.id}"
-                  ?checked=${!settings.reEngagementEnabled}
-                  @change=${() => saveSettings({ reEngagementEnabled: false })}
-                  style="display:none;" />
-                Выкл
-              </label>
-            </div>
-            <div class="tg-setting-hint" style="margin-top:6px;">
-              Агент автоматически возобновляет диалог с молчащими контактами.
-              ИИ персонализирует каждое сообщение на основе истории переписки.
-            </div>
-          </div>
-
-          ${
-            settings.reEngagementEnabled
-              ? html`
-            <div class="tg-reeng-panel">
-
-              <!-- Day range -->
-              <div class="tg-reeng-section-title">Интервал молчания (дней)</div>
-              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
-                <span style="font-size:13px;color:var(--text-muted);">от</span>
-                <input
-                  type="number"
-                  min="1"
-                  max="365"
-                  class="input"
-                  style="width:64px;font-size:13px;text-align:center;"
-                  .value=${String(settings.reEngagementDelayFrom ?? 1)}
-                  @change=${(e: Event) => {
-                    const v = parseInt((e.target as HTMLInputElement).value, 10);
-                    if (v > 0) {
-                      saveSettings({ reEngagementDelayFrom: v });
-                    }
-                  }}
-                />
-                <span style="font-size:13px;color:var(--text-muted);">до</span>
-                <input
-                  type="number"
-                  min="1"
-                  max="365"
-                  class="input"
-                  style="width:64px;font-size:13px;text-align:center;"
-                  .value=${String(settings.reEngagementDelayTo ?? 7)}
-                  @change=${(e: Event) => {
-                    const v = parseInt((e.target as HTMLInputElement).value, 10);
-                    if (v > 0) {
-                      saveSettings({ reEngagementDelayTo: v });
-                    }
-                  }}
-                />
-                <span style="font-size:13px;color:var(--text-muted);">дней</span>
-                <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;margin-left:4px;">
-                  <input
-                    type="checkbox"
-                    ?checked=${!!settings.reEngagementDelayMore}
-                    @change=${(e: Event) =>
-                      saveSettings({
-                        reEngagementDelayMore: (e.target as HTMLInputElement).checked,
-                      })}
-                  />
-                  <span style="color:var(--text-muted);">и более</span>
-                </label>
-              </div>
-              <div class="tg-setting-hint" style="margin-bottom:6px;">
-                Агент пишет контактам, молчавшим от <b>${settings.reEngagementDelayFrom ?? 1}</b>
-                до <b>${settings.reEngagementDelayTo ?? 7}</b> дней${settings.reEngagementDelayMore ? `, а также всем кто молчит дольше` : ""}.
-              </div>
-
-              <!-- Pause between messages -->
-              <div class="tg-reeng-section-title" style="margin-top:14px;">Задержка между сообщениями</div>
-              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;">
-                <span style="font-size:0.85rem;color:var(--text-muted);">от</span>
-                <input
-                  type="number" min="0" max="3600"
-                  class="input"
-                  style="width:72px;padding:4px 8px;font-size:0.85rem;"
-                  .value=${String(settings.reEngagementPauseMin ?? 0)}
-                  @change=${(e: Event) =>
-                    saveSettings({
-                      reEngagementPauseMin: Math.max(
-                        0,
-                        Number((e.target as HTMLInputElement).value) || 0,
-                      ),
-                    })}
-                />
-                <span style="font-size:0.85rem;color:var(--text-muted);">до</span>
-                <input
-                  type="number" min="0" max="3600"
-                  class="input"
-                  style="width:72px;padding:4px 8px;font-size:0.85rem;"
-                  .value=${String(settings.reEngagementPauseMax ?? 0)}
-                  @change=${(e: Event) =>
-                    saveSettings({
-                      reEngagementPauseMax: Math.max(
-                        0,
-                        Number((e.target as HTMLInputElement).value) || 0,
-                      ),
-                    })}
-                />
-                <span style="font-size:0.85rem;color:var(--text-muted);">сек.</span>
-              </div>
-              <div class="tg-setting-hint">
-                ${
-                  (settings.reEngagementPauseMin ?? 0) === 0 &&
-                  (settings.reEngagementPauseMax ?? 0) === 0
-                    ? "Без паузы — все сообщения отправляются подряд"
-                    : `Случайная пауза от ${settings.reEngagementPauseMin ?? 0} до ${settings.reEngagementPauseMax ?? 0} сек. между каждым сообщением`
-                }
-              </div>
-
-              <!-- After re-engagement: AI continues or stays silent -->
-              <div class="tg-reeng-section-title" style="margin-top:14px;margin-bottom:6px;">
-                💬 Если клиент ответил на реактивацию
-              </div>
-              <div class="tg-toggle-group" style="margin-bottom:6px;">
-                <label
-                  class="tg-toggle-option ${(settings.reEngagementAiContinue ?? true) ? "tg-toggle-option--active" : ""}"
-                  @click=${() => saveSettings({ reEngagementAiContinue: true })}>
-                  🤖 ИИ продолжает
-                </label>
-                <label
-                  class="tg-toggle-option ${!(settings.reEngagementAiContinue ?? true) ? "tg-toggle-option--active" : ""}"
-                  @click=${() => saveSettings({ reEngagementAiContinue: false })}>
-                  🤫 Молчать
-                </label>
-              </div>
-              <div class="tg-setting-hint" style="margin-bottom:12px;">
-                ${
-                  (settings.reEngagementAiContinue ?? true)
-                    ? "ИИ подхватит диалог если клиент ответил — даже вне расписания"
-                    : "ИИ молчит после рассылки — менеджер берёт разговор вручную"
-                }
-              </div>
-
-              <!-- AI mode toggle -->
-              <div class="tg-reeng-section-title" style="margin-top:4px;margin-bottom:8px;">
-                Режим сообщения
-              </div>
-              <div class="tg-toggle-group" style="margin-bottom:10px;">
-                <label
-                  class="tg-toggle-option ${(settings.reEngagementAiMode ?? "template") === "template" ? "tg-toggle-option--active" : ""}"
-                  @click=${() => saveSettings({ reEngagementAiMode: "template" })}>
-                  📝 Шаблон
-                </label>
-                <label
-                  class="tg-toggle-option ${settings.reEngagementAiMode === "ai" ? "tg-toggle-option--active" : ""}"
-                  @click=${() => saveSettings({ reEngagementAiMode: "ai" })}>
-                  🤖 ИИ генерирует
-                </label>
-              </div>
-
-              <!-- Re-engagement tone — independent of buyer mode, always visible -->
-              <div class="tg-reeng-section-title" style="margin-bottom:8px;">
-                ⚡ Тон реактивации
-              </div>
-              <div class="tg-toggle-group" style="margin-bottom:6px;">
-                <label
-                  class="tg-toggle-option ${(settings.reEngagementTone ?? "balanced") === "soft" ? "tg-toggle-option--active" : ""}"
-                  @click=${() => saveSettings({ reEngagementTone: "soft" })}>
-                  🕊 Мягкий
-                </label>
-                <label
-                  class="tg-toggle-option ${(settings.reEngagementTone ?? "balanced") === "balanced" ? "tg-toggle-option--active" : ""}"
-                  @click=${() => saveSettings({ reEngagementTone: "balanced" })}>
-                  Баланс
-                </label>
-                <label
-                  class="tg-toggle-option ${settings.reEngagementTone === "hard" ? "tg-toggle-option--active" : ""}"
-                  @click=${() => saveSettings({ reEngagementTone: "hard" })}>
-                  🔥 Напористый
-                </label>
-              </div>
-              <div class="tg-setting-hint" style="margin-bottom:12px;">
-                ${
-                  {
-                    soft: "ИИ пишет мягко — пробуждает интерес, не давит, даёт повод ответить самому",
-                    balanced: "Уверенный тон — ты помнишь его ситуацию и пишешь по делу",
-                    hard: "Прямой тон — называет следующий шаг как само собой разумеющееся",
-                  }[settings.reEngagementTone ?? "balanced"]
-                }
-              </div>
-              ${
-                settings.reEngagementAiMode === "ai"
-                  ? html`
-                      <div class="tg-setting-hint" style="margin-bottom: 10px">
-                        ИИ читает всю историю чата и пишет уникальное сообщение с нуля — в тему прошлого разговора, на
-                        языке клиента. Шаблон не нужен.
-                      </div>
-                    `
-                  : html`
-              <!-- Template -->
-              <div class="tg-reeng-section-title" style="display:flex;align-items:center;gap:8px;">
-                <span>Шаблон сообщения</span>
-                <span class="tg-reeng-badge-ai">✨ AI улучшает</span>
-                <button
-                  type="button"
-                  class="btn"
-                  style="font-size:11px;padding:2px 10px;margin-left:auto;"
-                  ?disabled=${props.telegramTemplateGenerating}
-                  @click=${() => props.onGenerateTemplate(agent.id)}
-                >${props.telegramTemplateGenerating ? "⏳ Генерация..." : "✨ Сгенерировать"}</button>
-              </div>
-              <textarea
-                class="input tg-reeng-textarea"
-                rows="3"
-                placeholder='Привет {имя}! Горит сделка с профитом 37%, ты с нами? 🔥'
-                .value=${settings.reEngagementTemplate ?? ""}
-                @input=${(e: Event) =>
-                  saveSettings({
-                    reEngagementTemplate: (e.target as HTMLTextAreaElement).value || undefined,
-                  })}
-              ></textarea>`
-              }
-
-              <!-- Save template + saved templates list -->
-              <div style="display:flex;gap:8px;margin-top:6px;">
-                <button
-                  type="button"
-                  class="btn"
-                  style="font-size:11px;padding:2px 10px;"
-                  ?disabled=${!settings.reEngagementTemplate}
-                  @click=${() => {
-                    const tpl = settings.reEngagementTemplate;
-                    if (!tpl) {
-                      return;
-                    }
-                    const existing = settings.reEngagementSavedTemplates ?? [];
-                    if (!existing.includes(tpl)) {
-                      saveSettings({ reEngagementSavedTemplates: [...existing, tpl] });
-                    }
-                  }}
-                >💾 Сохранить шаблон</button>
-              </div>
-              ${
-                (settings.reEngagementSavedTemplates ?? []).length > 0
-                  ? html`
-                    <div class="tg-reeng-templates">
-                      ${(settings.reEngagementSavedTemplates ?? []).map(
-                        (tpl) => html`
-                        <div class="tg-reeng-template-item">
-                          <span class="tg-reeng-template-text" title="${tpl}">${tpl}</span>
-                          <button
-                            type="button"
-                            class="tg-reeng-template-select"
-                            @click=${() => saveSettings({ reEngagementTemplate: tpl })}
-                          >← выбрать</button>
-                          <button
-                            type="button"
-                            class="tg-reeng-template-delete"
-                            title="Удалить шаблон"
-                            @click=${() => {
-                              const existing = settings.reEngagementSavedTemplates ?? [];
-                              saveSettings({
-                                reEngagementSavedTemplates: existing.filter((t) => t !== tpl),
-                              });
-                            }}
-                          >🗑</button>
-                        </div>
-                      `,
-                      )}
-                    </div>
-                  `
-                  : nothing
-              }
-
-              <!-- Placeholders hint -->
-              <div class="tg-reeng-placeholders">
-                <span class="tg-reeng-hint-label">Переменные:</span>
-                <code class="tg-reeng-code">{имя}</code>
-                <code class="tg-reeng-code">{фамилия}</code>
-                <code class="tg-reeng-code">{имя_полное}</code>
-              </div>
-
-              <!-- AI tip box -->
-              <div class="tg-reeng-ai-tip">
-                <span class="tg-reeng-ai-tip-icon">🤖</span>
-                <span>
-                  ИИ персонализирует шаблон для каждого клиента. Если имя не указано — берёт
-                  <strong>имя профиля</strong> (@username). Итоговый текст будет живым и интересным.
-                </span>
-              </div>
-
-              <!-- Name-only checkbox -->
-              <label class="tg-reeng-checkbox">
-                <input
-                  type="checkbox"
-                  ?checked=${!!settings.reEngagementNameOnly}
-                  @change=${(e: Event) =>
-                    saveSettings({ reEngagementNameOnly: (e.target as HTMLInputElement).checked })}
-                />
-                <span>Не писать, если нет ни имени, ни @username</span>
-              </label>
-
-            </div>
-          `
-              : nothing
           }
         </div>
       </div>
@@ -2580,6 +2042,7 @@ function renderDetail(props: TelegramProps) {
     onSaveAnthropicKey: props.onSaveAnthropicKey,
     onLoadKnowledgeBase: props.onLoadKnowledgeBase,
     onDistributeTraining: props.onDistributeTraining,
+    onSaveKnowledgeBase: props.onSaveKnowledgeBase,
     knowledgeBase: props.knowledgeBase,
     knowledgeBaseLoading: props.knowledgeBaseLoading,
     onGenerateDiagramFromText: props.onGenerateDiagramFromText,
@@ -2826,8 +2289,8 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
     ? `${settings.managerWorkFrom}–${settings.managerWorkTo}`
     : "не настроены";
 
-  // Static hardcoded forbidden phrases (cannot be edited)
-  const hardcodedPhrases: Array<{ category: string; phrases: string[] }> = [
+  // Default built-in forbidden phrases — overridable via builtinForbiddenCategories
+  const defaultBuiltinPhrases: Array<{ category: string; phrases: string[] }> = [
     {
       category: "Нарратив о клиенте",
       phrases: ["ты говорил", "ты писал", "ты упоминал", "ты говоришь, что", "ты хочешь найти"],
@@ -2846,6 +2309,58 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
       phrases: ["рад помочь", "отличный вопрос", "чем могу помочь?", "надеюсь"],
     },
   ];
+  // Use saved overrides if present, otherwise defaults
+  const builtinPhrases: Array<{ category: string; phrases: string[] }> =
+    settings.builtinForbiddenCategories ?? defaultBuiltinPhrases;
+
+  // Built-in guard definitions with IDs (for toggle overrides)
+  const builtinGuardDefs = [
+    {
+      id: "enforceWorkingHours",
+      icon: "🕐",
+      name: "Рабочие часы",
+      desc: "Перехватывает нерабочее время в ответах ИИ, предлагает ближайший слот",
+      details: workHoursLabel,
+      defaultActive: hasWorkingHours,
+    },
+    {
+      id: "enforceNoAssumptiveClaims",
+      icon: "🚫",
+      name: "Без предположений о клиенте",
+      desc: "Убирает фразы, приписывающие клиенту слова или профессию",
+      details: undefined as string | undefined,
+      defaultActive: true,
+    },
+    {
+      id: "enforceFirstPerson",
+      icon: "👤",
+      name: "Первое лицо (я, не мы)",
+      desc: "Заменяет корпоративное «мы» на личное «я»",
+      details: undefined as string | undefined,
+      defaultActive: true,
+    },
+    {
+      id: "stripPhoneNumbers",
+      icon: "📵",
+      name: "Блокировка телефонных номеров",
+      desc: "Удаляет все телефонные номера из ответов ИИ",
+      details: undefined as string | undefined,
+      defaultActive: true,
+    },
+    {
+      id: "openEndedTimeGuard",
+      icon: "📅",
+      name: "Блокировка «в любое время»",
+      desc: "Заменяет открытые предложения времени на конкретный слот",
+      details: undefined as string | undefined,
+      defaultActive: hasWorkingHours,
+    },
+  ];
+
+  // Resolve effective enabled state for each built-in guard
+  const guardsOverrides = settings.builtinGuardsOverrides ?? {};
+  const isBuiltinGuardActive = (g: (typeof builtinGuardDefs)[0]) =>
+    guardsOverrides[g.id] !== undefined ? guardsOverrides[g.id] : g.defaultActive;
 
   // Custom forbidden phrases as a textarea (one per line)
   const customPhrasesText = (settings.customForbiddenPhrases ?? []).join("\n");
@@ -2939,571 +2454,1327 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
         </div>
       </div>
 
-      <!-- ── 🤖 Основные настройки ────────────────────────────────── -->
-      <div class="tg-prompts-section-title" style="margin-top:0;">🤖 Основные настройки</div>
-      <div class="tg-prompts-block" style="margin-bottom:20px;">
-
-        <div class="tg-prompts-row">
-          <div class="tg-prompts-row-label">ИИ включён</div>
-          <div class="tg-prompts-row-ctrl">
-            <label class="tg-prompts-check-label">
-              <input type="checkbox"
-                .checked=${settings.aiEnabled !== false}
-                @change=${(e: Event) => saveNow({ aiEnabled: (e.target as HTMLInputElement).checked })}
-              />
-              ${
-                settings.aiEnabled !== false
-                  ? html`
-                      <span style="color: var(--ok, #3dbb70); font-weight: 600">Включён</span>
-                    `
-                  : html`
-                      <span style="color: var(--text-muted)">Выключен</span>
-                    `
-              }
-            </label>
-          </div>
-        </div>
-
-        <div class="tg-prompts-row">
-          <div class="tg-prompts-row-label">Автозапуск при старте</div>
-          <div class="tg-prompts-row-ctrl">
-            <label class="tg-prompts-check-label">
-              <input type="checkbox"
-                .checked=${settings.autoStartEnabled !== false}
-                @change=${(e: Event) => saveNow({ autoStartEnabled: (e.target as HTMLInputElement).checked })}
-              />
-              ${
-                settings.autoStartEnabled !== false
-                  ? html`
-                      <span style="color: var(--ok, #3dbb70); font-weight: 600">Да</span>
-                    `
-                  : html`
-                      <span style="color: var(--text-muted)">Нет</span>
-                    `
-              }
-            </label>
-          </div>
-        </div>
-
-        <div class="tg-prompts-row">
-          <div class="tg-prompts-row-label">Режим ответа</div>
-          <div class="tg-prompts-row-ctrl">
-            <select class="input" style="width:220px;"
-              .value=${settings.useSchema ? "schema" : "free"}
-              @change=${(e: Event) => patchWorkMode({ useSchema: (e.target as HTMLSelectElement).value === "schema" })}
-            >
-              <option value="free">Свободный диалог</option>
-              <option value="schema">Скрипт (диаграмма)</option>
-            </select>
-          </div>
-        </div>
-
-        ${
-          settings.useSchema
-            ? html`
-          <div class="tg-prompts-row">
-            <div class="tg-prompts-row-label">ID диаграммы</div>
-            <div class="tg-prompts-row-ctrl">
-              <input type="text" class="input" style="width:220px;"
-                placeholder="ryw8nk0j…"
-                .value=${settings.activeDiagramId ?? ""}
-                @change=${(e: Event) => patchWorkMode({ activeDiagramId: (e.target as HTMLInputElement).value.trim() || undefined })}
-              />
-            </div>
-          </div>
-          <div class="tg-prompts-row">
-            <div class="tg-prompts-row-label">Режим скрипта</div>
-            <div class="tg-prompts-row-ctrl">
-              <label class="tg-prompts-check-label">
-                <input type="checkbox"
-                  .checked=${!!settings.schemaStrictMode}
-                  @change=${(e: Event) => patchWorkMode({ schemaStrictMode: (e.target as HTMLInputElement).checked })}
-                />
-                <span>${settings.schemaStrictMode ? "Строгий" : "Гибкий"}</span>
-              </label>
-            </div>
-          </div>
-        `
-            : nothing
-        }
-
-        <div class="tg-prompts-row">
-          <div class="tg-prompts-row-label">Отвечать на</div>
-          <div class="tg-prompts-row-ctrl">
-            <select class="input" style="width:220px;"
-              .value=${settings.replyTo}
-              @change=${(e: Event) => patchWorkMode({ replyTo: (e.target as HTMLSelectElement).value as "all" | "tasks" })}
-            >
-              <option value="all">Все чаты</option>
-              <option value="tasks">Только задачи</option>
-            </select>
-          </div>
-        </div>
-
+      <!-- Tab toggle: Manager / Re-engagement -->
+      <div class="tg-toggle-group" style="margin-bottom:18px;align-self:flex-start;">
+        <label class="tg-toggle-option tg-prompts-tab-manager tg-toggle-option--active"
+          @click=${(e: Event) => {
+            const panel = (e.target as HTMLElement).closest(".tg-prompts-panel") as HTMLElement;
+            panel
+              .querySelector(".tg-prompts-tab-manager")
+              ?.classList.add("tg-toggle-option--active");
+            panel
+              .querySelector(".tg-prompts-tab-reeng")
+              ?.classList.remove("tg-toggle-option--active");
+            panel
+              .querySelectorAll<HTMLElement>(".tg-prompts-manager-content")
+              .forEach((el) => (el.style.display = ""));
+            const reBlock = panel.querySelector(".tg-prompts-reeng-content") as HTMLElement;
+            if (reBlock) {
+              reBlock.style.display = "none";
+            }
+          }}>
+          🤖 Менеджер
+        </label>
+        <label class="tg-toggle-option tg-prompts-tab-reeng"
+          @click=${(e: Event) => {
+            const panel = (e.target as HTMLElement).closest(".tg-prompts-panel") as HTMLElement;
+            panel.querySelector(".tg-prompts-tab-reeng")?.classList.add("tg-toggle-option--active");
+            panel
+              .querySelector(".tg-prompts-tab-manager")
+              ?.classList.remove("tg-toggle-option--active");
+            panel
+              .querySelectorAll<HTMLElement>(".tg-prompts-manager-content")
+              .forEach((el) => (el.style.display = "none"));
+            const reBlock = panel.querySelector(".tg-prompts-reeng-content") as HTMLElement;
+            if (reBlock) {
+              reBlock.style.display = "";
+            }
+          }}>
+          🔁 Реактивация
+        </label>
       </div>
 
-      <!-- ── 🕐 Расписание и рабочее время ─────────────────────── -->
-      <div class="tg-prompts-section-title">🕐 Расписание и рабочее время</div>
-      <div class="tg-prompts-block" style="margin-bottom:20px;">
+      <!-- ═══════════ MANAGER TAB ═══════════ -->
+      <div class="tg-prompts-manager-content">
 
-        <div class="tg-prompts-row">
-          <div class="tg-prompts-row-label">Режим расписания</div>
-          <div class="tg-prompts-row-ctrl">
-            <select class="input" style="width:220px;"
-              .value=${settings.scheduleMode}
-              @change=${(e: Event) => patchWorkMode({ scheduleMode: (e.target as HTMLSelectElement).value as "always" | "schedule" })}
-            >
-              <option value="always">Всегда активен</option>
-              <option value="schedule">По расписанию</option>
-            </select>
-          </div>
-        </div>
+      <!-- ── 💬 Режим общения ───────────────────────────────────────── -->
+      <div class="tg-prompts-section-title" style="margin-top:0;">💬 Режим общения</div>
 
-        ${
-          settings.scheduleMode === "schedule"
-            ? html`
-          <div class="tg-prompts-row">
-            <div class="tg-prompts-row-label">Окно расписания</div>
-            <div class="tg-prompts-row-ctrl">
-              <div class="tg-prompts-time-range">
-                <input type="time" class="input" style="width:120px;"
-                  .value=${settings.scheduleFrom ?? ""}
-                  @change=${(e: Event) => patchWorkMode({ scheduleFrom: (e.target as HTMLInputElement).value || undefined })}
-                />
-                <span style="color:var(--text-muted);padding:0 4px;">—</span>
-                <input type="time" class="input" style="width:120px;"
-                  .value=${settings.scheduleTo ?? ""}
-                  @change=${(e: Event) => patchWorkMode({ scheduleTo: (e.target as HTMLInputElement).value || undefined })}
-                />
-              </div>
-            </div>
-          </div>
-          <div class="tg-prompts-row">
-            <div class="tg-prompts-row-label">ИИ работает офлайн</div>
-            <div class="tg-prompts-row-ctrl">
-              <label class="tg-prompts-check-label">
-                <input type="checkbox"
-                  .checked=${!!settings.offlineReplyEnabled}
-                  @change=${(e: Event) => patchWorkMode({ offlineReplyEnabled: (e.target as HTMLInputElement).checked })}
-                />
-                ${
-                  settings.offlineReplyEnabled
-                    ? html`
-                        <span style="color: var(--ok, #3dbb70); font-weight: 600">Включён</span>
-                      `
-                    : html`
-                        <span style="color: var(--text-muted)">Выключен</span>
-                      `
-                }
-              </label>
-            </div>
+      <div class="tg-setting-row">
+        <div class="tg-setting-label">💬 Режим общения</div>
+        <div class="tg-setting-right">
+          <div class="tg-toggle-group">
+            <label class="tg-toggle-option ${settings.useSchema ? "tg-toggle-option--active" : ""}"
+              @click=${() => patchWorkMode({ useSchema: true })}>
+              По схеме
+            </label>
+            <label class="tg-toggle-option ${!settings.useSchema ? "tg-toggle-option--active" : ""}"
+              @click=${() => patchWorkMode({ useSchema: false })}>
+              Свободно
+            </label>
           </div>
           ${
-            settings.offlineReplyEnabled
+            settings.useSchema && !settings.activeDiagramId
               ? html`
-            <div class="tg-prompts-row row-top">
-              <div class="tg-prompts-row-label" style="padding-top:6px;">Задача ИИ (оффлайн)</div>
-              <div class="tg-prompts-row-ctrl" style="width:100%;">
-                <textarea class="input" rows="2" style="width:100%;resize:vertical;"
-                  placeholder="Задача ИИ пока менеджер не в сети. {от}/{до} — плейсхолдеры времени."
-                  .value=${settings.offlineReplyTemplate ?? ""}
-                  @change=${(e: Event) => patchWorkMode({ offlineReplyTemplate: (e.target as HTMLTextAreaElement).value.trim() || undefined })}
-                ></textarea>
+                  <div class="tg-setting-hint tg-setting-hint--warn">⚠ Выберите схему в разделе «Обзор»</div>
+                `
+              : settings.useSchema
+                ? html`
+                    <div class="tg-setting-hint">Строго по шагам выбранной схемы</div>
+                  `
+                : html`
+                    <div class="tg-setting-hint">Свободный AI-ответ</div>
+                  `
+          }
+        </div>
+      </div>
+
+      ${
+        settings.useSchema
+          ? html`
+              <div class="tg-setting-row">
+                <div class="tg-setting-label">🎯 Строгость</div>
+                <div class="tg-setting-right">
+                  <div class="tg-toggle-group">
+                    <label class="tg-toggle-option ${settings.schemaStrictMode ? "tg-toggle-option--active" : ""}"
+                      @click=${() => patchWorkMode({ schemaStrictMode: true })}>
+                      Строгий
+                    </label>
+                    <label class="tg-toggle-option ${!settings.schemaStrictMode ? "tg-toggle-option--active" : ""}"
+                      @click=${() => patchWorkMode({ schemaStrictMode: false })}>
+                      Гибкий
+                    </label>
+                  </div>
+                  ${
+                    settings.schemaStrictMode
+                      ? html`
+                          <div class="tg-setting-hint">
+                            Шаблоны KB обязательны · ответы проверяются · нарушения пересобираются
+                          </div>
+                        `
+                      : html`
+                          <div class="tg-setting-hint">Шаблоны KB как подсказка · без проверки</div>
+                        `
+                  }
+                </div>
               </div>
+
+              <!-- ── Стиль подачи скриптов ──────────────────────────────── -->
+              <div class="tg-setting-row">
+                <div class="tg-setting-label">🗣 Стиль подачи</div>
+                <div class="tg-setting-right">
+                  <div class="tg-toggle-group">
+                    <label class="tg-toggle-option ${(settings.schemaDeliveryStyle ?? "neutral") === "neutral" ? "tg-toggle-option--active" : ""}"
+                      @click=${() => patchWorkMode({ schemaDeliveryStyle: "neutral" })}>
+                      Стандарт
+                    </label>
+                    <label class="tg-toggle-option ${settings.schemaDeliveryStyle === "buyer" ? "tg-toggle-option--active" : ""}"
+                      @click=${() => patchWorkMode({ schemaDeliveryStyle: "buyer" })}>
+                      🔥 Баер
+                    </label>
+                  </div>
+                  <div class="tg-setting-hint">
+                    ${
+                      settings.schemaDeliveryStyle === "buyer"
+                        ? "Скрипты подаются в стиле баера: цифры, ROI, без воды, уверенный тон"
+                        : "Стандартная адаптация скриптов под язык и контекст клиента"
+                    }
+                  </div>
+                </div>
+              </div>
+
+              ${
+                settings.schemaDeliveryStyle === "buyer"
+                  ? html`
+                      <!-- ── Агрессивность баера ──────────────────────────── -->
+                      <div class="tg-setting-row" style="padding-left:12px;border-left:2px solid var(--accent,#e8660088);">
+                        <div class="tg-setting-label">⚡ Напористость</div>
+                        <div class="tg-setting-right">
+                          <div class="tg-toggle-group">
+                            <label class="tg-toggle-option ${(settings.buyerAggressionLevel ?? "balanced") === "soft" ? "tg-toggle-option--active" : ""}"
+                              @click=${() => patchWorkMode({ buyerAggressionLevel: "soft" })}>
+                              Мягкий
+                            </label>
+                            <label class="tg-toggle-option ${(settings.buyerAggressionLevel ?? "balanced") === "balanced" ? "tg-toggle-option--active" : ""}"
+                              @click=${() => patchWorkMode({ buyerAggressionLevel: "balanced" })}>
+                              Баланс
+                            </label>
+                            <label class="tg-toggle-option ${settings.buyerAggressionLevel === "hard" ? "tg-toggle-option--active" : ""}"
+                              @click=${() => patchWorkMode({ buyerAggressionLevel: "hard" })}>
+                              🔥 Жёсткий
+                            </label>
+                          </div>
+                          <div class="tg-setting-hint">
+                            ${
+                              {
+                                soft: "Больше вопросов, мягкое давление — фокус на понимании",
+                                balanced: "Стандартный баер: ROI, срочность, альтернативный выбор",
+                                hard: "Прямые предложения, минимум вопросов, максимум давления",
+                              }[settings.buyerAggressionLevel ?? "balanced"]
+                            }
+                          </div>
+                        </div>
+                      </div>
+
+                      <!-- ── Захват лида ────────────────────────────────── -->
+                      <div class="tg-setting-row" style="padding-left:12px;border-left:2px solid var(--accent,#e8660088);">
+                        <div class="tg-setting-label">🎯 Захват лида</div>
+                        <div class="tg-setting-right">
+                          <div class="tg-toggle-group">
+                            <label class="tg-toggle-option ${(settings.buyerCloseStyle ?? "alternative") === "alternative" ? "tg-toggle-option--active" : ""}"
+                              @click=${() => patchWorkMode({ buyerCloseStyle: "alternative" })}>
+                              Выбор
+                            </label>
+                            <label class="tg-toggle-option ${settings.buyerCloseStyle === "direct" ? "tg-toggle-option--active" : ""}"
+                              @click=${() => patchWorkMode({ buyerCloseStyle: "direct" })}>
+                              Напрямую
+                            </label>
+                            <label class="tg-toggle-option ${settings.buyerCloseStyle === "micro-step" ? "tg-toggle-option--active" : ""}"
+                              @click=${() => patchWorkMode({ buyerCloseStyle: "micro-step" })}>
+                              Микрошаг
+                            </label>
+                          </div>
+                          <div class="tg-setting-hint">
+                            ${
+                              {
+                                alternative:
+                                  "«Позвонить или написать в WhatsApp?» — даёт выбор, не да/нет",
+                                direct:
+                                  "«Скинь номер — я сам напишу сегодня» — от имени менеджера, не безлично",
+                                "micro-step":
+                                  "«Запишу тебя на звонок — в четверг удобно?» — конкретный шаг",
+                              }[settings.buyerCloseStyle ?? "alternative"]
+                            }
+                          </div>
+                          <div class="tg-setting-hint" style="margin-top:4px;color:var(--text-muted);">
+                            📦 Продукт и нишу ИИ определяет сам из истории переписки
+                          </div>
+                        </div>
+                      </div>
+                    `
+                  : html``
+              }
+            `
+          : html``
+      }
+
+      <!-- ── 🕐 Расписание ──────────────────────────────────────────── -->
+      <div class="tg-prompts-section-title">🕐 Расписание</div>
+
+      <div class="tg-setting-row">
+        <div class="tg-setting-label">🕐 Время ответов</div>
+        <div class="tg-setting-right">
+          <div class="tg-toggle-group">
+            <label class="tg-toggle-option ${settings.scheduleMode === "always" ? "tg-toggle-option--active" : ""}"
+              @click=${() => patchWorkMode({ scheduleMode: "always" })}>
+              Всегда
+            </label>
+            <label class="tg-toggle-option ${settings.scheduleMode === "schedule" ? "tg-toggle-option--active" : ""}"
+              @click=${() => patchWorkMode({ scheduleMode: "schedule" })}>
+              По расписанию
+            </label>
+          </div>
+          ${
+            settings.scheduleMode === "schedule"
+              ? html`<div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;">
+                  <span style="font-size:13px;color:var(--text-muted);">С</span>
+                  <input type="time" class="input" style="width:110px;"
+                    .value=${settings.scheduleFrom ?? "09:00"}
+                    @input=${(e: Event) =>
+                      patchWorkMode({ scheduleFrom: (e.target as HTMLInputElement).value })} />
+                  <span style="font-size:13px;color:var(--text-muted);">до</span>
+                  <input type="time" class="input" style="width:110px;"
+                    .value=${settings.scheduleTo ?? "18:00"}
+                    @input=${(e: Event) =>
+                      patchWorkMode({ scheduleTo: (e.target as HTMLInputElement).value })} />
+                  <span class="tg-setting-hint">(время сервера)</span>
+                </div>`
+              : html`
+                  <div class="tg-setting-hint">Отвечает в любое время</div>
+                `
+          }
+        </div>
+      </div>
+
+      <!-- ── ⏱ Задержка ответа ──────────────────────────────────────── -->
+      <div class="tg-prompts-section-title">⏱ Задержка ответа</div>
+
+      <div class="tg-setting-row">
+        <div class="tg-setting-label">⏱ Задержка ответа</div>
+        <div class="tg-setting-right">
+          <div class="tg-reeng-section-title" style="margin-bottom:8px;">Пауза перед ответом агента (сек)</div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span style="color:var(--text-muted,#aaa);font-size:13px;">от</span>
+            <input type="number" min="0" max="300"
+              class="input" style="width:70px;padding:4px 8px;font-size:13px;text-align:center;"
+              .value=${String(settings.replyDelayMin ?? 0)}
+              @input=${(e: Event) => patchWorkMode({ replyDelayMin: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) })} />
+            <span style="color:var(--text-muted,#aaa);font-size:13px;">до</span>
+            <input type="number" min="0" max="300"
+              class="input" style="width:70px;padding:4px 8px;font-size:13px;text-align:center;"
+              .value=${String(settings.replyDelayMax ?? 0)}
+              @input=${(e: Event) => patchWorkMode({ replyDelayMax: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) })} />
+            <span style="color:var(--text-muted,#aaa);font-size:13px;">сек</span>
+          </div>
+          <div class="tg-setting-hint" style="margin-top:6px;">
+            ${
+              (settings.replyDelayMin ?? 0) === 0 && (settings.replyDelayMax ?? 0) === 0
+                ? "Без задержки — агент отвечает мгновенно"
+                : `Агент выждет ${settings.replyDelayMin ?? 0}–${settings.replyDelayMax ?? 0} сек. перед каждым ответом`
+            }
+          </div>
+        </div>
+      </div>
+
+      </div>
+      </div><!-- end manager-content (part 1: settings) -->
+
+      <!-- ═══════════ RE-ENGAGEMENT TAB ═══════════ -->
+      <div class="tg-prompts-reeng-content" style="display:none;">
+
+      <!-- ── 🔁 Реактивация ────────────────────────────────────────── -->
+      <div class="tg-prompts-section-title">🔁 Реактивация</div>
+
+      <div class="tg-setting-row">
+        <div class="tg-setting-label">🔁 Реактивация</div>
+        <div class="tg-setting-right">
+
+          <!-- Header: toggle + description -->
+          <div class="tg-reeng-header">
+            <div class="tg-toggle-group">
+              <label class="tg-toggle-option ${settings.reEngagementEnabled ? "tg-toggle-option--active" : ""}">
+                <input type="radio" name="reeng-prompts-${agent.id}"
+                  ?checked=${!!settings.reEngagementEnabled}
+                  @change=${() => saveNow({ reEngagementEnabled: true })}
+                  style="display:none;" />
+                ✅ Включить
+              </label>
+              <label class="tg-toggle-option ${!settings.reEngagementEnabled ? "tg-toggle-option--active" : ""}">
+                <input type="radio" name="reeng-prompts-${agent.id}"
+                  ?checked=${!settings.reEngagementEnabled}
+                  @change=${() => saveNow({ reEngagementEnabled: false })}
+                  style="display:none;" />
+                Выкл
+              </label>
+            </div>
+            <div class="tg-setting-hint" style="margin-top:6px;">
+              Агент автоматически возобновляет диалог с молчащими контактами.
+              ИИ персонализирует каждое сообщение на основе истории переписки.
+            </div>
+          </div>
+
+          ${
+            settings.reEngagementEnabled
+              ? html`
+            <div class="tg-reeng-panel">
+
+              <!-- Day range -->
+              <div class="tg-reeng-section-title">Интервал молчания (дней)</div>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+                <span style="font-size:13px;color:var(--text-muted);">от</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="365"
+                  class="input"
+                  style="width:64px;font-size:13px;text-align:center;"
+                  .value=${String(settings.reEngagementDelayFrom ?? 1)}
+                  @change=${(e: Event) => {
+                    const v = parseInt((e.target as HTMLInputElement).value, 10);
+                    if (v > 0) {
+                      saveNow({ reEngagementDelayFrom: v });
+                    }
+                  }}
+                />
+                <span style="font-size:13px;color:var(--text-muted);">до</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="365"
+                  class="input"
+                  style="width:64px;font-size:13px;text-align:center;"
+                  .value=${String(settings.reEngagementDelayTo ?? 7)}
+                  @change=${(e: Event) => {
+                    const v = parseInt((e.target as HTMLInputElement).value, 10);
+                    if (v > 0) {
+                      saveNow({ reEngagementDelayTo: v });
+                    }
+                  }}
+                />
+                <span style="font-size:13px;color:var(--text-muted);">дней</span>
+                <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;margin-left:4px;">
+                  <input
+                    type="checkbox"
+                    ?checked=${!!settings.reEngagementDelayMore}
+                    @change=${(e: Event) =>
+                      saveNow({
+                        reEngagementDelayMore: (e.target as HTMLInputElement).checked,
+                      })}
+                  />
+                  <span style="color:var(--text-muted);">и более</span>
+                </label>
+              </div>
+              <div class="tg-setting-hint" style="margin-bottom:6px;">
+                Агент пишет контактам, молчавшим от <b>${settings.reEngagementDelayFrom ?? 1}</b>
+                до <b>${settings.reEngagementDelayTo ?? 7}</b> дней${settings.reEngagementDelayMore ? `, а также всем кто молчит дольше` : ""}.
+              </div>
+
+              <!-- Pause between messages -->
+              <div class="tg-reeng-section-title" style="margin-top:14px;">Задержка между сообщениями</div>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;">
+                <span style="font-size:0.85rem;color:var(--text-muted);">от</span>
+                <input
+                  type="number" min="0" max="3600"
+                  class="input"
+                  style="width:72px;padding:4px 8px;font-size:0.85rem;"
+                  .value=${String(settings.reEngagementPauseMin ?? 0)}
+                  @change=${(e: Event) =>
+                    saveNow({
+                      reEngagementPauseMin: Math.max(
+                        0,
+                        Number((e.target as HTMLInputElement).value) || 0,
+                      ),
+                    })}
+                />
+                <span style="font-size:0.85rem;color:var(--text-muted);">до</span>
+                <input
+                  type="number" min="0" max="3600"
+                  class="input"
+                  style="width:72px;padding:4px 8px;font-size:0.85rem;"
+                  .value=${String(settings.reEngagementPauseMax ?? 0)}
+                  @change=${(e: Event) =>
+                    saveNow({
+                      reEngagementPauseMax: Math.max(
+                        0,
+                        Number((e.target as HTMLInputElement).value) || 0,
+                      ),
+                    })}
+                />
+                <span style="font-size:0.85rem;color:var(--text-muted);">сек.</span>
+              </div>
+              <div class="tg-setting-hint">
+                ${
+                  (settings.reEngagementPauseMin ?? 0) === 0 &&
+                  (settings.reEngagementPauseMax ?? 0) === 0
+                    ? "Без паузы — все сообщения отправляются подряд"
+                    : `Случайная пауза от ${settings.reEngagementPauseMin ?? 0} до ${settings.reEngagementPauseMax ?? 0} сек. между каждым сообщением`
+                }
+              </div>
+
+              <!-- After re-engagement: AI continues or stays silent -->
+              <div class="tg-reeng-section-title" style="margin-top:14px;margin-bottom:6px;">
+                💬 Если клиент ответил на реактивацию
+              </div>
+              <div class="tg-toggle-group" style="margin-bottom:6px;">
+                <label
+                  class="tg-toggle-option ${(settings.reEngagementAiContinue ?? true) ? "tg-toggle-option--active" : ""}"
+                  @click=${() => saveNow({ reEngagementAiContinue: true })}>
+                  🤖 ИИ продолжает
+                </label>
+                <label
+                  class="tg-toggle-option ${!(settings.reEngagementAiContinue ?? true) ? "tg-toggle-option--active" : ""}"
+                  @click=${() => saveNow({ reEngagementAiContinue: false })}>
+                  🤫 Молчать
+                </label>
+              </div>
+              <div class="tg-setting-hint" style="margin-bottom:12px;">
+                ${
+                  (settings.reEngagementAiContinue ?? true)
+                    ? "ИИ подхватит диалог если клиент ответил — даже вне расписания"
+                    : "ИИ молчит после рассылки — менеджер берёт разговор вручную"
+                }
+              </div>
+
+              <!-- AI mode toggle -->
+              <div class="tg-reeng-section-title" style="margin-top:4px;margin-bottom:8px;">
+                Режим сообщения
+              </div>
+              <div class="tg-toggle-group" style="margin-bottom:10px;">
+                <label
+                  class="tg-toggle-option ${(settings.reEngagementAiMode ?? "template") === "template" ? "tg-toggle-option--active" : ""}"
+                  @click=${() => saveNow({ reEngagementAiMode: "template" })}>
+                  📝 Шаблон
+                </label>
+                <label
+                  class="tg-toggle-option ${settings.reEngagementAiMode === "ai" ? "tg-toggle-option--active" : ""}"
+                  @click=${() => saveNow({ reEngagementAiMode: "ai" })}>
+                  🤖 ИИ генерирует
+                </label>
+              </div>
+
+              <!-- Re-engagement tone — independent of buyer mode, always visible -->
+              <div class="tg-reeng-section-title" style="margin-bottom:8px;">
+                ⚡ Тон реактивации
+              </div>
+              <div class="tg-toggle-group" style="margin-bottom:6px;">
+                <label
+                  class="tg-toggle-option ${(settings.reEngagementTone ?? "balanced") === "soft" ? "tg-toggle-option--active" : ""}"
+                  @click=${() => saveNow({ reEngagementTone: "soft" })}>
+                  🕊 Мягкий
+                </label>
+                <label
+                  class="tg-toggle-option ${(settings.reEngagementTone ?? "balanced") === "balanced" ? "tg-toggle-option--active" : ""}"
+                  @click=${() => saveNow({ reEngagementTone: "balanced" })}>
+                  Баланс
+                </label>
+                <label
+                  class="tg-toggle-option ${settings.reEngagementTone === "hard" ? "tg-toggle-option--active" : ""}"
+                  @click=${() => saveNow({ reEngagementTone: "hard" })}>
+                  🔥 Напористый
+                </label>
+              </div>
+              <div class="tg-setting-hint" style="margin-bottom:12px;">
+                ${
+                  {
+                    soft: "ИИ пишет мягко — пробуждает интерес, не давит, даёт повод ответить самому",
+                    balanced: "Уверенный тон — ты помнишь его ситуацию и пишешь по делу",
+                    hard: "Прямой тон — называет следующий шаг как само собой разумеющееся",
+                  }[settings.reEngagementTone ?? "balanced"]
+                }
+              </div>
+              ${
+                settings.reEngagementAiMode === "ai"
+                  ? html`
+                      <div class="tg-setting-hint" style="margin-bottom: 10px">
+                        ИИ читает всю историю чата и пишет уникальное сообщение с нуля — в тему прошлого разговора, на
+                        языке клиента. Шаблон не нужен.
+                      </div>
+                    `
+                  : html`
+              <!-- Template -->
+              <div class="tg-reeng-section-title" style="display:flex;align-items:center;gap:8px;">
+                <span>Шаблон сообщения</span>
+                <span class="tg-reeng-badge-ai">✨ AI улучшает</span>
+                <button
+                  type="button"
+                  class="btn"
+                  style="font-size:11px;padding:2px 10px;margin-left:auto;"
+                  ?disabled=${props.telegramTemplateGenerating}
+                  @click=${() => props.onGenerateTemplate(agent.id)}
+                >${props.telegramTemplateGenerating ? "⏳ Генерация..." : "✨ Сгенерировать"}</button>
+              </div>
+              <textarea
+                class="input tg-reeng-textarea"
+                rows="3"
+                placeholder='Привет {имя}! Горит сделка с профитом 37%, ты с нами? 🔥'
+                .value=${settings.reEngagementTemplate ?? ""}
+                @input=${(e: Event) =>
+                  saveNow({
+                    reEngagementTemplate: (e.target as HTMLTextAreaElement).value || undefined,
+                  })}
+              ></textarea>`
+              }
+
+              <!-- Save template + saved templates list -->
+              <div style="display:flex;gap:8px;margin-top:6px;">
+                <button
+                  type="button"
+                  class="btn"
+                  style="font-size:11px;padding:2px 10px;"
+                  ?disabled=${!settings.reEngagementTemplate}
+                  @click=${() => {
+                    const tpl = settings.reEngagementTemplate;
+                    if (!tpl) {
+                      return;
+                    }
+                    const existing = settings.reEngagementSavedTemplates ?? [];
+                    if (!existing.includes(tpl)) {
+                      saveNow({ reEngagementSavedTemplates: [...existing, tpl] });
+                    }
+                  }}
+                >💾 Сохранить шаблон</button>
+              </div>
+              ${
+                (settings.reEngagementSavedTemplates ?? []).length > 0
+                  ? html`
+                    <div class="tg-reeng-templates">
+                      ${(settings.reEngagementSavedTemplates ?? []).map(
+                        (tpl) => html`
+                        <div class="tg-reeng-template-item">
+                          <span class="tg-reeng-template-text" title="${tpl}">${tpl}</span>
+                          <button
+                            type="button"
+                            class="tg-reeng-template-select"
+                            @click=${() => saveNow({ reEngagementTemplate: tpl })}
+                          >← выбрать</button>
+                          <button
+                            type="button"
+                            class="tg-reeng-template-delete"
+                            title="Удалить шаблон"
+                            @click=${() => {
+                              const existing = settings.reEngagementSavedTemplates ?? [];
+                              saveNow({
+                                reEngagementSavedTemplates: existing.filter((t) => t !== tpl),
+                              });
+                            }}
+                          >🗑</button>
+                        </div>
+                      `,
+                      )}
+                    </div>
+                  `
+                  : nothing
+              }
+
+              <!-- Placeholders hint -->
+              <div class="tg-reeng-placeholders">
+                <span class="tg-reeng-hint-label">Переменные:</span>
+                <code class="tg-reeng-code">{имя}</code>
+                <code class="tg-reeng-code">{фамилия}</code>
+                <code class="tg-reeng-code">{имя_полное}</code>
+              </div>
+
+              <!-- AI tip box -->
+              <div class="tg-reeng-ai-tip">
+                <span class="tg-reeng-ai-tip-icon">🤖</span>
+                <span>
+                  ИИ персонализирует шаблон для каждого клиента. Если имя не указано — берёт
+                  <strong>имя профиля</strong> (@username). Итоговый текст будет живым и интересным.
+                </span>
+              </div>
+
+              <!-- Name-only checkbox -->
+              <label class="tg-reeng-checkbox">
+                <input
+                  type="checkbox"
+                  ?checked=${!!settings.reEngagementNameOnly}
+                  @change=${(e: Event) =>
+                    saveNow({ reEngagementNameOnly: (e.target as HTMLInputElement).checked })}
+                />
+                <span>Не писать, если нет ни имени, ни @username</span>
+              </label>
+
             </div>
           `
               : nothing
           }
-        `
-            : nothing
-        }
-
-        <div class="tg-prompts-row">
-          <div class="tg-prompts-row-label">Рабочие часы менеджера</div>
-          <div class="tg-prompts-row-ctrl">
-            <div class="tg-prompts-time-range">
-              <input type="time" class="input" style="width:120px;"
-                .value=${settings.managerWorkFrom ?? ""}
-                @change=${(e: Event) => patchWorkMode({ managerWorkFrom: (e.target as HTMLInputElement).value || undefined })}
-              />
-              <span style="color:var(--text-muted);padding:0 4px;">—</span>
-              <input type="time" class="input" style="width:120px;"
-                .value=${settings.managerWorkTo ?? ""}
-                @change=${(e: Event) => patchWorkMode({ managerWorkTo: (e.target as HTMLInputElement).value || undefined })}
-              />
-            </div>
-            ${
-              hasWorkingHours
-                ? html`<span style="font-size:11px;color:var(--ok,#3dbb70);margin-left:4px;">✅ ${workHoursLabel}</span>`
-                : html`
-                    <span style="font-size: 11px; color: var(--text-muted); margin-left: 4px">не настроены</span>
-                  `
-            }
-          </div>
         </div>
-
-        <div class="tg-prompts-row">
-          <div class="tg-prompts-row-label">Ссылка на группу лидов</div>
-          <div class="tg-prompts-row-ctrl">
-            <input type="text" class="input" style="width:280px;"
-              placeholder="https://t.me/+xxxx или @group"
-              .value=${settings.leadsGroupLink ?? ""}
-              @change=${(e: Event) => patchWorkMode({ leadsGroupLink: (e.target as HTMLInputElement).value.trim() || undefined })}
-            />
-          </div>
-        </div>
-
       </div>
 
-      <!-- ── ⏱ Задержка ответа ───────────────────────────────────── -->
-      <div class="tg-prompts-section-title">⏱ Задержка ответа (имитация печати)</div>
-      <div class="tg-prompts-block" style="margin-bottom:20px;">
-
-        <div class="tg-prompts-row">
-          <div class="tg-prompts-row-label">Задержка (сек)</div>
-          <div class="tg-prompts-row-ctrl">
-            <div class="tg-prompts-time-range">
-              <input type="number" min="0" max="300" class="input" style="width:90px;"
-                placeholder="мин"
-                .value=${String(settings.replyDelayMin ?? 0)}
-                @change=${(e: Event) => patchWorkMode({ replyDelayMin: Number((e.target as HTMLInputElement).value) || undefined })}
-              />
-              <span style="color:var(--text-muted);padding:0 4px;">—</span>
-              <input type="number" min="0" max="300" class="input" style="width:90px;"
-                placeholder="макс"
-                .value=${String(settings.replyDelayMax ?? 0)}
-                @change=${(e: Event) => patchWorkMode({ replyDelayMax: Number((e.target as HTMLInputElement).value) || undefined })}
-              />
-            </div>
-            <span style="font-size:11px;color:var(--text-muted);">мин — макс сек</span>
-          </div>
-        </div>
-
+      <!-- ── 🧠 Промпты реактивации ─────────────────────────────────── -->
+      <div class="tg-prompts-section-title" style="margin-top:24px;">🧠 Промпты реактивации</div>
+      <div style="font-size:11px;color:var(--text-muted);line-height:1.5;margin-bottom:12px;">
+        Настройте промпт, контекст и правила, которые ИИ использует при генерации сообщений реактивации.
+        Если поле пустое — берётся значение из вкладки «🤖 Менеджер».
       </div>
 
-      <!-- ── 💰 Стиль баера ─────────────────────────────────────── -->
-      <div class="tg-prompts-section-title">💰 Стиль баера</div>
-      <div class="tg-prompts-block" style="margin-bottom:20px;">
-
-        <div class="tg-prompts-row">
-          <div class="tg-prompts-row-label">Стиль подачи</div>
-          <div class="tg-prompts-row-ctrl">
-            <select class="input" style="width:260px;"
-              .value=${settings.schemaDeliveryStyle ?? "neutral"}
-              @change=${(e: Event) => patchWorkMode({ schemaDeliveryStyle: (e.target as HTMLSelectElement).value as "neutral" | "buyer" })}
-            >
-              <option value="neutral">Нейтральный менеджер</option>
-              <option value="buyer">Баер (ROI, цифры, напор)</option>
-            </select>
-          </div>
-        </div>
-
-        ${
-          settings.schemaDeliveryStyle === "buyer"
-            ? html`
-          <div class="tg-prompts-row">
-            <div class="tg-prompts-row-label">Агрессивность</div>
-            <div class="tg-prompts-row-ctrl">
-              <select class="input" style="width:260px;"
-                .value=${settings.buyerAggressionLevel ?? "balanced"}
-                @change=${(e: Event) => patchWorkMode({ buyerAggressionLevel: (e.target as HTMLSelectElement).value as "soft" | "balanced" | "hard" })}
-              >
-                <option value="soft">Мягкий — вопросы, понимание потребности</option>
-                <option value="balanced">Сбалансированный (по умолчанию)</option>
-                <option value="hard">Жёсткий закрыватель</option>
-              </select>
-            </div>
-          </div>
-          <div class="tg-prompts-row">
-            <div class="tg-prompts-row-label">Техника захвата</div>
-            <div class="tg-prompts-row-ctrl">
-              <select class="input" style="width:260px;"
-                .value=${settings.buyerCloseStyle ?? "alternative"}
-                @change=${(e: Event) => patchWorkMode({ buyerCloseStyle: (e.target as HTMLSelectElement).value as "alternative" | "direct" | "micro-step" })}
-              >
-                <option value="alternative">Альтернативный выбор</option>
-                <option value="direct">Прямой запрос контакта</option>
-                <option value="micro-step">Микро-шаг (конкретный слот)</option>
-              </select>
-            </div>
-          </div>
-        `
-            : nothing
-        }
-
-        <div class="tg-prompts-row row-top">
-          <div class="tg-prompts-row-label" style="padding-top:6px;">Продукт / контекст</div>
-          <div class="tg-prompts-row-ctrl" style="width:100%;flex-direction:column;align-items:flex-start;gap:4px;">
-            <textarea class="input" rows="3" style="width:100%;resize:vertical;"
-              placeholder="Описание продукта или услуги, которое ИИ использует в buyer-стиле.&#10;Например: CRM для малого бизнеса, $29/мес, автоматизация лидов, старт за 1 день"
-              .value=${settings.buyerProductContext ?? ""}
-              @change=${(e: Event) => {
-                const v = (e.target as HTMLTextAreaElement).value.trim();
-                patchWorkMode({ buyerProductContext: v || undefined } as Partial<
-                  typeof savedSettings
-                >);
-              }}
-            ></textarea>
-            <span style="font-size:11px;color:var(--text-muted);">Инжектируется в системный промпт buyer-режима. Нажмите «Применить» чтобы сохранить.</span>
-          </div>
-        </div>
-
-      </div>
-
-      <!-- ── 🔔 Реактивация ─────────────────────────────────────── -->
-      <div class="tg-prompts-section-title">🔔 Реактивация (холодный дожим)</div>
-      <div class="tg-prompts-block" style="margin-bottom:20px;">
-
-        <div class="tg-prompts-row">
-          <div class="tg-prompts-row-label">Включена</div>
-          <div class="tg-prompts-row-ctrl">
-            <label class="tg-prompts-check-label">
-              <input type="checkbox"
-                .checked=${!!settings.reEngagementEnabled}
-                @change=${(e: Event) => patchWorkMode({ reEngagementEnabled: (e.target as HTMLInputElement).checked })}
-              />
-              ${
-                settings.reEngagementEnabled
-                  ? html`
-                      <span style="color: var(--ok, #3dbb70); font-weight: 600">Включена</span>
-                    `
-                  : html`
-                      <span style="color: var(--text-muted)">Выключена</span>
-                    `
-              }
+      <!-- Apply guards toggle -->
+      <div class="tg-setting-row" style="margin-bottom:12px;">
+        <div class="tg-setting-label">🛡️ Фильтры</div>
+        <div class="tg-setting-right">
+          <div class="tg-toggle-group">
+            <label class="tg-toggle-option ${(settings.reEngagementApplyGuards ?? true) ? "tg-toggle-option--active" : ""}"
+              @click=${() => saveNow({ reEngagementApplyGuards: true })}>
+              ✅ Применять
+            </label>
+            <label class="tg-toggle-option ${!(settings.reEngagementApplyGuards ?? true) ? "tg-toggle-option--active" : ""}"
+              @click=${() => saveNow({ reEngagementApplyGuards: false })}>
+              ❌ Не применять
             </label>
           </div>
+          <div class="tg-setting-hint" style="margin-top:4px;">
+            Применять фильтры (запрещённые фразы, стрип телефонов, без предположений) к сообщениям реактивации
+          </div>
         </div>
-
-        ${
-          settings.reEngagementEnabled
-            ? html`
-
-          <div class="tg-prompts-row">
-            <div class="tg-prompts-row-label">Режим ИИ</div>
-            <div class="tg-prompts-row-ctrl">
-              <select class="input" style="width:280px;"
-                .value=${settings.reEngagementAiMode ?? "template"}
-                @change=${(e: Event) => patchWorkMode({ reEngagementAiMode: (e.target as HTMLSelectElement).value as "template" | "ai" })}
-              >
-                <option value="template">Шаблон + ИИ улучшает</option>
-                <option value="ai">ИИ генерирует с нуля (по истории чата)</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="tg-prompts-row">
-            <div class="tg-prompts-row-label">Тон сообщений</div>
-            <div class="tg-prompts-row-ctrl">
-              <select class="input" style="width:220px;"
-                .value=${settings.reEngagementTone ?? "balanced"}
-                @change=${(e: Event) => patchWorkMode({ reEngagementTone: (e.target as HTMLSelectElement).value as "soft" | "balanced" | "hard" })}
-              >
-                <option value="soft">Мягкий</option>
-                <option value="balanced">Сбалансированный</option>
-                <option value="hard">Жёсткий</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="tg-prompts-row">
-            <div class="tg-prompts-row-label">Дней молчания (диапазон)</div>
-            <div class="tg-prompts-row-ctrl">
-              <div class="tg-prompts-time-range">
-                <input type="number" min="1" max="365" class="input" style="width:80px;"
-                  placeholder="от"
-                  .value=${String(settings.reEngagementDelayFrom ?? 1)}
-                  @change=${(e: Event) => patchWorkMode({ reEngagementDelayFrom: Number((e.target as HTMLInputElement).value) || undefined })}
-                />
-                <span style="color:var(--text-muted);padding:0 4px;">—</span>
-                <input type="number" min="1" max="365" class="input" style="width:80px;"
-                  placeholder="до"
-                  .value=${String(settings.reEngagementDelayTo ?? 7)}
-                  @change=${(e: Event) => patchWorkMode({ reEngagementDelayTo: Number((e.target as HTMLInputElement).value) || undefined })}
-                />
-              </div>
-              <span style="font-size:11px;color:var(--text-muted);">дней</span>
-            </div>
-          </div>
-
-          <div class="tg-prompts-row">
-            <div class="tg-prompts-row-label">Также тем, кто молчит дольше</div>
-            <div class="tg-prompts-row-ctrl">
-              <label class="tg-prompts-check-label">
-                <input type="checkbox"
-                  .checked=${!!settings.reEngagementDelayMore}
-                  @change=${(e: Event) => patchWorkMode({ reEngagementDelayMore: (e.target as HTMLInputElement).checked })}
-                />
-                <span>${settings.reEngagementDelayMore ? "Да" : "Нет"}</span>
-              </label>
-            </div>
-          </div>
-
-          <div class="tg-prompts-row">
-            <div class="tg-prompts-row-label">Пауза между отправками</div>
-            <div class="tg-prompts-row-ctrl">
-              <div class="tg-prompts-time-range">
-                <input type="number" min="0" max="3600" class="input" style="width:80px;"
-                  placeholder="мин"
-                  .value=${String(settings.reEngagementPauseMin ?? 0)}
-                  @change=${(e: Event) => patchWorkMode({ reEngagementPauseMin: Number((e.target as HTMLInputElement).value) || undefined })}
-                />
-                <span style="color:var(--text-muted);padding:0 4px;">—</span>
-                <input type="number" min="0" max="3600" class="input" style="width:80px;"
-                  placeholder="макс"
-                  .value=${String(settings.reEngagementPauseMax ?? 0)}
-                  @change=${(e: Event) => patchWorkMode({ reEngagementPauseMax: Number((e.target as HTMLInputElement).value) || undefined })}
-                />
-              </div>
-              <span style="font-size:11px;color:var(--text-muted);">сек</span>
-            </div>
-          </div>
-
-          <div class="tg-prompts-row">
-            <div class="tg-prompts-row-label">Только если есть имя</div>
-            <div class="tg-prompts-row-ctrl">
-              <label class="tg-prompts-check-label">
-                <input type="checkbox"
-                  .checked=${!!settings.reEngagementNameOnly}
-                  @change=${(e: Event) => patchWorkMode({ reEngagementNameOnly: (e.target as HTMLInputElement).checked })}
-                />
-                <span>${settings.reEngagementNameOnly ? "Да" : "Нет"}</span>
-              </label>
-            </div>
-          </div>
-
-          <div class="tg-prompts-row">
-            <div class="tg-prompts-row-label">ИИ продолжает диалог после реактивации</div>
-            <div class="tg-prompts-row-ctrl">
-              <label class="tg-prompts-check-label">
-                <input type="checkbox"
-                  .checked=${settings.reEngagementAiContinue !== false}
-                  @change=${(e: Event) => patchWorkMode({ reEngagementAiContinue: (e.target as HTMLInputElement).checked })}
-                />
-                ${
-                  settings.reEngagementAiContinue !== false
-                    ? html`
-                        <span style="color: var(--ok, #3dbb70); font-weight: 600">Да</span>
-                      `
-                    : html`
-                        <span style="color: var(--text-muted)">Нет — ручной режим</span>
-                      `
-                }
-              </label>
-            </div>
-          </div>
-
-          <div class="tg-prompts-row row-top">
-            <div class="tg-prompts-row-label" style="padding-top:6px;">Шаблон реактивации</div>
-            <div class="tg-prompts-row-ctrl" style="width:100%;flex-direction:column;align-items:flex-start;gap:4px;">
-              <textarea class="input" rows="3" style="width:100%;resize:vertical;"
-                placeholder="Привет {имя}! Горит сделка с профитом 37%, ты с нами? 🔥&#10;Плейсхолдеры: {имя}, {фамилия}, {имя_полное}"
-                .value=${settings.reEngagementTemplate ?? ""}
-                @change=${(e: Event) => patchWorkMode({ reEngagementTemplate: (e.target as HTMLTextAreaElement).value.trim() || undefined })}
-              ></textarea>
-              ${
-                settings.reEngagementSavedTemplates &&
-                settings.reEngagementSavedTemplates.length > 0
-                  ? html`
-                  <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:2px;">
-                    ${settings.reEngagementSavedTemplates.map(
-                      (tpl) => html`
-                      <button type="button" class="btn" style="font-size:11px;padding:2px 10px;"
-                        title="${tpl}"
-                        @click=${() => patchWorkMode({ reEngagementTemplate: tpl })}
-                      >${tpl.slice(0, 35)}${tpl.length > 35 ? "…" : ""}</button>
-                    `,
-                    )}
-                  </div>
-                `
-                  : nothing
-              }
-            </div>
-          </div>
-
-        `
-            : nothing
-        }
-
       </div>
+
+      <!-- Re-engagement context -->
+      <div class="tg-prompts-section-title" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>🧠 Контекст реактивации</span>
+        <div style="display:flex;align-items:center;gap:6px;">
+          ${
+            settings.reEngagementContext?.trim()
+              ? html`
+                  <span
+                    style="
+                      font-size: 11px;
+                      padding: 2px 8px;
+                      background: rgba(61, 187, 112, 0.15);
+                      border: 1px solid rgba(61, 187, 112, 0.3);
+                      color: var(--ok, #3dbb70);
+                      border-radius: 10px;
+                    "
+                    >✅ свой</span
+                  >
+                `
+              : html`<span style="font-size:11px;color:var(--text-muted);font-weight:400;">${settings.contextInstructions?.trim() ? "из менеджера" : "не задан"}</span>`
+          }
+          ${
+            settings.reEngagementContext?.trim()
+              ? html`<button type="button" class="btn" style="font-size:11px;padding:2px 10px;color:var(--text-muted);"
+                @click=${() => saveNow({ reEngagementContext: undefined })}>↩️ Сбросить</button>`
+              : nothing
+          }
+        </div>
+      </div>
+      <textarea class="input tg-prompts-reeng-context-textarea"
+        rows="8"
+        style="width:100%;font-family:var(--font-mono,monospace);font-size:12px;line-height:1.6;resize:vertical;min-height:80px;"
+        placeholder="${settings.contextInstructions?.trim() ? "Пусто = берётся контекст из вкладки «Менеджер».\nИли введите отдельный контекст для реактивации:" : "Контекст для реактивации (продукт, цены, компания)…"}"
+        .value=${settings.reEngagementContext ?? ""}
+        @input=${(e: Event) => {
+          patchWorkMode({
+            reEngagementContext: (e.target as HTMLTextAreaElement).value || undefined,
+          } as Partial<typeof savedSettings>);
+        }}
+      ></textarea>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;margin-bottom:16px;">
+        <span style="font-size:11px;color:var(--text-muted);flex:1;">Пусто = используется глобальный контекст из «Менеджер».</span>
+        <button type="button" class="btn primary" style="font-size:12px;padding:5px 20px;"
+          ?disabled=${props.agentSettingsSaving}
+          @click=${() => {
+            const ta = document.querySelector(".tg-prompts-reeng-context-textarea");
+            const v = ta?.value.trim() ?? "";
+            saveNow({ reEngagementContext: v || undefined });
+          }}>${props.agentSettingsSaving ? "⏳…" : "💾 Сохранить"}</button>
+      </div>
+
+      <!-- Re-engagement anti-hallucination -->
+      <div class="tg-prompts-section-title" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>🔮 Анти-галлюцинации реактивации</span>
+        <div style="display:flex;align-items:center;gap:6px;">
+          ${
+            settings.reEngagementAntiHallucination?.trim()
+              ? html`
+                  <span
+                    style="
+                      font-size: 11px;
+                      padding: 2px 8px;
+                      background: rgba(239, 68, 68, 0.12);
+                      border: 1px solid rgba(239, 68, 68, 0.3);
+                      color: #ef4444;
+                      border-radius: 10px;
+                    "
+                    >🛑 свои</span
+                  >
+                `
+              : html`<span style="font-size:11px;color:var(--text-muted);font-weight:400;">${settings.antiHallucinationRules?.trim() ? "из менеджера" : "не заданы"}</span>`
+          }
+          ${
+            settings.reEngagementAntiHallucination?.trim()
+              ? html`<button type="button" class="btn" style="font-size:11px;padding:2px 10px;color:var(--text-muted);"
+                @click=${() => saveNow({ reEngagementAntiHallucination: undefined })}>↩️ Сбросить</button>`
+              : nothing
+          }
+        </div>
+      </div>
+      <textarea class="input tg-prompts-reeng-halluc-textarea"
+        rows="8"
+        style="width:100%;font-family:var(--font-mono,monospace);font-size:12px;line-height:1.6;resize:vertical;min-height:80px;"
+        placeholder="${settings.antiHallucinationRules?.trim() ? "Пусто = берутся правила из вкладки «Менеджер».\nИли введите отдельные правила для реактивации:" : "Что ИИ НИКОГДА не должен выдумывать при реактивации…"}"
+        .value=${settings.reEngagementAntiHallucination ?? ""}
+        @input=${(e: Event) => {
+          patchWorkMode({
+            reEngagementAntiHallucination: (e.target as HTMLTextAreaElement).value || undefined,
+          } as Partial<typeof savedSettings>);
+        }}
+      ></textarea>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;margin-bottom:16px;">
+        <span style="font-size:11px;color:var(--text-muted);flex:1;">Пусто = используются глобальные анти-галлюцинации из «Менеджер».</span>
+        <button type="button" class="btn primary" style="font-size:12px;padding:5px 20px;"
+          ?disabled=${props.agentSettingsSaving}
+          @click=${() => {
+            const ta = document.querySelector(".tg-prompts-reeng-halluc-textarea");
+            const v = ta?.value.trim() ?? "";
+            saveNow({ reEngagementAntiHallucination: v || undefined });
+          }}>${props.agentSettingsSaving ? "⏳…" : "💾 Сохранить"}</button>
+      </div>
+
+      <!-- Re-engagement additional instructions -->
+      <div class="tg-prompts-section-title" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>✏️ Доп. инструкции реактивации</span>
+        <div style="display:flex;align-items:center;gap:6px;">
+          ${
+            settings.reEngagementAppend?.trim()
+              ? html`
+                  <span
+                    style="
+                      font-size: 11px;
+                      padding: 2px 8px;
+                      background: rgba(61, 187, 112, 0.15);
+                      border: 1px solid rgba(61, 187, 112, 0.3);
+                      color: var(--ok, #3dbb70);
+                      border-radius: 10px;
+                    "
+                    >✅ свои</span
+                  >
+                `
+              : html`<span style="font-size:11px;color:var(--text-muted);font-weight:400;">${settings.systemPromptAppend?.trim() ? "из менеджера" : "не заданы"}</span>`
+          }
+          ${
+            settings.reEngagementAppend?.trim()
+              ? html`<button type="button" class="btn" style="font-size:11px;padding:2px 10px;color:var(--text-muted);"
+                @click=${() => saveNow({ reEngagementAppend: undefined })}>↩️ Сбросить</button>`
+              : nothing
+          }
+        </div>
+      </div>
+      <textarea class="input tg-prompts-reeng-append-textarea"
+        rows="6"
+        style="width:100%;font-family:var(--font-mono,monospace);font-size:12px;line-height:1.6;resize:vertical;min-height:60px;"
+        placeholder="${settings.systemPromptAppend?.trim() ? "Пусто = берутся инструкции из вкладки «Менеджер»." : "Доп. инструкции для реактивации…"}"
+        .value=${settings.reEngagementAppend ?? ""}
+        @input=${(e: Event) => {
+          patchWorkMode({
+            reEngagementAppend: (e.target as HTMLTextAreaElement).value || undefined,
+          } as Partial<typeof savedSettings>);
+        }}
+      ></textarea>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;margin-bottom:16px;">
+        <span style="font-size:11px;color:var(--text-muted);flex:1;">Пусто = используются глобальные инструкции из «Менеджер».</span>
+        <button type="button" class="btn primary" style="font-size:12px;padding:5px 20px;"
+          ?disabled=${props.agentSettingsSaving}
+          @click=${() => {
+            const ta = document.querySelector(".tg-prompts-reeng-append-textarea");
+            const v = ta?.value.trim() ?? "";
+            saveNow({ reEngagementAppend: v || undefined });
+          }}>${props.agentSettingsSaving ? "⏳…" : "💾 Сохранить"}</button>
+      </div>
+
+      <!-- Re-engagement system prompt override -->
+      <div class="tg-prompts-section-title" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>📝 Системный промпт реактивации</span>
+        <div style="display:flex;align-items:center;gap:6px;">
+          ${
+            settings.reEngagementSystemPrompt?.trim()
+              ? html`
+                  <span
+                    style="
+                      font-size: 11px;
+                      padding: 2px 8px;
+                      background: rgba(239, 68, 68, 0.12);
+                      border: 1px solid rgba(239, 68, 68, 0.3);
+                      color: #ef4444;
+                      border-radius: 10px;
+                    "
+                    >⚠️ кастомный</span
+                  >
+                `
+              : html`
+                  <span style="font-size: 11px; color: var(--text-muted); font-weight: 400">встроенный</span>
+                `
+          }
+          ${
+            settings.reEngagementSystemPrompt?.trim()
+              ? html`<button type="button" class="btn" style="font-size:11px;padding:2px 10px;color:var(--text-muted);"
+                @click=${() => saveNow({ reEngagementSystemPrompt: undefined })}>↩️ Вернуть встроенный</button>`
+              : nothing
+          }
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);line-height:1.5;margin-bottom:8px;">
+        Полная замена системного промпта реактивации. <strong>Осторожно:</strong> при замене встроенный промпт с алгоритмами реактивации будет полностью отключён.
+      </div>
+      <textarea class="input tg-prompts-reeng-sysprompt-textarea"
+        rows="14"
+        style="width:100%;font-family:var(--font-mono,monospace);font-size:12px;line-height:1.6;resize:vertical;min-height:120px;"
+        placeholder="Оставьте пустым, чтобы использовать встроенный промпт реактивации.&#10;&#10;Встроенный промпт включает:&#10;• Алгоритм поиска главного интереса клиента&#10;• Определение точки остановки диалога&#10;• Правила возврата через интерес, а не атаку&#10;• Ограничение 1–2 предложения&#10;• Первое лицо ед. числа&#10;• Тон (soft/balanced/hard) подставляется автоматически"
+        .value=${settings.reEngagementSystemPrompt ?? ""}
+        @input=${(e: Event) => {
+          patchWorkMode({
+            reEngagementSystemPrompt: (e.target as HTMLTextAreaElement).value || undefined,
+          } as Partial<typeof savedSettings>);
+        }}
+      ></textarea>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;margin-bottom:20px;">
+        <span style="font-size:11px;color:var(--text-muted);flex:1;">
+          Пусто = используется встроенный промпт реактивации + тон + контекст + анти-галлюцинации.
+        </span>
+        <button type="button" class="btn primary" style="font-size:12px;padding:5px 20px;"
+          ?disabled=${props.agentSettingsSaving}
+          @click=${() => {
+            const ta = document.querySelector(".tg-prompts-reeng-sysprompt-textarea");
+            const v = ta?.value.trim() ?? "";
+            saveNow({ reEngagementSystemPrompt: v || undefined });
+          }}>${props.agentSettingsSaving ? "⏳…" : "💾 Сохранить"}</button>
+      </div>
+
+      <!-- Re-engagement template generation prompt -->
+      <div class="tg-prompts-section-title" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>🎲 Промпт генерации шаблонов</span>
+        <div style="display:flex;align-items:center;gap:6px;">
+          ${
+            settings.reEngagementTemplateGenPrompt?.trim()
+              ? html`
+                  <span
+                    style="
+                      font-size: 11px;
+                      padding: 2px 8px;
+                      background: rgba(239, 68, 68, 0.12);
+                      border: 1px solid rgba(239, 68, 68, 0.3);
+                      color: #ef4444;
+                      border-radius: 10px;
+                    "
+                    >⚠️ кастомный</span
+                  >
+                `
+              : html`
+                  <span style="font-size: 11px; color: var(--text-muted); font-weight: 400">встроенный</span>
+                `
+          }
+          ${
+            settings.reEngagementTemplateGenPrompt?.trim()
+              ? html`<button type="button" class="btn" style="font-size:11px;padding:2px 10px;color:var(--text-muted);"
+                @click=${() => saveNow({ reEngagementTemplateGenPrompt: undefined })}>↩️ Вернуть встроенный</button>`
+              : nothing
+          }
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);line-height:1.5;margin-bottom:8px;">
+        Промпт для кнопки «🎲 Сгенерировать шаблон». Описывает ИИ как создавать шаблоны реактивации.
+        Пусто = встроенный промпт (баер/нейтральный по режиму).
+      </div>
+      <textarea class="input tg-prompts-reeng-tplgen-textarea"
+        rows="8"
+        style="width:100%;font-family:var(--font-mono,monospace);font-size:12px;line-height:1.6;resize:vertical;min-height:80px;"
+        placeholder="Пусто = встроенный промпт генерации шаблонов.&#10;&#10;Пример:&#10;Ты эксперт по реактивации клиентов. Создай короткий цепляющий шаблон с плейсхолдером {имя}.&#10;1–2 предложения. Без клише. Только текст — без кавычек и пояснений."
+        .value=${settings.reEngagementTemplateGenPrompt ?? ""}
+        @input=${(e: Event) => {
+          patchWorkMode({
+            reEngagementTemplateGenPrompt: (e.target as HTMLTextAreaElement).value || undefined,
+          } as Partial<typeof savedSettings>);
+        }}
+      ></textarea>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;margin-bottom:20px;">
+        <span style="font-size:11px;color:var(--text-muted);flex:1;">
+          Пусто = встроенный промпт (учитывает баер/нейтральный режим и тон).
+        </span>
+        <button type="button" class="btn primary" style="font-size:12px;padding:5px 20px;"
+          ?disabled=${props.agentSettingsSaving}
+          @click=${() => {
+            const ta = document.querySelector(".tg-prompts-reeng-tplgen-textarea");
+            const v = ta?.value.trim() ?? "";
+            saveNow({ reEngagementTemplateGenPrompt: v || undefined });
+          }}>${props.agentSettingsSaving ? "⏳…" : "💾 Сохранить"}</button>
+      </div>
+
+      </div><!-- end reeng-content -->
+
+      <!-- ═══════════ MANAGER TAB (continued: filters, phrases, prompts) ═══════════ -->
+      <div class="tg-prompts-manager-content">
 
       <!-- ── 🛡️ Активные фильтры ─────────────────────────────────── -->
-      <div class="tg-prompts-section-title">🛡️ Активные фильтры</div>
-      <div class="tg-prompts-guards" style="margin-bottom:20px;">
-
-        <div class="tg-prompts-guard ${hasWorkingHours ? "active" : "inactive"}">
-          <div class="tg-prompts-guard-header">
-            <span class="tg-prompts-guard-icon">${hasWorkingHours ? "✅" : "⬜"}</span>
-            <span class="tg-prompts-guard-name">🕐 Рабочие часы</span>
-          </div>
-          <div class="tg-prompts-guard-desc">Перехватывает нерабочее время в ответах ИИ, предлагает ближайший слот</div>
-          <div class="tg-prompts-guard-details">${workHoursLabel}</div>
-        </div>
-
-        <div class="tg-prompts-guard active">
-          <div class="tg-prompts-guard-header">
-            <span class="tg-prompts-guard-icon">✅</span>
-            <span class="tg-prompts-guard-name">🚫 Без предположений о клиенте</span>
-          </div>
-          <div class="tg-prompts-guard-desc">Убирает фразы, приписывающие клиенту слова или профессию</div>
-          <div class="tg-prompts-guard-details">«ты говорил» → перефразирование | «из айти сферы» → удалено</div>
-        </div>
-
-        <div class="tg-prompts-guard active">
-          <div class="tg-prompts-guard-header">
-            <span class="tg-prompts-guard-icon">✅</span>
-            <span class="tg-prompts-guard-name">👤 Первое лицо (я, не мы)</span>
-          </div>
-          <div class="tg-prompts-guard-desc">Заменяет корпоративное «мы» на личное «я» в реактивационных сообщениях</div>
-          <div class="tg-prompts-guard-details">мы→я | можем→могу | sunabiliriz→sunabilirim | we→I</div>
-        </div>
-
-        <div class="tg-prompts-guard active">
-          <div class="tg-prompts-guard-header">
-            <span class="tg-prompts-guard-icon">✅</span>
-            <span class="tg-prompts-guard-name">📵 Блокировка телефонных номеров</span>
-          </div>
-          <div class="tg-prompts-guard-desc">Удаляет все телефонные номера из ответов ИИ</div>
-        </div>
-
-        <div class="tg-prompts-guard ${hasWorkingHours ? "active" : "inactive"}">
-          <div class="tg-prompts-guard-header">
-            <span class="tg-prompts-guard-icon">${hasWorkingHours ? "✅" : "⬜"}</span>
-            <span class="tg-prompts-guard-name">📅 Блокировка «в любое время»</span>
-          </div>
-          <div class="tg-prompts-guard-desc">Заменяет открытые предложения времени на конкретный слот в рабочем окне</div>
-          <div class="tg-prompts-guard-details">«подстроюсь» → «давай в HH:MM»${hasWorkingHours ? "" : " — требуются рабочие часы"}</div>
-        </div>
-
-        <div class="tg-prompts-guard ${(settings.customForbiddenPhrases?.length ?? 0) > 0 ? "active" : "inactive"}">
-          <div class="tg-prompts-guard-header">
-            <span class="tg-prompts-guard-icon">${(settings.customForbiddenPhrases?.length ?? 0) > 0 ? "✅" : "⬜"}</span>
-            <span class="tg-prompts-guard-name">✏️ Кастомные запрещённые фразы</span>
-          </div>
-          <div class="tg-prompts-guard-desc">Удаляет из ответов ИИ перечисленные ниже слова и фразы</div>
-          <div class="tg-prompts-guard-details">${settings.customForbiddenPhrases?.length ?? 0} фраз задано</div>
-        </div>
-
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <div class="tg-prompts-section-title" style="margin:0;">🛡️ Активные фильтры</div>
+        <button type="button" class="btn primary" style="font-size:12px;padding:4px 14px;"
+          @click=${() => {
+            const guards = [...(settings.customGuards ?? [])];
+            guards.push({
+              id: `guard_${Date.now()}`,
+              name: "",
+              description: "",
+              enabled: true,
+            });
+            saveNow({ customGuards: guards });
+          }}>➕ Добавить фильтр</button>
       </div>
+      <div class="tg-prompts-guards" style="margin-bottom:12px;">
 
-      <!-- ── 🚫 Запрещённые фразы ────────────────────────────────── -->
-      <div class="tg-prompts-section-title">🚫 Запрещённые фразы</div>
-      <div class="tg-prompts-phrases" style="margin-bottom:14px;">
-        ${hardcodedPhrases.map(
-          (cat) => html`
-          <div class="tg-prompts-phrase-group">
-            <div class="tg-prompts-phrase-category">${cat.category} <span style="font-weight:400;text-transform:none;letter-spacing:0;">(встроено)</span></div>
-            <div class="tg-prompts-phrase-list">
-              ${cat.phrases.map((p) => html`<span class="tg-prompts-phrase-chip">${p}</span>`)}
+        <!-- Built-in guards (toggleable via overrides, editable & deletable) -->
+        ${builtinGuardDefs.map((g) => {
+          const active = isBuiltinGuardActive(g);
+          return html`
+            <div class="tg-prompts-guard ${active ? "active" : "inactive"}" style="position:relative;">
+              <div class="tg-prompts-guard-header">
+                <label class="tg-prompts-guard-toggle" title="Вкл/Выкл">
+                  <input type="checkbox" ?checked=${active}
+                    @change=${(e: Event) => {
+                      const overrides = { ...settings.builtinGuardsOverrides };
+                      overrides[g.id] = (e.target as HTMLInputElement).checked;
+                      saveNow({ builtinGuardsOverrides: overrides });
+                    }} />
+                </label>
+                <span class="tg-prompts-guard-icon">${active ? "✅" : "⬜"}</span>
+                <span class="tg-prompts-guard-name" style="flex:1;min-width:0;">${g.icon} ${g.name}</span>
+                <span class="tg-prompts-guard-badge">встроен</span>
+                <div class="tg-prompts-guard-actions">
+                  <button type="button" class="tg-prompts-action-btn tg-prompts-action-btn--edit" title="Редактировать фильтр"
+                    @click=${(e: Event) => {
+                      const card = (e.target as HTMLElement).closest(".tg-prompts-guard");
+                      if (card) {
+                        card.classList.toggle("tg-prompts-guard--editing");
+                      }
+                    }}>✏️ Редактировать</button>
+                  <button type="button" class="tg-prompts-action-btn tg-prompts-action-btn--delete" title="Удалить фильтр"
+                    @click=${() => {
+                      // Remove builtin guard by disabling it permanently
+                      const overrides = { ...settings.builtinGuardsOverrides };
+                      overrides[g.id] = false;
+                      saveNow({ builtinGuardsOverrides: overrides });
+                    }}>🗑 Удалить</button>
+                </div>
+              </div>
+              <div class="tg-prompts-guard-desc">${g.desc}</div>
+              ${g.details ? html`<div class="tg-prompts-guard-details">${g.details}</div>` : nothing}
+              <!-- Edit form (collapsible via CSS class) -->
+              <div class="tg-prompts-guard-edit-form">
+                <div style="display:flex;flex-direction:column;gap:6px;padding:8px 0 4px 0;">
+                  <input type="text" class="tg-prompts-guard-name-input"
+                    .value=${g.name}
+                    placeholder="Название фильтра"
+                    disabled
+                    style="opacity:0.6;cursor:not-allowed;"
+                    title="Название встроенного фильтра нельзя изменить" />
+                  <input type="text" class="tg-prompts-guard-desc-input"
+                    .value=${g.desc}
+                    placeholder="Описание — что делает этот фильтр"
+                    disabled
+                    style="opacity:0.6;cursor:not-allowed;"
+                    title="Описание встроенного фильтра нельзя изменить" />
+                  ${
+                    g.details
+                      ? html`
+                    <input type="text" class="tg-prompts-guard-desc-input" style="font-size:11px;opacity:0.6;cursor:not-allowed;"
+                      .value=${g.details}
+                      placeholder="Детали (опционально)"
+                      disabled
+                      title="Детали встроенного фильтра нельзя изменить" />
+                  `
+                      : nothing
+                  }
+                  <span style="font-size:11px;color:var(--text-muted);margin-top:4px;">
+                    💡 Встроенный фильтр: можно включать/выключать через чекбокс. Для полного редактирования создайте кастомный фильтр.
+                  </span>
+                </div>
+              </div>
+            </div>
+          `;
+        })}
+
+        <!-- Custom (user-defined) guards — editable, toggleable, deletable -->
+        ${(settings.customGuards ?? []).map(
+          (g, idx) => html`
+          <div class="tg-prompts-guard ${g.enabled ? "active" : "inactive"}" style="position:relative;">
+            <!-- Guard header: toggle + name + action buttons -->
+            <div class="tg-prompts-guard-header">
+              <label class="tg-prompts-guard-toggle" title="Вкл/Выкл">
+                <input type="checkbox" ?checked=${g.enabled}
+                  @change=${(e: Event) => {
+                    const guards = [...(settings.customGuards ?? [])];
+                    guards[idx] = {
+                      ...guards[idx],
+                      enabled: (e.target as HTMLInputElement).checked,
+                    };
+                    saveNow({ customGuards: guards });
+                  }} />
+              </label>
+              <span class="tg-prompts-guard-icon">${g.enabled ? "✅" : "⬜"}</span>
+              <span class="tg-prompts-guard-name" style="flex:1;min-width:0;">
+                ${
+                  g.name ||
+                  html`
+                    <span style="color: var(--text-muted); font-style: italic">Без названия</span>
+                  `
+                }
+              </span>
+              <span class="tg-prompts-guard-badge">кастом</span>
+              <div class="tg-prompts-guard-actions">
+                <button type="button" class="tg-prompts-action-btn tg-prompts-action-btn--edit" title="Редактировать фильтр"
+                  @click=${(e: Event) => {
+                    const card = (e.target as HTMLElement).closest(".tg-prompts-guard");
+                    if (card) {
+                      card.classList.toggle("tg-prompts-guard--editing");
+                    }
+                  }}>✏️ Редактировать</button>
+                <button type="button" class="tg-prompts-action-btn tg-prompts-action-btn--delete" title="Удалить фильтр"
+                  @click=${() => {
+                    const guards = (settings.customGuards ?? []).filter((_, i) => i !== idx);
+                    saveNow({ customGuards: guards });
+                  }}>🗑 Удалить</button>
+              </div>
+            </div>
+            <!-- Description (always visible) -->
+            ${g.description ? html`<div class="tg-prompts-guard-desc">${g.description}</div>` : nothing}
+            ${g.details ? html`<div class="tg-prompts-guard-details">${g.details}</div>` : nothing}
+            <!-- Edit form (collapsible via CSS class) -->
+            <div class="tg-prompts-guard-edit-form">
+              <div style="display:flex;flex-direction:column;gap:6px;padding:8px 0 4px 0;">
+                <input type="text" class="tg-prompts-guard-name-input"
+                  .value=${g.name}
+                  placeholder="Название фильтра"
+                  @change=${(e: Event) => {
+                    const guards = [...(settings.customGuards ?? [])];
+                    guards[idx] = { ...guards[idx], name: (e.target as HTMLInputElement).value };
+                    saveNow({ customGuards: guards });
+                  }} />
+                <input type="text" class="tg-prompts-guard-desc-input"
+                  .value=${g.description}
+                  placeholder="Описание — что делает этот фильтр"
+                  @change=${(e: Event) => {
+                    const guards = [...(settings.customGuards ?? [])];
+                    guards[idx] = {
+                      ...guards[idx],
+                      description: (e.target as HTMLInputElement).value,
+                    };
+                    saveNow({ customGuards: guards });
+                  }} />
+                <input type="text" class="tg-prompts-guard-desc-input" style="font-size:11px;opacity:0.7;"
+                  .value=${g.details ?? ""}
+                  placeholder="Детали (опционально)"
+                  @change=${(e: Event) => {
+                    const guards = [...(settings.customGuards ?? [])];
+                    guards[idx] = {
+                      ...guards[idx],
+                      details: (e.target as HTMLInputElement).value || undefined,
+                    };
+                    saveNow({ customGuards: guards });
+                  }} />
+              </div>
             </div>
           </div>
         `,
         )}
+
+        <!-- Empty state when no custom guards -->
+        ${
+          (settings.customGuards ?? []).length === 0
+            ? html`
+                <div style="padding: 14px; text-align: center; color: var(--text-muted); font-size: 12px">
+                  Нет кастомных фильтров. Нажмите «➕ Добавить фильтр» чтобы создать.
+                </div>
+              `
+            : nothing
+        }
       </div>
 
+      <!-- ── 🚫 Запрещённые фразы ────────────────────────────────── -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <div class="tg-prompts-section-title" style="margin:0;">🚫 Запрещённые фразы</div>
+        <button type="button" class="btn primary" style="font-size:12px;padding:4px 14px;"
+          @click=${() => {
+            const cats = [...(settings.customForbiddenCategories ?? [])];
+            cats.push({ category: "", phrases: [] });
+            saveNow({ customForbiddenCategories: cats });
+          }}>➕ Добавить категорию</button>
+      </div>
+
+      <!-- Built-in categories (editable, saveable) -->
+      <div class="tg-prompts-phrases" style="margin-bottom:14px;">
+        ${builtinPhrases.map(
+          (cat, catIdx) => html`
+          <div class="tg-prompts-phrase-group" style="position:relative;">
+            <!-- Category header: name + action buttons -->
+            <div class="tg-prompts-phrase-category" style="display:flex;align-items:center;gap:8px;">
+              <span style="flex:1;min-width:0;">
+                ${
+                  cat.category ||
+                  html`
+                    <span style="color: var(--text-muted); font-style: italic">Без названия</span>
+                  `
+                }
+              </span>
+              <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:10px;color:var(--text-muted);">встроено</span>
+              <div class="tg-prompts-guard-actions">
+                <button type="button" class="tg-prompts-action-btn tg-prompts-action-btn--edit" title="Редактировать категорию"
+                  @click=${(e: Event) => {
+                    const group = (e.target as HTMLElement).closest(".tg-prompts-phrase-group");
+                    if (group) {
+                      group.classList.toggle("tg-prompts-phrase-group--editing");
+                    }
+                  }}>✏️ Редактировать</button>
+              </div>
+            </div>
+            <!-- Edit form for phrases (collapsible via CSS class) -->
+            <div class="tg-prompts-phrase-edit-form">
+              <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Редактирование фраз категории «${cat.category}»:</div>
+              ${cat.phrases.map(
+                (p, pIdx) => html`
+                <div style="display:flex;align-items:center;gap:4px;margin-bottom:4px;">
+                  <input type="text" class="tg-prompts-cat-name-input" style="flex:1;font-size:12px;padding:3px 6px;"
+                    .value=${p}
+                    @change=${(e: Event) => {
+                      const newVal = (e.target as HTMLInputElement).value.trim();
+                      const cats = [...builtinPhrases];
+                      if (!newVal) {
+                        // Empty = remove
+                        cats[catIdx] = {
+                          ...cats[catIdx],
+                          phrases: cats[catIdx].phrases.filter((_, i) => i !== pIdx),
+                        };
+                      } else {
+                        const updated = [...cats[catIdx].phrases];
+                        updated[pIdx] = newVal;
+                        cats[catIdx] = { ...cats[catIdx], phrases: updated };
+                      }
+                      saveNow({ builtinForbiddenCategories: cats });
+                    }} />
+                  <button type="button" class="tg-prompts-phrase-remove" title="Удалить фразу"
+                    style="font-size:13px;cursor:pointer;background:none;border:none;padding:2px 4px;"
+                    @click=${() => {
+                      const cats = [...builtinPhrases];
+                      cats[catIdx] = {
+                        ...cats[catIdx],
+                        phrases: cats[catIdx].phrases.filter((_, i) => i !== pIdx),
+                      };
+                      saveNow({ builtinForbiddenCategories: cats });
+                    }}>✕</button>
+                </div>
+              `,
+              )}
+              <button type="button" class="tg-prompts-phrase-add" style="margin-top:4px;"
+                @click=${() => {
+                  const phrase = prompt("Новая фраза:");
+                  if (!phrase?.trim()) {
+                    return;
+                  }
+                  const cats = [...builtinPhrases];
+                  cats[catIdx] = {
+                    ...cats[catIdx],
+                    phrases: [...cats[catIdx].phrases, phrase.trim()],
+                  };
+                  saveNow({ builtinForbiddenCategories: cats });
+                }}>➕ Добавить фразу</button>
+            </div>
+            <!-- Phrases list (read-only chips when not editing) -->
+            <div class="tg-prompts-phrase-list">
+              ${cat.phrases.map(
+                (p) => html`
+                <span class="tg-prompts-phrase-chip">${p}</span>
+              `,
+              )}
+            </div>
+          </div>
+        `,
+        )}
+        <!-- Reset to defaults button (only shown when overrides are saved) -->
+        ${
+          settings.builtinForbiddenCategories
+            ? html`<div style="text-align:right;padding:4px 0;">
+              <button type="button" class="tg-prompts-action-btn" style="font-size:11px;padding:3px 10px;color:var(--text-muted);"
+                title="Сбросить все встроенные категории к значениям по умолчанию"
+                @click=${() => saveNow({ builtinForbiddenCategories: undefined as unknown as typeof settings.builtinForbiddenCategories })}>
+                🔄 Сбросить к умолчанию
+              </button>
+            </div>`
+            : nothing
+        }
+      </div>
+
+      <!-- Custom (user-defined) categories — full CRUD -->
+      <div class="tg-prompts-phrases" style="margin-bottom:10px;">
+        ${(settings.customForbiddenCategories ?? []).map(
+          (cat, catIdx) => html`
+          <div class="tg-prompts-phrase-group" style="position:relative;">
+            <!-- Category header: name + action buttons -->
+            <div class="tg-prompts-phrase-category" style="display:flex;align-items:center;gap:8px;">
+              <span style="flex:1;min-width:0;">
+                ${
+                  cat.category ||
+                  html`
+                    <span style="color: var(--text-muted); font-style: italic">Без названия</span>
+                  `
+                }
+              </span>
+              <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:10px;color:var(--text-muted);">кастом</span>
+              <div class="tg-prompts-guard-actions">
+                <button type="button" class="tg-prompts-action-btn tg-prompts-action-btn--edit" title="Редактировать категорию"
+                  @click=${(e: Event) => {
+                    const group = (e.target as HTMLElement).closest(".tg-prompts-phrase-group");
+                    if (group) {
+                      group.classList.toggle("tg-prompts-phrase-group--editing");
+                    }
+                  }}>✏️ Редактировать</button>
+                <button type="button" class="tg-prompts-action-btn tg-prompts-action-btn--delete" title="Удалить категорию"
+                  @click=${() => {
+                    const cats = (settings.customForbiddenCategories ?? []).filter(
+                      (_, i) => i !== catIdx,
+                    );
+                    saveNow({ customForbiddenCategories: cats });
+                  }}>🗑 Удалить</button>
+              </div>
+            </div>
+            <!-- Edit form for phrases (collapsible via CSS class) -->
+            <div class="tg-prompts-phrase-edit-form">
+              <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+                <input type="text" class="tg-prompts-cat-name-input" style="flex:1;font-size:12px;padding:3px 6px;"
+                  .value=${cat.category}
+                  placeholder="Название категории"
+                  @change=${(e: Event) => {
+                    const cats = [...(settings.customForbiddenCategories ?? [])];
+                    cats[catIdx] = {
+                      ...cats[catIdx],
+                      category: (e.target as HTMLInputElement).value,
+                    };
+                    saveNow({ customForbiddenCategories: cats });
+                  }} />
+              </div>
+              <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Фразы:</div>
+              ${cat.phrases.map(
+                (p, pIdx) => html`
+                <div style="display:flex;align-items:center;gap:4px;margin-bottom:4px;">
+                  <input type="text" class="tg-prompts-cat-name-input" style="flex:1;font-size:12px;padding:3px 6px;"
+                    .value=${p}
+                    @change=${(e: Event) => {
+                      const newVal = (e.target as HTMLInputElement).value.trim();
+                      const cats = [...(settings.customForbiddenCategories ?? [])];
+                      if (!newVal) {
+                        cats[catIdx] = {
+                          ...cats[catIdx],
+                          phrases: cats[catIdx].phrases.filter((_, i) => i !== pIdx),
+                        };
+                      } else {
+                        const updated = [...cats[catIdx].phrases];
+                        updated[pIdx] = newVal;
+                        cats[catIdx] = { ...cats[catIdx], phrases: updated };
+                      }
+                      saveNow({ customForbiddenCategories: cats });
+                    }} />
+                  <button type="button" class="tg-prompts-phrase-remove" title="Удалить фразу"
+                    style="font-size:13px;cursor:pointer;background:none;border:none;padding:2px 4px;"
+                    @click=${() => {
+                      const cats = [...(settings.customForbiddenCategories ?? [])];
+                      cats[catIdx] = {
+                        ...cats[catIdx],
+                        phrases: cats[catIdx].phrases.filter((_, i) => i !== pIdx),
+                      };
+                      saveNow({ customForbiddenCategories: cats });
+                    }}>✕</button>
+                </div>
+              `,
+              )}
+              <button type="button" class="tg-prompts-phrase-add" style="margin-top:4px;"
+                @click=${() => {
+                  const phrase = prompt("Новая фраза:");
+                  if (!phrase?.trim()) {
+                    return;
+                  }
+                  const cats = [...(settings.customForbiddenCategories ?? [])];
+                  cats[catIdx] = {
+                    ...cats[catIdx],
+                    phrases: [...cats[catIdx].phrases, phrase.trim()],
+                  };
+                  saveNow({ customForbiddenCategories: cats });
+                }}>➕ Добавить фразу</button>
+            </div>
+            <!-- Phrases list (read-only chips when not editing) -->
+            <div class="tg-prompts-phrase-list">
+              ${cat.phrases.map(
+                (p) => html`
+                <span class="tg-prompts-phrase-chip">${p}</span>
+              `,
+              )}
+            </div>
+          </div>
+        `,
+        )}
+
+        <!-- Empty state -->
+        ${
+          (settings.customForbiddenCategories ?? []).length === 0
+            ? html`
+                <div style="padding: 14px; text-align: center; color: var(--text-muted); font-size: 12px">
+                  Нет кастомных категорий. Нажмите «➕ Добавить категорию» чтобы создать.
+                </div>
+              `
+            : nothing
+        }
+      </div>
+
+
+      <!-- Legacy single-list custom phrases (backward compat) -->
       <div class="tg-prompts-block" style="margin-bottom:20px;">
         <div class="tg-prompts-row row-top">
-          <div class="tg-prompts-row-label" style="padding-top:6px;">✏️ Кастомные фразы</div>
+          <div class="tg-prompts-row-label" style="padding-top:6px;">✏️ Кастомные фразы (список)</div>
           <div class="tg-prompts-row-ctrl" style="width:100%;flex-direction:column;align-items:flex-start;gap:4px;">
             <textarea class="input" rows="4" style="width:100%;resize:vertical;"
               placeholder="одна фраза на строку:&#10;рад помочь&#10;хорошего дня&#10;конечно!"
@@ -3522,15 +3793,199 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
         </div>
       </div>
 
+      <!-- ── 🧠 Контекст ───────────────────────────────────────────── -->
+      <div class="tg-prompts-section-title" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>🧠 Контекст и факты</span>
+        <div style="display:flex;align-items:center;gap:6px;">
+          ${
+            settings.contextInstructions?.trim()
+              ? html`
+                  <span
+                    style="
+                      font-size: 11px;
+                      padding: 2px 8px;
+                      background: rgba(61, 187, 112, 0.15);
+                      border: 1px solid rgba(61, 187, 112, 0.3);
+                      color: var(--ok, #3dbb70);
+                      border-radius: 10px;
+                    "
+                    >✅ активен</span
+                  >
+                `
+              : html`
+                  <span style="font-size: 11px; color: var(--text-muted); font-weight: 400">не задан</span>
+                `
+          }
+          ${
+            settings.contextInstructions?.trim()
+              ? html`<button type="button" class="btn" style="font-size:11px;padding:2px 10px;color:var(--text-muted);"
+                @click=${() => saveNow({ contextInstructions: undefined })}>🗑️ Очистить</button>`
+              : nothing
+          }
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);line-height:1.5;margin-bottom:8px;">
+        Информация о продукте, компании, ценах, команде — всё что ИИ должен знать и использовать точно. Вставляется в промпт как <code style="font-size:11px;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px;">## КОНТЕКСТ:</code>
+      </div>
+      <textarea class="input tg-prompts-context-textarea"
+        rows="14"
+        style="width:100%;font-family:var(--font-mono,monospace);font-size:12px;line-height:1.6;resize:vertical;min-height:120px;"
+        placeholder="Например:&#10;&#10;• Компания: Solar Tech, занимаемся установкой солнечных панелей&#10;• Цены: от $2000 за базовый комплект, от $5000 за премиум&#10;• Гарантия: 25 лет на панели, 10 лет на инвертор&#10;• Менеджер: Алексей, опыт 8 лет&#10;• Мы НЕ работаем с промышленными объектами&#10;• Адрес: ул. Солнечная 15, офис 3&#10;• Часы работы: пн-пт 9:00–18:00"
+        .value=${settings.contextInstructions ?? ""}
+        @input=${(e: Event) => {
+          patchWorkMode({
+            contextInstructions: (e.target as HTMLTextAreaElement).value || undefined,
+          } as Partial<typeof savedSettings>);
+        }}
+      ></textarea>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;margin-bottom:20px;">
+        <span style="font-size:11px;color:var(--text-muted);flex:1;">
+          ИИ будет использовать эти факты при ответах. Не выдумывает — ссылается только на указанное.
+        </span>
+        <button type="button" class="btn primary"
+          style="font-size:12px;padding:5px 20px;"
+          ?disabled=${props.agentSettingsSaving}
+          @click=${() => {
+            const ta = document.querySelector(".tg-prompts-context-textarea");
+            const v = ta?.value.trim() ?? settings.contextInstructions ?? "";
+            saveNow({ contextInstructions: v || undefined });
+          }}
+        >${props.agentSettingsSaving ? "⏳…" : "💾 Сохранить"}</button>
+      </div>
+
+      <!-- ── 🔮 Анти-галлюцинации ──────────────────────────────────── -->
+      <div class="tg-prompts-section-title" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>🔮 Правила против галлюцинаций</span>
+        <div style="display:flex;align-items:center;gap:6px;">
+          ${
+            settings.antiHallucinationRules?.trim()
+              ? html`
+                  <span
+                    style="
+                      font-size: 11px;
+                      padding: 2px 8px;
+                      background: rgba(239, 68, 68, 0.12);
+                      border: 1px solid rgba(239, 68, 68, 0.3);
+                      color: #ef4444;
+                      border-radius: 10px;
+                    "
+                    >🛑 активны</span
+                  >
+                `
+              : html`
+                  <span style="font-size: 11px; color: var(--text-muted); font-weight: 400">не заданы</span>
+                `
+          }
+          ${
+            settings.antiHallucinationRules?.trim()
+              ? html`<button type="button" class="btn" style="font-size:11px;padding:2px 10px;color:var(--text-muted);"
+                @click=${() => saveNow({ antiHallucinationRules: undefined })}>🗑️ Очистить</button>`
+              : nothing
+          }
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);line-height:1.5;margin-bottom:8px;">
+        Что ИИ <strong>никогда</strong> не должен выдумывать или предполагать. Вставляется в промпт как <code style="font-size:11px;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px;">## АНТИ-ГАЛЛЮЦИНАЦИИ (СТРОГО):</code>
+      </div>
+      <textarea class="input tg-prompts-hallucination-textarea"
+        rows="14"
+        style="width:100%;font-family:var(--font-mono,monospace);font-size:12px;line-height:1.6;resize:vertical;min-height:120px;"
+        placeholder="Например:&#10;&#10;• НИКОГДА не придумывай цены — если не знаешь, скажи «уточню и напишу»&#10;• НЕ называй конкретные даты доставки — говори «обычно 3–5 рабочих дней»&#10;• НЕ выдумывай имена сотрудников или отделов&#10;• НЕ утверждай что товар в наличии, если не уверен&#10;• Если клиент спрашивает то, чего нет в контексте — честно скажи «я уточню у менеджера»&#10;• НЕ пиши «как я уже говорил» — клиент не обязан помнить переписку&#10;• НЕ выдумывай адреса, телефоны, ссылки&#10;• НЕ обещай скидки или акции без подтверждения"
+        .value=${settings.antiHallucinationRules ?? ""}
+        @input=${(e: Event) => {
+          patchWorkMode({
+            antiHallucinationRules: (e.target as HTMLTextAreaElement).value || undefined,
+          } as Partial<typeof savedSettings>);
+        }}
+      ></textarea>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px;margin-bottom:20px;">
+        <span style="font-size:11px;color:var(--text-muted);flex:1;">
+          Эти правила имеют высший приоритет — ИИ не нарушит их ни при каких условиях.
+        </span>
+        <button type="button" class="btn primary"
+          style="font-size:12px;padding:5px 20px;"
+          ?disabled=${props.agentSettingsSaving}
+          @click=${() => {
+            const ta = document.querySelector(".tg-prompts-hallucination-textarea");
+            const v = ta?.value.trim() ?? settings.antiHallucinationRules ?? "";
+            saveNow({ antiHallucinationRules: v || undefined });
+          }}
+        >${props.agentSettingsSaving ? "⏳…" : "💾 Сохранить"}</button>
+      </div>
+
       <!-- ── 📝 Системный промпт ──────────────────────────────── -->
       <div class="tg-prompts-section-title">📝 Системный промпт</div>
 
-      <!-- Auto-generated preview (read-only) -->
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-        <span style="font-size:12px;color:var(--text-muted);">Авто-превью — правила, генерируемые из настроек выше</span>
-        <span style="font-size:11px;color:var(--text-muted);font-style:italic;">только для чтения</span>
+      <!-- Mode toggle: auto-generated vs. custom override -->
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+        <div class="tg-toggle-group">
+          <label class="tg-toggle-option ${!settings.systemPromptOverride?.trim() ? "tg-toggle-option--active" : ""}"
+            @click=${() => saveNow({ systemPromptOverride: undefined })}>
+            🤖 Авто
+          </label>
+          <label class="tg-toggle-option ${settings.systemPromptOverride?.trim() ? "tg-toggle-option--active" : ""}"
+            @click=${() => {
+              if (!settings.systemPromptOverride?.trim()) {
+                // Pre-fill with current auto-generated preview for easy editing
+                saveNow({ systemPromptOverride: promptPreview });
+              }
+            }}>
+            ✏️ Свой промпт
+          </label>
+        </div>
+        <span style="font-size:11px;color:var(--text-muted);">
+          ${
+            settings.systemPromptOverride?.trim()
+              ? "Используется ваш кастомный промпт"
+              : "Промпт генерируется автоматически из настроек выше"
+          }
+        </span>
       </div>
-      <pre class="tg-prompts-prompt-pre">${promptPreview}</pre>
+
+      ${
+        settings.systemPromptOverride?.trim()
+          ? html`
+          <!-- Live-editable system prompt override -->
+          <textarea class="input tg-prompts-prompt-textarea"
+            rows="14"
+            placeholder="Введите полный системный промпт…"
+            .value=${settings.systemPromptOverride ?? ""}
+            @input=${(e: Event) => {
+              patchWorkMode({
+                systemPromptOverride: (e.target as HTMLTextAreaElement).value,
+              } as Partial<typeof savedSettings>);
+            }}
+          ></textarea>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+            <span style="font-size:11px;color:var(--text-muted);flex:1;">
+              Редактируйте промпт напрямую. Нажмите «Сохранить» чтобы применить.
+            </span>
+            <button type="button" class="btn primary"
+              style="font-size:12px;padding:5px 20px;"
+              ?disabled=${props.agentSettingsSaving}
+              @click=${() => {
+                const ta = document.querySelector(".tg-prompts-prompt-textarea");
+                const v = ta?.value ?? settings.systemPromptOverride ?? "";
+                saveNow({ systemPromptOverride: v });
+              }}
+            >${props.agentSettingsSaving ? "⏳…" : "💾 Сохранить"}</button>
+          </div>
+        `
+          : html`
+          <!-- Auto-generated preview (read-only) -->
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <span style="font-size:12px;color:var(--text-muted);">Авто-превью — правила, генерируемые из настроек выше</span>
+            <button type="button" class="btn"
+              style="font-size:12px;padding:4px 14px;"
+              @click=${() => {
+                // Switch to custom mode, pre-filling with the auto-generated prompt
+                saveNow({ systemPromptOverride: promptPreview });
+              }}
+            >✏️ Редактировать</button>
+          </div>
+          <pre class="tg-prompts-prompt-pre">${promptPreview}</pre>
+        `
+      }
 
       <!-- Editable additional instructions -->
       <div class="tg-prompts-block" style="margin-top:14px;">
@@ -3579,7 +4034,6 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
               placeholder="Например:&#10;• Всегда упоминай скидку 10% при первом контакте&#10;• Не упоминай конкурентов ни при каких обстоятельствах&#10;• Язык общения — только русский&#10;• Если клиент спрашивает про цену — называй диапазон 500–1500$"
               .value=${settings.systemPromptAppend ?? ""}
               @input=${(e: Event) => {
-                // Live-update workModePending so Apply button appears
                 const v = (e.target as HTMLTextAreaElement).value;
                 patchWorkMode({ systemPromptAppend: v || undefined } as Partial<
                   typeof savedSettings
@@ -3603,6 +4057,8 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
           </div>
         </div>
       </div>
+
+      </div><!-- end manager-content (part 2: filters, prompts) -->
 
     </section>
   `;
