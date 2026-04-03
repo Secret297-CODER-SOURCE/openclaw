@@ -3333,16 +3333,18 @@ export abstract class BaseAgent extends EventEmitter {
     try {
       const { callAdapterOnce } = await import("../behaviors/AiReplyEngine.js");
       const allHistory = this.storage.loadConversationHistory(chatKey);
-      if (allHistory.length === 0) {
+      const hasHistory = allHistory.length > 0;
+      if (!hasHistory) {
         this.logger.info(
-          `[TG:${this.name}] re-engagement AI skip (no history) | chat=${contact.chatId}`,
+          `[TG:${this.name}] re-engagement AI no-history | chat=${contact.chatId} — generating generic touch-base`,
         );
-        return null;
       }
 
-      const historyText = allHistory
-        .map((m) => `${m.role === "user" ? "Клиент" : "Агент"}: ${m.content}`)
-        .join("\n");
+      const historyText = hasHistory
+        ? allHistory
+            .map((m) => `${m.role === "user" ? "Клиент" : "Агент"}: ${m.content}`)
+            .join("\n")
+        : "";
 
       const name =
         contact.firstName ?? (contact.username ? contact.username.replace(/^@/, "") : null);
@@ -3388,11 +3390,16 @@ export abstract class BaseAgent extends EventEmitter {
 
       const systemPrompt = this.buildReEngagementSystemPrompt(baseSystemPrompt, arSettings);
 
-      const userPrompt =
-        `${nameHint}\n\n` +
-        `Полная история диалога:\n${historyText}\n\n` +
-        `Найди главный интерес этого человека и точку остановки сделки — ` +
-        `напиши одно сообщение которое говорит о ЕГО цели и даёт повод ответить.`;
+      const userPrompt = hasHistory
+        ? `${nameHint}\n\n` +
+          `Полная история диалога:\n${historyText}\n\n` +
+          `Найди главный интерес этого человека и точку остановки сделки — ` +
+          `напиши одно сообщение которое говорит о ЕГО цели и даёт повод ответить.`
+        : `${nameHint}\n\n` +
+          `История диалога отсутствует — это первый контакт или история была сброшена.\n\n` +
+          `Напиши короткое живое сообщение-касание от первого лица: ` +
+          `представься, скажи что хотел уточнить актуальность, дай один конкретный повод ответить. ` +
+          `Без клише, без "рад помочь", без вопросов про нужды. 1–2 предложения максимум.`;
 
       const result = await callAdapterOnce(userPrompt, systemPrompt);
       const cleaned = result.replace(/^["«»']+|["«»']+$/g, "").trim();
@@ -3524,7 +3531,12 @@ export abstract class BaseAgent extends EventEmitter {
         // Full AI mode: generate from chat history; fall back to template when history is empty.
         const aiMsg = await this.generateAiReEngagement(contact, chatKey);
         if (!aiMsg) {
-          if (!template) return false; // no history, no template — skip
+          if (!template) {
+            this.logger.warn(
+              `[TG:${this.name}] re-engagement skip | chat=${contact.chatId}: AI generation returned null and no template set`,
+            );
+            return false;
+          }
           // Fallback: use template with AI enhancement
           const baseMessage = this.formatReEngagementMessage(
             template,
