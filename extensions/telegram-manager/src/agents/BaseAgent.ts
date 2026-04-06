@@ -2711,6 +2711,7 @@ export abstract class BaseAgent extends EventEmitter {
 
     // Stage detection for system-prompt injection (same as schema mode).
     const _stage4 = this.detectDialogStage(conversationHistory);
+    const _sig4 = this.getSignalId(conversationHistory);
 
     // Buyer sub-settings (only relevant when isBuyerStyleFree).
     const buyerAggression = agentSettings.buyerAggressionLevel ?? "balanced";
@@ -3177,11 +3178,23 @@ export abstract class BaseAgent extends EventEmitter {
     const first = firstName ?? (username ? username.replace(/^@/, "") : "");
     const last = lastName ?? "";
     const full = [first, last].filter(Boolean).join(" ");
-    return template
+
+    let result = template
       .replace(/\{имя\}/g, first)
       .replace(/\{фамилия\}/g, last)
-      .replace(/\{имя_полное\}/g, full)
-      .trim();
+      .replace(/\{имя_полное\}/g, full);
+
+    // Clean up artifacts when name is empty: "Привет, !" → "Привет!", ", !" → "!"
+    if (!first) {
+      // Remove dangling comma+space before punctuation: ", !" → "!"
+      result = result.replace(/,\s*([!?.])/g, "$1");
+      // Remove leading/trailing comma-space from words: "Привет, \n" → "Привет\n"
+      result = result.replace(/,\s*\n/g, "\n");
+      // Collapse multiple spaces
+      result = result.replace(/  +/g, " ");
+    }
+
+    return result.trim();
   }
 
   /**
@@ -3236,7 +3249,7 @@ export abstract class BaseAgent extends EventEmitter {
     // Skip other guards if explicitly disabled
     if (settings.reEngagementApplyGuards === false) return result;
 
-    result = this.enforceNoAssumptiveClaims(result, settings);
+    result = this.enforceNoAssumptiveClaims(result, [], undefined, settings);
     result = this.enforceCustomForbiddenPhrases(result, settings);
 
     // Strip phone numbers if guard is enabled
@@ -3522,7 +3535,12 @@ export abstract class BaseAgent extends EventEmitter {
       dayLabel: number,
     ): Promise<boolean> => {
       const resolvedName = contact.firstName ?? contact.username ?? null;
-      if (settings.reEngagementNameOnly && !resolvedName) return false;
+      if (settings.reEngagementNameOnly && !resolvedName) {
+        this.logger.info(
+          `[TG:${this.name}] re-engagement skip (nameOnly) | chat=${contact.chatId} — no firstName or username`,
+        );
+        return false;
+      }
 
       const chatKey = `${this.id}:${contact.chatId}`;
       let message: string;

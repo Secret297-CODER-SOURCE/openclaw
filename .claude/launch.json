@@ -16,9 +16,12 @@
     },
     {
       "name": "ui-dev",
-      "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["ui:dev"],
-      "port": 5173
+      "runtimeExecutable": "/Users/worker/.nvm/versions/node/v22.22.1/bin/node",
+      "runtimeArgs": ["/Users/worker/Documents/GitHub/openclaw/scripts/ui.js", "dev"],
+      "port": 5173,
+      "env": {
+        "PATH": "/Users/worker/Library/pnpm:/Users/worker/.nvm/versions/node/v22.22.1/bin:/usr/local/bin:/usr/bin:/bin"
+      }
     }
   ]
 }
