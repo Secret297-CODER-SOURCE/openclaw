@@ -5092,11 +5092,6 @@ select.input:focus {
     background 0.15s,
     border-color 0.15s,
     opacity 0.15s;
-  opacity: 0.5;
-}
-
-.tg-prompts-guard:hover .tg-prompts-action-btn,
-.tg-prompts-phrase-group:hover .tg-prompts-action-btn {
   opacity: 1;
 }
 

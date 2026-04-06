@@ -2359,8 +2359,15 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
 
   // Resolve effective enabled state for each built-in guard
   const guardsOverrides = settings.builtinGuardsOverrides ?? {};
+  const guardsCustomizations = settings.builtinGuardsCustomizations ?? {};
   const isBuiltinGuardActive = (g: (typeof builtinGuardDefs)[0]) =>
     guardsOverrides[g.id] !== undefined ? guardsOverrides[g.id] : g.defaultActive;
+  // Resolve display name/desc for built-in guard (user may have customized)
+  const builtinGuardDisplay = (g: (typeof builtinGuardDefs)[0]) => ({
+    name: guardsCustomizations[g.id]?.name ?? g.name,
+    desc: guardsCustomizations[g.id]?.desc ?? g.desc,
+    details: guardsCustomizations[g.id]?.details ?? g.details,
+  });
 
   // Custom forbidden phrases as a textarea (one per line)
   const customPhrasesText = (settings.customForbiddenPhrases ?? []).join("\n");
@@ -2745,13 +2752,14 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
               <label class="tg-toggle-option ${settings.reEngagementEnabled ? "tg-toggle-option--active" : ""}">
                 <input type="radio" name="reeng-prompts-${agent.id}"
                   ?checked=${!!settings.reEngagementEnabled}
-                  @change=${() => saveNow({
-                    reEngagementEnabled: true,
-                    // Save interval defaults so cron has a non-empty delays array from the start
-                    reEngagementDelayFrom: settings.reEngagementDelayFrom ?? 1,
-                    reEngagementDelayTo: settings.reEngagementDelayTo ?? 7,
-                    reEngagementAiMode: settings.reEngagementAiMode ?? "ai",
-                  })}
+                  @change=${() =>
+                    saveNow({
+                      reEngagementEnabled: true,
+                      // Save interval defaults so cron has a non-empty delays array from the start
+                      reEngagementDelayFrom: settings.reEngagementDelayFrom ?? 1,
+                      reEngagementDelayTo: settings.reEngagementDelayTo ?? 7,
+                      reEngagementAiMode: settings.reEngagementAiMode ?? "ai",
+                    })}
                   style="display:none;" />
                 ✅ Включить
               </label>
@@ -3388,9 +3396,10 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
       </div>
       <div class="tg-prompts-guards" style="margin-bottom:12px;">
 
-        <!-- Built-in guards (toggleable via overrides, editable & deletable) -->
+        <!-- Built-in guards (toggleable via overrides, fully editable name/desc) -->
         ${builtinGuardDefs.map((g) => {
           const active = isBuiltinGuardActive(g);
+          const disp = builtinGuardDisplay(g);
           return html`
             <div class="tg-prompts-guard ${active ? "active" : "inactive"}" style="position:relative;">
               <div class="tg-prompts-guard-header">
@@ -3403,7 +3412,7 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                     }} />
                 </label>
                 <span class="tg-prompts-guard-icon">${active ? "✅" : "⬜"}</span>
-                <span class="tg-prompts-guard-name" style="flex:1;min-width:0;">${g.icon} ${g.name}</span>
+                <span class="tg-prompts-guard-name" style="flex:1;min-width:0;">${g.icon} ${disp.name}</span>
                 <span class="tg-prompts-guard-badge">встроен</span>
                 <div class="tg-prompts-guard-actions">
                   <button type="button" class="tg-prompts-action-btn tg-prompts-action-btn--edit" title="Редактировать фильтр"
@@ -3413,46 +3422,66 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                         card.classList.toggle("tg-prompts-guard--editing");
                       }
                     }}>✏️ Редактировать</button>
-                  <button type="button" class="tg-prompts-action-btn tg-prompts-action-btn--delete" title="Удалить фильтр"
+                  <button type="button" class="tg-prompts-action-btn tg-prompts-action-btn--delete" title="Отключить фильтр"
                     @click=${() => {
-                      // Remove builtin guard by disabling it permanently
                       const overrides = { ...settings.builtinGuardsOverrides };
                       overrides[g.id] = false;
                       saveNow({ builtinGuardsOverrides: overrides });
-                    }}>🗑 Удалить</button>
+                    }}>🗑 Отключить</button>
                 </div>
               </div>
-              <div class="tg-prompts-guard-desc">${g.desc}</div>
-              ${g.details ? html`<div class="tg-prompts-guard-details">${g.details}</div>` : nothing}
-              <!-- Edit form (collapsible via CSS class) -->
+              <div class="tg-prompts-guard-desc">${disp.desc}</div>
+              ${disp.details ? html`<div class="tg-prompts-guard-details">${disp.details}</div>` : nothing}
+              <!-- Edit form (collapsible via CSS class) — fully editable, saves to builtinGuardsCustomizations -->
               <div class="tg-prompts-guard-edit-form">
                 <div style="display:flex;flex-direction:column;gap:6px;padding:8px 0 4px 0;">
                   <input type="text" class="tg-prompts-guard-name-input"
-                    .value=${g.name}
+                    .value=${disp.name}
                     placeholder="Название фильтра"
-                    disabled
-                    style="opacity:0.6;cursor:not-allowed;"
-                    title="Название встроенного фильтра нельзя изменить" />
+                    @change=${(e: Event) => {
+                      const val = (e.target as HTMLInputElement).value.trim();
+                      const cust = { ...settings.builtinGuardsCustomizations };
+                      cust[g.id] = { ...cust[g.id], name: val || g.name };
+                      saveNow({ builtinGuardsCustomizations: cust });
+                    }} />
                   <input type="text" class="tg-prompts-guard-desc-input"
-                    .value=${g.desc}
+                    .value=${disp.desc}
                     placeholder="Описание — что делает этот фильтр"
-                    disabled
-                    style="opacity:0.6;cursor:not-allowed;"
-                    title="Описание встроенного фильтра нельзя изменить" />
+                    @change=${(e: Event) => {
+                      const val = (e.target as HTMLInputElement).value.trim();
+                      const cust = { ...settings.builtinGuardsCustomizations };
+                      cust[g.id] = { ...cust[g.id], desc: val || g.desc };
+                      saveNow({ builtinGuardsCustomizations: cust });
+                    }} />
                   ${
-                    g.details
+                    disp.details !== undefined
                       ? html`
-                    <input type="text" class="tg-prompts-guard-desc-input" style="font-size:11px;opacity:0.6;cursor:not-allowed;"
-                      .value=${g.details}
+                    <input type="text" class="tg-prompts-guard-desc-input" style="font-size:11px;"
+                      .value=${disp.details ?? ""}
                       placeholder="Детали (опционально)"
-                      disabled
-                      title="Детали встроенного фильтра нельзя изменить" />
+                      @change=${(e: Event) => {
+                        const val = (e.target as HTMLInputElement).value.trim();
+                        const cust = { ...settings.builtinGuardsCustomizations };
+                        cust[g.id] = { ...cust[g.id], details: val || undefined };
+                        saveNow({ builtinGuardsCustomizations: cust });
+                      }} />
                   `
                       : nothing
                   }
-                  <span style="font-size:11px;color:var(--text-muted);margin-top:4px;">
-                    💡 Встроенный фильтр: можно включать/выключать через чекбокс. Для полного редактирования создайте кастомный фильтр.
-                  </span>
+                  ${
+                    guardsCustomizations[g.id]
+                      ? html`<button type="button" class="tg-prompts-action-btn" style="align-self:flex-start;font-size:11px;color:var(--text-muted);"
+                          @click=${() => {
+                            const cust = { ...settings.builtinGuardsCustomizations };
+                            delete cust[g.id];
+                            saveNow({
+                              builtinGuardsCustomizations: Object.keys(cust).length
+                                ? cust
+                                : undefined,
+                            });
+                          }}>🔄 Сбросить к умолчанию</button>`
+                      : nothing
+                  }
                 </div>
               </div>
             </div>

@@ -436,6 +436,13 @@ export interface AgentSettings {
   builtinGuardsOverrides?: Record<string, boolean>;
 
   /**
+   * Per-built-in-guard name/desc/details customizations.
+   * Allows the user to rename or re-describe a built-in guard without
+   * converting it to a custom guard. Keys are guard IDs.
+   */
+  builtinGuardsCustomizations?: Record<string, { name?: string; desc?: string; details?: string }>;
+
+  /**
    * User-defined forbidden-phrase categories.
    * Each category has a name and a list of phrases; shown alongside built-in
    * categories in the Prompts panel. Phrases are stripped from AI replies.

@@ -3447,9 +3447,11 @@ export abstract class BaseAgent extends EventEmitter {
   /** Check all delay thresholds and send re-engagement messages to qualifying contacts. */
   private async runReEngagementCheck(): Promise<void> {
     const settings = this.getAgentSettings();
-    // Master AI kill-switch: skip entirely when AI is fully disabled.
-    if (settings.aiEnabled === false) return;
     if (!settings.reEngagementEnabled) return;
+    // Master AI kill-switch: only block full-AI mode.
+    // Template mode can still run — AI enhancement errors are caught and fall back to the base template.
+    const reEngModeForGuard = settings.reEngagementAiMode ?? "ai";
+    if (settings.aiEnabled === false && reEngModeForGuard === "ai") return;
 
     // NOTE: reEngagementAiContinue does NOT block the send — it only controls
     // whether the AI responds when the contact replies (see isReEngagementReply /
@@ -3481,9 +3483,12 @@ export abstract class BaseAgent extends EventEmitter {
     const delays: number[] =
       fromDay !== null && toDay !== null
         ? Array.from({ length: Math.max(0, toDay - fromDay + 1) }, (_, i) => fromDay + i)
-        : (settings.reEngagementDelays?.length
+        : fromDay !== null
+          ? // Only fromDay set (delayTo never saved) — treat as a single-day threshold
+            Array.from({ length: Math.max(1, 14 - fromDay + 1) }, (_, i) => fromDay + i)
+          : settings.reEngagementDelays?.length
             ? settings.reEngagementDelays
-            : [1, 2, 3, 5, 7]); // sensible default when interval was never explicitly saved
+            : [1, 2, 3, 5, 7]; // sensible default when interval was never explicitly saved
 
     if (delays.length === 0 && !settings.reEngagementDelayMore) return;
 
