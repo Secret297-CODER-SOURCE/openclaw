@@ -3592,7 +3592,7 @@ export abstract class BaseAgent extends EventEmitter {
           message = aiMsg;
         }
       } else {
-        // Template mode (default): fill template + AI enhance
+        // Template mode: fill template placeholders
         const baseMessage = this.formatReEngagementMessage(
           template,
           contact.firstName,
@@ -3600,7 +3600,11 @@ export abstract class BaseAgent extends EventEmitter {
           contact.username,
         );
         if (!baseMessage) return false;
-        message = await this.enhanceReEngagementMessage(baseMessage, chatKey);
+        // Optionally enhance with AI (default: true for backward compat)
+        const shouldEnhance = settings.reEngagementEnhanceTemplate !== false;
+        message = shouldEnhance
+          ? await this.enhanceReEngagementMessage(baseMessage, chatKey)
+          : this.applyReEngagementGuards(baseMessage, settings) || baseMessage;
       }
 
       try {

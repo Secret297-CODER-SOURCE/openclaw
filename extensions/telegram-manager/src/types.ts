@@ -365,6 +365,13 @@ export interface AgentSettings {
    */
   reEngagementTemplate?: string;
 
+  /**
+   * When true (default), template messages are enhanced/personalized by AI based on chat history.
+   * When false, the template is sent as-is after placeholder substitution (no AI modification).
+   * Only affects template mode; full-AI mode always uses AI generation.
+   */
+  reEngagementEnhanceTemplate?: boolean;
+
   /** When true, only send re-engagement if the contact's first name is known. */
   reEngagementNameOnly?: boolean;
 

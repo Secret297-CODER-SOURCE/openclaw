@@ -2928,6 +2928,34 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                 </label>
               </div>
 
+              <!-- Template enhancement toggle (only show in template mode) -->
+              ${
+                settings.reEngagementAiMode === "template"
+                  ? html`
+                <div style="margin-bottom:12px;">
+                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;">
+                    <input
+                      type="checkbox"
+                      ?checked=${settings.reEngagementEnhanceTemplate !== false}
+                      @change=${(e: Event) =>
+                        saveNow({
+                          reEngagementEnhanceTemplate: (e.target as HTMLInputElement).checked,
+                        })}
+                    />
+                    <span>✨ ИИ улучшает шаблон под каждого клиента</span>
+                  </label>
+                  <div class="tg-setting-hint" style="margin-top:4px;margin-left:24px;">
+                    ${
+                      settings.reEngagementEnhanceTemplate !== false
+                        ? "ИИ переписывает шаблон на основе истории переписки — каждое сообщение персонализировано"
+                        : "Шаблон отправляется как есть (только подстановка {имя}, без переписывания)"
+                    }
+                  </div>
+                </div>
+              `
+                  : nothing
+              }
+
               <!-- Re-engagement tone — independent of buyer mode, always visible -->
               <div class="tg-reeng-section-title" style="margin-bottom:8px;">
                 ⚡ Тон реактивации
