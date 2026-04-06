@@ -3293,6 +3293,13 @@ export abstract class BaseAgent extends EventEmitter {
             ? "Тон мягкий — дай человеку самому захотеть продолжить, без давления."
             : "Тон уверенный, не давящий — ты помнишь его ситуацию, у тебя есть что сказать.";
 
+      const erWorkFrom = erSettings.managerWorkFrom ?? erSettings.scheduleFrom;
+      const erWorkTo = erSettings.managerWorkTo ?? erSettings.scheduleTo;
+      const erWorkHoursRule =
+        erWorkFrom && erWorkTo
+          ? `• ЗАПРЕЩЕНО упоминать конкретное время созвона или встречи за пределами рабочего дня (${erWorkFrom}–${erWorkTo}). Если упоминаешь время — только в рамках ${erWorkFrom}–${erWorkTo}.\n`
+          : "";
+
       const baseSystemPrompt =
         "Ты — эксперт по реактивации «замёрзших» сделок.\n" +
         "Клиент давно молчит. Твоя задача: написать ОДНО сообщение которое вернёт его в разговор.\n\n" +
@@ -3303,9 +3310,11 @@ export abstract class BaseAgent extends EventEmitter {
         "4. Шаблон используй как скелет — текст перепиши полностью под этого человека.\n\n" +
         "Правила:\n" +
         "• Без 'привет', 'как дела', 'давно не общались', 'не забыл о нас'\n" +
+        "• ЗАПРЕЩЕНО использовать слова 'сегодня', 'недавно', 'только что', 'вчера', 'на прошлой неделе' — ты не знаешь когда именно читают сообщение\n" +
         "• Без общих фраз — только конкретика из этого чата\n" +
         "• Говори про ЕГО выгоду, ЕГО ситуацию — не про свой продукт\n" +
         `• ${aggressionLine}\n` +
+        erWorkHoursRule +
         "• 1–2 предложения максимум\n" +
         "• Пиши на языке клиента (определи по истории)\n" +
         "• СТРОГО первое лицо ЕДИНСТВЕННОГО числа: 'я', 'могу', 'предлагаю', 'звоню' — ЗАПРЕЩЕНО 'мы', 'можем', 'предлагаем' на любом языке\n" +
@@ -3381,6 +3390,14 @@ export abstract class BaseAgent extends EventEmitter {
       // Single system prompt works for both buyer and non-buyer mode.
       void arIsBuyer;
 
+      // Inject working hours so AI never proposes a time outside the manager's schedule.
+      const arWorkFrom = arSettings.managerWorkFrom ?? arSettings.scheduleFrom;
+      const arWorkTo = arSettings.managerWorkTo ?? arSettings.scheduleTo;
+      const workHoursRule =
+        arWorkFrom && arWorkTo
+          ? `• ЗАПРЕЩЕНО упоминать конкретное время созвона или встречи за пределами рабочего дня (${arWorkFrom}–${arWorkTo}). Если упоминаешь время — только в рамках ${arWorkFrom}–${arWorkTo}.\n`
+          : "";
+
       const baseSystemPrompt =
         "Ты — эксперт по реактивации «замёрзших» сделок.\n" +
         "Клиент давно молчит. Одно сообщение — вернуть его в разговор.\n\n" +
@@ -3394,9 +3411,11 @@ export abstract class BaseAgent extends EventEmitter {
         "④ Напиши сообщение которое говорит о ЕГО выгоде — не о продукте.\n\n" +
         "Правила:\n" +
         "• Без 'привет', 'как дела', 'давно не общались', 'напоминаю о себе'\n" +
+        "• ЗАПРЕЩЕНО использовать слова 'сегодня', 'недавно', 'только что', 'вчера', 'на прошлой неделе' — ты не знаешь когда именно читают сообщение\n" +
         "• Ноль обобщений — только конкретика из этого чата\n" +
         "• Говори его языком (определи по истории)\n" +
         `• ${aggressionHint}\n` +
+        workHoursRule +
         "• 1–2 предложения максимум\n" +
         "• СТРОГО первое лицо ЕДИНСТВЕННОГО числа: 'я', 'могу', 'предлагаю' — ЗАПРЕЩЕНО 'мы', 'можем', 'предлагаем' на любом языке\n" +
         "• Только готовый текст — без кавычек, пояснений, заголовков";
