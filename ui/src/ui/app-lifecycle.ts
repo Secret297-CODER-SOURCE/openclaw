@@ -38,11 +38,21 @@ type LifecycleHost = {
   logsEntries: unknown[];
   popStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
+  settings: { token: string };
+  applySettings: (next: { token: string } & Record<string, unknown>) => void;
 };
 
 export function handleConnected(host: LifecycleHost) {
   host.basePath = inferBasePath();
-  void loadControlUiBootstrapConfig(host);
+  void loadControlUiBootstrapConfig({
+    ...host,
+    applyBootstrapToken: (token: string) => {
+      // Only auto-apply if no token is already configured (avoid overwriting user-set token).
+      if (!host.settings.token.trim()) {
+        host.applySettings({ ...host.settings, token });
+      }
+    },
+  });
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);

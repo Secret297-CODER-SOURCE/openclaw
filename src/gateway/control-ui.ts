@@ -7,6 +7,8 @@ import { isWithinDir } from "../infra/path-safety.js";
 import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import type { ResolvedGatewayAuth } from "./auth.js";
+import { isLoopbackAddress } from "./net.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
@@ -26,6 +28,8 @@ export type ControlUiRequestOptions = {
   config?: OpenClawConfig;
   agentId?: string;
   root?: ControlUiRootState;
+  /** Resolved gateway auth — used to inject authToken into bootstrap config for loopback clients. */
+  auth?: ResolvedGatewayAuth;
 };
 
 export type ControlUiRootState =
@@ -349,11 +353,18 @@ export function handleControlUiHttpRequest(
       res.end();
       return true;
     }
+    // Include authToken only for loopback clients — same machine, no network interception risk.
+    const isLoopback = isLoopbackAddress(req.socket?.remoteAddress);
+    const authToken =
+      isLoopback && opts?.auth?.mode === "token" && opts.auth.token
+        ? opts.auth.token
+        : undefined;
     sendJson(res, 200, {
       basePath,
       assistantName: identity.name,
       assistantAvatar: avatarValue ?? identity.avatar,
       assistantAgentId: identity.agentId,
+      ...(authToken ? { authToken } : {}),
     } satisfies ControlUiBootstrapConfig);
     return true;
   }

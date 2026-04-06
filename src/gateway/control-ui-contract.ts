@@ -5,4 +5,10 @@ export type ControlUiBootstrapConfig = {
   assistantName: string;
   assistantAvatar: string;
   assistantAgentId: string;
+  /**
+   * Gateway auth token — included only when the request comes from a loopback
+   * address and the gateway uses token auth mode. The UI applies this token
+   * automatically so the user does not have to paste it manually.
+   */
+  authToken?: string;
 };

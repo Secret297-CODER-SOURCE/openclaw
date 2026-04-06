@@ -569,6 +569,7 @@ export function createGatewayHttpServer(opts: {
             basePath: controlUiBasePath,
             config: configSnapshot,
             root: controlUiRoot,
+            auth: resolvedAuth,
           })
         ) {
           return;

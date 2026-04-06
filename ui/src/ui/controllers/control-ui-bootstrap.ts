@@ -10,6 +10,8 @@ export type ControlUiBootstrapState = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAgentId: string | null;
+  /** Optional callback to apply the gateway auth token when the bootstrap config provides one. */
+  applyBootstrapToken?: (token: string) => void;
 };
 
 export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapState) {
@@ -43,6 +45,10 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
     state.assistantName = normalized.name;
     state.assistantAvatar = normalized.avatar;
     state.assistantAgentId = normalized.agentId ?? null;
+    // Auto-apply gateway token when gateway injects it for loopback clients.
+    if (parsed.authToken && state.applyBootstrapToken) {
+      state.applyBootstrapToken(parsed.authToken);
+    }
   } catch {
     // Ignore bootstrap failures; UI will update identity after connecting.
   }
