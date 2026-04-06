@@ -450,7 +450,10 @@ export class UserBotAgent extends BaseAgent {
   // --- Lifecycle ------------------------------------------------------------
 
   async start(): Promise<void> {
-    if (this.record.status === "running") return;
+    // Skip if already running AND client is connected (i.e. within the same process).
+    // When the gateway restarts fresh, client is null even if DB shows "running",
+    // so we must proceed — otherwise the re-engagement cron and Telegram polling never start.
+    if (this.record.status === "running" && this.client) return;
     // Disconnect any leftover client (e.g. auth client from authStart/authSubmit)
     // before creating a new one; reusing the same session on an already-connected
     // client causes DC to reject the duplicate connection.

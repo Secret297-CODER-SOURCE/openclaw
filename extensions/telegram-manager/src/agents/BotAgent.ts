@@ -40,8 +40,10 @@ export class BotAgent extends BaseAgent {
   }
 
   async start(): Promise<void> {
-    // Guard against concurrent start() calls (e.g. auto-restart + manual start racing).
-    if (this.record.status === "running" || this.record.status === "starting") return;
+    // Guard against concurrent start() calls within the same process.
+    // When the gateway restarts fresh, this.bot is null even if DB says "running",
+    // so we must proceed — otherwise polling and re-engagement cron never start.
+    if ((this.record.status === "running" || this.record.status === "starting") && this.bot) return;
     this.setStatus("starting");
 
     try {
