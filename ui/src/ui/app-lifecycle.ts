@@ -42,9 +42,11 @@ type LifecycleHost = {
   applySettings: (next: { token: string } & Record<string, unknown>) => void;
 };
 
-export function handleConnected(host: LifecycleHost) {
+export async function handleConnected(host: LifecycleHost) {
   host.basePath = inferBasePath();
-  void loadControlUiBootstrapConfig({
+  // Await bootstrap config BEFORE connecting so authToken (injected by the gateway
+  // for loopback clients) is applied to settings before the WebSocket handshake.
+  await loadControlUiBootstrapConfig({
     ...host,
     applyBootstrapToken: (token: string) => {
       // Only auto-apply if no token is already configured (avoid overwriting user-set token).
