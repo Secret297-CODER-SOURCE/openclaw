@@ -3,6 +3,7 @@ import os from "os";
 import path from "path";
 import type {
   AnyAgentTool,
+  OpenClawConfig,
   OpenClawPluginApi,
   GatewayRequestHandlerOptions,
 } from "openclaw/plugin-sdk";
@@ -44,16 +45,20 @@ function readGatewayToken(stateDir: string): string {
  * separate keys required. The gateway maintains per-chat sessions via the
  * `user` field which is set to the telegram chatKey.
  */
-function configureGatewayAdapter(logger: IGatewayContext["logger"]): void {
-  const stateDir = resolveStateDir();
+function configureGatewayAdapter(logger: IGatewayContext["logger"], token: string): void {
   const port = parseInt(process.env.OPENCLAW_GATEWAY_PORT?.trim() || "18789", 10);
   const model = process.env.TG_AI_MODEL?.trim() || "gpt-4o";
-  const token = readGatewayToken(stateDir);
   const baseUrl = `http://127.0.0.1:${port}/v1`;
 
   setModelAdapter(makeOpenAiCompatAdapter(baseUrl, token, model));
   // Also store gateway config so analyzeImageOnce() can make vision calls through it.
   setGatewayConfig({ baseUrl, token, model });
+  if (!token) {
+    logger.warn(
+      "[TelegramPlugin] gateway token not found — AI calls will be unauthenticated. " +
+        "Set OPENCLAW_GATEWAY_TOKEN or gateway.auth.token in openclaw.json.",
+    );
+  }
   logger.info(`[TelegramPlugin] AI adapter: via OpenClaw gateway (port=${port}, model=${model})`);
 }
 
@@ -154,11 +159,20 @@ const plugin = {
       }
     }
 
+    // Resolve the gateway auth token: prefer api.config (already loaded by the
+    // plugin host — same source the gateway itself uses), fall back to env var /
+    // direct file read for compat with standalone / non-plugin usage.
+    const stateDir = resolveStateDir();
+    const gatewayToken =
+      process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
+      (api.config as OpenClawConfig).gateway?.auth?.token?.trim() ||
+      readGatewayToken(stateDir);
+
     // IGatewayContext adapter for TelegramPlugin
     const ctx: IGatewayContext = {
-      gatewayToken: "",
+      gatewayToken,
       logger: api.logger,
-      dataDir: resolveStateDir(),
+      dataDir: stateDir,
       broadcast(msg) {
         const event = msg.method;
         const payload = msg.params ?? {};
@@ -174,7 +188,7 @@ const plugin = {
     api.on("gateway_start", async () => {
       // Route AI calls through the local OpenClaw gateway so all requests go
       // through the main agent's configured provider (GitHub Copilot, etc.).
-      configureGatewayAdapter(ctx.logger);
+      configureGatewayAdapter(ctx.logger, ctx.gatewayToken);
       await telegramPlugin.init(ctx);
     });
 

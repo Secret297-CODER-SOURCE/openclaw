@@ -68,6 +68,10 @@ export function evaluateMissingDeviceIdentity(params: {
       return { kind: "reject-control-ui-insecure-auth" };
     }
   }
+  // dangerouslyDisableDeviceAuth bypasses device identity checks entirely.
+  if (params.isControlUi && params.controlUiAuthPolicy.allowBypass) {
+    return { kind: "allow" };
+  }
   if (roleCanSkipDeviceIdentity(params.role, params.sharedAuthOk)) {
     return { kind: "allow" };
   }

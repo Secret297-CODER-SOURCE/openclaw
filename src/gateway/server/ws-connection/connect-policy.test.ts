@@ -148,6 +148,26 @@ describe("ws connect policy", () => {
     ).toBe("reject-device-required");
   });
 
+  test("dangerouslyDisableDeviceAuth bypasses device identity for control-ui", () => {
+    const bypass = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: { dangerouslyDisableDeviceAuth: true },
+      deviceRaw: null,
+    });
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: true,
+        controlUiAuthPolicy: bypass,
+        sharedAuthOk: true,
+        authOk: true,
+        hasSharedAuth: true,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("allow");
+  });
+
   test("pairing bypass requires control-ui bypass + shared auth", () => {
     const bypass = resolveControlUiAuthPolicy({
       isControlUi: true,
