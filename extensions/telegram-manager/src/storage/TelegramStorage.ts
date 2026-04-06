@@ -938,6 +938,7 @@ export class TelegramStorage {
          WHERE c.agent_id = ?
            AND c.last_client_msg_at >= ?
            AND c.last_client_msg_at < ?
+           AND CAST(c.chat_id AS INTEGER) > 0
            AND NOT EXISTS (
              SELECT 1 FROM tg_reengagement r
              WHERE r.agent_id = c.agent_id
@@ -1042,6 +1043,7 @@ export class TelegramStorage {
          FROM tg_contacts c
          WHERE c.agent_id = ?
            AND c.last_client_msg_at < ?
+           AND CAST(c.chat_id AS INTEGER) > 0
            AND NOT EXISTS (
              SELECT 1 FROM tg_reengagement r
              WHERE r.agent_id = c.agent_id
@@ -1140,6 +1142,7 @@ export class TelegramStorage {
          FROM tg_contacts c
          LEFT JOIN tg_reengagement r ON r.agent_id = c.agent_id AND r.chat_id = c.chat_id
          WHERE c.agent_id = ?
+           AND CAST(c.chat_id AS INTEGER) > 0
          GROUP BY c.chat_id
          ORDER BY c.last_client_msg_at DESC
          LIMIT 30`,
