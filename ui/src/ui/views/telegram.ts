@@ -1838,7 +1838,7 @@ function renderTasksPanel(props: TelegramProps, agentId: string) {
           ? html`
               <div style="margin-top: 20px;">
                 <div class="card-title" style="font-size: 0.85em; margin-bottom: 10px;">
-                  History (${others.length})
+                  История (${others.length})
                 </div>
                 <div class="list">
                   ${others.slice(0, 20).map(
@@ -1878,26 +1878,26 @@ function renderCronPanel(props: TelegramProps) {
       <div class="row" style="justify-content: space-between;">
         <div>
           <div class="card-title">Cron</div>
-          <div class="card-sub">Scheduled jobs for this gateway.</div>
+          <div class="card-sub">Запланированные задачи для этого шлюза.</div>
         </div>
         <button class="btn btn--sm" ?disabled=${props.cronLoading} @click=${props.onCronRefresh}>
-          ${props.cronLoading ? "Refreshing…" : "Refresh"}
+          ${props.cronLoading ? "Обновление…" : "Обновить"}
         </button>
       </div>
 
       <div class="stat-grid" style="margin-top: 16px;">
         <div class="stat">
-          <div class="stat-label">Enabled</div>
+          <div class="stat-label">Включено</div>
           <div class="stat-value">
-            ${props.cronStatus ? (props.cronStatus.enabled ? "Yes" : "No") : "n/a"}
+            ${props.cronStatus ? (props.cronStatus.enabled ? "Да" : "Нет") : "н/д"}
           </div>
         </div>
         <div class="stat">
-          <div class="stat-label">Total Jobs</div>
-          <div class="stat-value">${props.cronStatus?.jobs ?? "n/a"}</div>
+          <div class="stat-label">Всего задач</div>
+          <div class="stat-value">${props.cronStatus?.jobs ?? "н/д"}</div>
         </div>
         <div class="stat">
-          <div class="stat-label">Next wake</div>
+          <div class="stat-label">Следующий запуск</div>
           <div class="stat-value">${formatNextRun(props.cronStatus?.nextWakeAtMs ?? null)}</div>
         </div>
       </div>
@@ -1909,11 +1909,11 @@ function renderCronPanel(props: TelegramProps) {
       }
 
       <div style="margin-top: 20px;">
-        <div class="card-title" style="font-size: 0.85em; margin-bottom: 12px;">All Jobs</div>
+        <div class="card-title" style="font-size: 0.85em; margin-bottom: 12px;">Все задачи</div>
         ${
           props.cronJobs.length === 0
             ? html`
-                <div class="muted">No cron jobs configured. Add jobs in the Cron tab.</div>
+                <div class="muted">Задачи Cron не настроены. Добавьте задачи на вкладке Cron.</div>
               `
             : html`
                 <div class="list">
@@ -1930,7 +1930,7 @@ function renderCronPanel(props: TelegramProps) {
                           <div class="chip-row" style="margin-top: 6px;">
                             <span class="chip">${formatCronSchedule(job)}</span>
                             <span class="chip ${job.enabled ? "chip-ok" : "chip-warn"}">
-                              ${job.enabled ? "enabled" : "disabled"}
+                              ${job.enabled ? "включена" : "отключена"}
                             </span>
                             <span class="chip">${job.sessionTarget}</span>
                           </div>
@@ -2276,6 +2276,35 @@ function renderLeadsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
 // ─── Prompts & filters panel ─────────────────────────────────────────────────
 
 function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
+  // Tab switching function for re-engagement sections
+  const switchReengTab = (e: Event) => {
+    const target = (e.target as HTMLElement).dataset.target;
+    if (!target) {
+      return;
+    }
+    const panel = (e.target as HTMLElement).closest(".tg-prompts-reeng-content") as HTMLElement;
+    if (!panel) {
+      return;
+    }
+
+    // Remove active from all tabs
+    panel.querySelectorAll(".tg-reeng-tab").forEach((tab) => {
+      tab.classList.remove("tg-toggle-option--active");
+    });
+    // Add active to clicked tab
+    (e.target as HTMLElement).classList.add("tg-toggle-option--active");
+
+    // Hide all blocks
+    panel.querySelectorAll<HTMLElement>(".tg-reeng-block").forEach((block) => {
+      block.style.display = "none";
+    });
+    // Show target block
+    const targetBlock = panel.querySelector(`.tg-reeng-block-${target}`) as HTMLElement;
+    if (targetBlock) {
+      targetBlock.style.display = "";
+    }
+  };
+
   const savedSettings = props.agentSettings ?? {
     useSchema: false,
     scheduleMode: "always" as const,
@@ -2747,7 +2776,54 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
       <!-- ═══════════ RE-ENGAGEMENT TAB ═══════════ -->
       <div class="tg-prompts-reeng-content" style="display:none;">
 
-      <!-- ── 🔁 Реактивация ────────────────────────────────────────── -->
+      <!-- Toggle buttons for Reactivation / Prompts -->
+      <div class="tg-toggle-group" style="margin-bottom:18px;align-self:flex-start;">
+        <label class="tg-toggle-option tg-reeng-main-tab tg-toggle-option--active"
+          @click=${(e: Event) => {
+            const panel = (e.target as HTMLElement).closest(
+              ".tg-prompts-reeng-content",
+            ) as HTMLElement;
+            panel?.querySelector(".tg-reeng-main-tab")?.classList.add("tg-toggle-option--active");
+            panel
+              ?.querySelector(".tg-reeng-prompts-tab")
+              ?.classList.remove("tg-toggle-option--active");
+            const mainBlock = panel?.querySelector(".tg-reeng-main-block") as HTMLElement;
+            const promptsBlock = panel?.querySelector(".tg-reeng-prompts-block") as HTMLElement;
+            if (mainBlock) {
+              mainBlock.style.display = "";
+            }
+            if (promptsBlock) {
+              promptsBlock.style.display = "none";
+            }
+          }}>
+          🔁 Реактивация
+        </label>
+        <label class="tg-toggle-option tg-reeng-prompts-tab"
+          @click=${(e: Event) => {
+            const panel = (e.target as HTMLElement).closest(
+              ".tg-prompts-reeng-content",
+            ) as HTMLElement;
+            panel
+              ?.querySelector(".tg-reeng-prompts-tab")
+              ?.classList.add("tg-toggle-option--active");
+            panel
+              ?.querySelector(".tg-reeng-main-tab")
+              ?.classList.remove("tg-toggle-option--active");
+            const mainBlock = panel?.querySelector(".tg-reeng-main-block") as HTMLElement;
+            const promptsBlock = panel?.querySelector(".tg-reeng-prompts-block") as HTMLElement;
+            if (mainBlock) {
+              mainBlock.style.display = "none";
+            }
+            if (promptsBlock) {
+              promptsBlock.style.display = "";
+            }
+          }}>
+          🧠 Промпты реактивации
+        </label>
+      </div>
+
+      <!-- ── 🔁 Реактивация block ────────────────────────────────────────── -->
+      <div class="tg-reeng-main-block">
       <div class="tg-prompts-section-title">🔁 Реактивация</div>
 
       <div class="tg-setting-row">
@@ -3127,9 +3203,11 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
           }
         </div>
       </div>
+      </div><!-- end tg-reeng-main-block -->
 
-      <!-- ── 🧠 Промпты реактивации ─────────────────────────────────── -->
-      <div class="tg-prompts-section-title" style="margin-top:24px;">🧠 Промпты реактивации</div>
+      <!-- ── 🧠 Промпты реактивации block ─────────────────────────────────── -->
+      <div class="tg-reeng-prompts-block" style="display:none;">
+      <div class="tg-prompts-section-title">🧠 Промпты реактивации</div>
       <div style="font-size:11px;color:var(--text-muted);line-height:1.5;margin-bottom:12px;">
         Настройте промпт, контекст и правила, которые ИИ использует при генерации сообщений реактивации.
         Если поле пустое — берётся значение из вкладки «🤖 Менеджер».
@@ -3155,9 +3233,21 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
         </div>
       </div>
 
-      <!-- Re-engagement context -->
-      <div class="tg-prompts-section-title" style="display:flex;align-items:center;justify-content:space-between;">
-        <span>🧠 Контекст реактивации</span>
+      <!-- Toggle buttons for all re-engagement sections -->
+      <div class="tg-toggle-group" style="margin-top:20px;margin-bottom:18px;align-self:flex-start;flex-wrap:wrap;">
+        <label class="tg-toggle-option tg-reeng-tab tg-toggle-option--active" data-target="context" @click=${switchReengTab}>🧠 Контекст</label>
+        <label class="tg-toggle-option tg-reeng-tab" data-target="halluc" @click=${switchReengTab}>🔮 Анти-галлюцинации</label>
+        <label class="tg-toggle-option tg-reeng-tab" data-target="append" @click=${switchReengTab}>✏️ Доп. инструкции</label>
+        <label class="tg-toggle-option tg-reeng-tab" data-target="sysprompt" @click=${switchReengTab}>📝 Системный промпт</label>
+        <label class="tg-toggle-option tg-reeng-tab" data-target="tplgen" @click=${switchReengTab}>🎲 Генерация шаблонов</label>
+        <label class="tg-toggle-option tg-reeng-tab" data-target="history" @click=${switchReengTab}>📋 История</label>
+        <label class="tg-toggle-option tg-reeng-tab" data-target="traces" @click=${switchReengTab}>🔍 AI Traces</label>
+      </div>
+
+
+      <!-- Re-engagement context block -->
+      <div class="tg-reeng-context-block">
+      <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:6px;">
           ${
             settings.reEngagementContext?.trim()
@@ -3205,10 +3295,11 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
             saveNow({ reEngagementContext: v || undefined });
           }}>${props.agentSettingsSaving ? "⏳…" : "💾 Сохранить"}</button>
       </div>
+      </div>
 
-      <!-- Re-engagement anti-hallucination -->
-      <div class="tg-prompts-section-title" style="display:flex;align-items:center;justify-content:space-between;">
-        <span>🔮 Анти-галлюцинации реактивации</span>
+      <!-- Re-engagement anti-hallucination block -->
+      <div class="tg-reeng-block tg-reeng-block-halluc" style="display:none;">
+      <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:6px;">
           ${
             settings.reEngagementAntiHallucination?.trim()
@@ -3256,10 +3347,11 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
             saveNow({ reEngagementAntiHallucination: v || undefined });
           }}>${props.agentSettingsSaving ? "⏳…" : "💾 Сохранить"}</button>
       </div>
+      </div>
 
-      <!-- Re-engagement additional instructions -->
-      <div class="tg-prompts-section-title" style="display:flex;align-items:center;justify-content:space-between;">
-        <span>✏️ Доп. инструкции реактивации</span>
+      <!-- Re-engagement additional instructions block -->
+      <div class="tg-reeng-block tg-reeng-block-append" style="display:none;">
+      <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:6px;">
           ${
             settings.reEngagementAppend?.trim()
@@ -3307,10 +3399,11 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
             saveNow({ reEngagementAppend: v || undefined });
           }}>${props.agentSettingsSaving ? "⏳…" : "💾 Сохранить"}</button>
       </div>
+      </div>
 
-      <!-- Re-engagement system prompt override -->
-      <div class="tg-prompts-section-title" style="display:flex;align-items:center;justify-content:space-between;">
-        <span>📝 Системный промпт реактивации</span>
+      <!-- Re-engagement system prompt override block -->
+      <div class="tg-reeng-block tg-reeng-block-sysprompt" style="display:none;">
+      <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:6px;">
           ${
             settings.reEngagementSystemPrompt?.trim()
@@ -3365,10 +3458,11 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
             saveNow({ reEngagementSystemPrompt: v || undefined });
           }}>${props.agentSettingsSaving ? "⏳…" : "💾 Сохранить"}</button>
       </div>
+      </div>
 
-      <!-- Re-engagement template generation prompt -->
-      <div class="tg-prompts-section-title" style="display:flex;align-items:center;justify-content:space-between;">
-        <span>🎲 Промпт генерации шаблонов</span>
+      <!-- Re-engagement template generation prompt block -->
+      <div class="tg-reeng-block tg-reeng-block-tplgen" style="display:none;">
+      <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:6px;">
           ${
             settings.reEngagementTemplateGenPrompt?.trim()
@@ -3424,10 +3518,11 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
             saveNow({ reEngagementTemplateGenPrompt: v || undefined });
           }}>${props.agentSettingsSaving ? "⏳…" : "💾 Сохранить"}</button>
       </div>
+      </div>
 
-      <!-- ── 📋 История реактивации ─────────────────────────────────── -->
-      <div class="tg-prompts-section-title" style="display:flex;align-items:center;justify-content:space-between;margin-top:24px;">
-        <span>📋 История отправок</span>
+      <!-- ── 📋 История реактивации block ─────────────────────────────────── -->
+      <div class="tg-reeng-block tg-reeng-block-history" style="display:none;">
+      <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:12px;">
         <button type="button" class="btn"
           style="font-size:11px;padding:2px 10px;"
           ?disabled=${props.reEngagementHistoryLoading}
@@ -3493,10 +3588,11 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                 </div>
               `
       }
+      </div>
 
-      <!-- ── 🔍 AI Traces — полный аудит генерации ──────────────────── -->
-      <div class="tg-prompts-section-title" style="display:flex;align-items:center;justify-content:space-between;margin-top:24px;">
-        <span>🔍 AI Traces — аудит генерации</span>
+      <!-- ── 🔍 AI Traces — полный аудит генерации block ──────────────────── -->
+      <div class="tg-reeng-block tg-reeng-block-traces" style="display:none;">
+      <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:12px;">
         <button type="button" class="btn"
           style="font-size:11px;padding:2px 10px;"
           ?disabled=${props.aiTracesLoading}
@@ -3729,6 +3825,8 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                 </div>
               `
       }
+      </div><!-- end tg-reeng-block-traces -->
+      </div><!-- end tg-reeng-prompts-block -->
 
       </div><!-- end reeng-content -->
 
