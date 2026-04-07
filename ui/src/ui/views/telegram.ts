@@ -3695,14 +3695,75 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                           : ""
                       }
 
+                      <!-- Полный итоговый запрос в ИИ -->
+                      ${
+                        systemPrompt || userPrompt
+                          ? html`
+                        <details open>
+                          <summary style="font-size:11px;font-weight:600;color:#4f8ef7;cursor:pointer;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">
+                            📤 ПОЛНЫЙ ЗАПРОС В ИИ (развернуть)
+                          </summary>
+                          <div style="
+                            margin:4px 0 0;
+                            background:var(--surface-3,rgba(79,142,247,0.08));
+                            border:1px solid rgba(79,142,247,0.3);
+                            border-radius:6px;
+                            padding:10px 12px;
+                            max-height:400px;
+                            overflow-y:auto;
+                          ">
+                            ${
+                              systemPrompt
+                                ? html`
+                              <div style="margin-bottom:12px;">
+                                <div style="font-size:10px;font-weight:600;color:rgba(79,142,247,0.9);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em;">SYSTEM:</div>
+                                <pre style="
+                                  margin:0;
+                                  white-space:pre-wrap;
+                                  word-break:break-word;
+                                  font-size:11px;
+                                  color:var(--text-main);
+                                  line-height:1.5;
+                                  font-family:var(--font-mono,monospace);
+                                ">${systemPrompt}</pre>
+                              </div>
+                            `
+                                : ""
+                            }
+                            ${
+                              userPrompt
+                                ? html`
+                              <div>
+                                <div style="font-size:10px;font-weight:600;color:rgba(79,142,247,0.9);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em;">USER:</div>
+                                <pre style="
+                                  margin:0;
+                                  white-space:pre-wrap;
+                                  word-break:break-word;
+                                  font-size:11px;
+                                  color:var(--text-main);
+                                  line-height:1.5;
+                                  font-family:var(--font-mono,monospace);
+                                ">${userPrompt}</pre>
+                              </div>
+                            `
+                                : ""
+                            }
+                          </div>
+                        </details>
+                      `
+                          : ""
+                      }
+
                       <!-- User prompt -->
                       ${
                         userPrompt
                           ? html`
-                        <div>
-                          <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.05em;">USER PROMPT</div>
+                        <details>
+                          <summary style="font-size:11px;font-weight:600;color:var(--text-muted);cursor:pointer;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">
+                            USER PROMPT (развернуть)
+                          </summary>
                           <pre style="
-                            margin:0;
+                            margin:4px 0 0;
                             background:var(--surface-3,rgba(255,255,255,0.03));
                             border-radius:6px;
                             padding:8px 10px;
@@ -3714,7 +3775,7 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                             max-height:200px;
                             overflow-y:auto;
                           ">${userPrompt}</pre>
-                        </div>
+                        </details>
                       `
                           : ""
                       }
