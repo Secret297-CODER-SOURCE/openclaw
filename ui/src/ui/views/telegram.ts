@@ -309,6 +309,13 @@ export type TelegramProps = {
   onWorkModePatch: (patch: Partial<import("../controllers/telegram.ts").AgentSettings>) => void;
   onWorkModeApply: (agentId: string) => void;
   onInitLeadsGroup: (agentId: string) => void;
+  onRunReEngagementNow: (agentId: string) => void;
+  reEngagementHistory: import("../controllers/telegram.ts").ReEngagementHistoryItem[];
+  reEngagementHistoryLoading: boolean;
+  onLoadReEngagementHistory: (agentId: string) => void;
+  aiTraces: import("../controllers/telegram.ts").AiTrace[];
+  aiTracesLoading: boolean;
+  onLoadAiTraces: (agentId: string) => void;
   telegramTemplateGenerating: boolean;
   onGenerateTemplate: (agentId: string) => void;
   // Leads tab
@@ -2279,6 +2286,7 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
     : savedSettings;
   const dirty =
     props.workModePending !== null && Object.keys(props.workModePending ?? {}).length > 0;
+  const busy = isBusy(props, agent.id);
 
   const patchWorkMode = (patch: Partial<typeof savedSettings>) => props.onWorkModePatch(patch);
   const saveNow = (patch: Partial<typeof savedSettings>) =>
@@ -2748,28 +2756,43 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
 
           <!-- Header: toggle + description -->
           <div class="tg-reeng-header">
-            <div class="tg-toggle-group">
-              <label class="tg-toggle-option ${settings.reEngagementEnabled ? "tg-toggle-option--active" : ""}">
-                <input type="radio" name="reeng-prompts-${agent.id}"
-                  ?checked=${!!settings.reEngagementEnabled}
-                  @change=${() =>
-                    saveNow({
-                      reEngagementEnabled: true,
-                      // Save interval defaults so cron has a non-empty delays array from the start
-                      reEngagementDelayFrom: settings.reEngagementDelayFrom ?? 1,
-                      reEngagementDelayTo: settings.reEngagementDelayTo ?? 7,
-                      reEngagementAiMode: settings.reEngagementAiMode ?? "ai",
-                    })}
-                  style="display:none;" />
-                ✅ Включить
-              </label>
-              <label class="tg-toggle-option ${!settings.reEngagementEnabled ? "tg-toggle-option--active" : ""}">
-                <input type="radio" name="reeng-prompts-${agent.id}"
-                  ?checked=${!settings.reEngagementEnabled}
-                  @change=${() => saveNow({ reEngagementEnabled: false })}
-                  style="display:none;" />
-                Выкл
-              </label>
+            <div style="display:flex;align-items:center;gap:8px;width:100%;">
+              <div class="tg-toggle-group">
+                <label class="tg-toggle-option ${settings.reEngagementEnabled ? "tg-toggle-option--active" : ""}">
+                  <input type="radio" name="reeng-prompts-${agent.id}"
+                    ?checked=${!!settings.reEngagementEnabled}
+                    @change=${() =>
+                      saveNow({
+                        reEngagementEnabled: true,
+                        // Save interval defaults so cron has a non-empty delays array from the start
+                        reEngagementDelayFrom: settings.reEngagementDelayFrom ?? 1,
+                        reEngagementDelayTo: settings.reEngagementDelayTo ?? 7,
+                        reEngagementAiMode: settings.reEngagementAiMode ?? "ai",
+                      })}
+                    style="display:none;" />
+                  ✅ Включить
+                </label>
+                <label class="tg-toggle-option ${!settings.reEngagementEnabled ? "tg-toggle-option--active" : ""}">
+                  <input type="radio" name="reeng-prompts-${agent.id}"
+                    ?checked=${!settings.reEngagementEnabled}
+                    @change=${() => saveNow({ reEngagementEnabled: false })}
+                    style="display:none;" />
+                  Выкл
+                </label>
+              </div>
+              ${
+                settings.reEngagementEnabled
+                  ? html`
+                      <button
+                        type="button"
+                        class="btn primary"
+                        style="font-size:11px;padding:4px 12px;margin-left:auto;white-space:nowrap;"
+                        ?disabled=${busy}
+                        @click=${() => props.onRunReEngagementNow(agent.id)}
+                      >▶️ Запустить сейчас</button>
+                    `
+                  : nothing
+              }
             </div>
             <div class="tg-setting-hint" style="margin-top:6px;">
               Агент автоматически возобновляет диалог с молчащими контактами.
@@ -2788,14 +2811,14 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                 <span style="font-size:13px;color:var(--text-muted);">от</span>
                 <input
                   type="number"
-                  min="1"
+                  min="0"
                   max="365"
                   class="input"
                   style="width:64px;font-size:13px;text-align:center;"
                   .value=${String(settings.reEngagementDelayFrom ?? 1)}
                   @change=${(e: Event) => {
                     const v = parseInt((e.target as HTMLInputElement).value, 10);
-                    if (v > 0) {
+                    if (!isNaN(v) && v >= 0) {
                       saveNow({ reEngagementDelayFrom: v });
                     }
                   }}
@@ -2803,14 +2826,14 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                 <span style="font-size:13px;color:var(--text-muted);">до</span>
                 <input
                   type="number"
-                  min="1"
+                  min="0"
                   max="365"
                   class="input"
                   style="width:64px;font-size:13px;text-align:center;"
                   .value=${String(settings.reEngagementDelayTo ?? 7)}
                   @change=${(e: Event) => {
                     const v = parseInt((e.target as HTMLInputElement).value, 10);
-                    if (v > 0) {
+                    if (!isNaN(v) && v >= 0) {
                       saveNow({ reEngagementDelayTo: v });
                     }
                   }}
@@ -2830,7 +2853,7 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
               </div>
               <div class="tg-setting-hint" style="margin-bottom:6px;">
                 Агент пишет контактам, молчавшим от <b>${settings.reEngagementDelayFrom ?? 1}</b>
-                до <b>${settings.reEngagementDelayTo ?? 7}</b> дней${settings.reEngagementDelayMore ? `, а также всем кто молчит дольше` : ""}.
+                до <b>${settings.reEngagementDelayTo ?? 7}</b> дней${settings.reEngagementDelayMore ? `, а также всем кто молчит дольше` : ""}. <span style="color:var(--ok,#3dbb70);">✓ сохраняется автоматически</span>
               </div>
               <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:8px 12px;margin-top:8px;">
                 <div style="display:flex;align-items:center;gap:8px;">
@@ -3401,6 +3424,311 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
             saveNow({ reEngagementTemplateGenPrompt: v || undefined });
           }}>${props.agentSettingsSaving ? "⏳…" : "💾 Сохранить"}</button>
       </div>
+
+      <!-- ── 📋 История реактивации ─────────────────────────────────── -->
+      <div class="tg-prompts-section-title" style="display:flex;align-items:center;justify-content:space-between;margin-top:24px;">
+        <span>📋 История отправок</span>
+        <button type="button" class="btn"
+          style="font-size:11px;padding:2px 10px;"
+          ?disabled=${props.reEngagementHistoryLoading}
+          @click=${() => props.onLoadReEngagementHistory(agent.id)}
+        >${props.reEngagementHistoryLoading ? "⏳…" : "🔄 Загрузить"}</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;">
+        Последние сообщения, отправленные агентом в рамках реактивации — чтобы понять, что именно пишет ИИ.
+      </div>
+      ${
+        props.reEngagementHistory.length > 0
+          ? html`
+            <div style="display:flex;flex-direction:column;gap:8px;max-height:400px;overflow-y:auto;">
+              ${props.reEngagementHistory.map((item) => {
+                const name = item.firstName ?? (item.username ? `@${item.username}` : item.chatId);
+                const date = new Date(item.sentAt).toLocaleString("ru-RU", {
+                  day: "numeric",
+                  month: "short",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                });
+                return html`
+                  <div style="
+                    background:var(--surface-2,rgba(255,255,255,0.04));
+                    border:1px solid var(--border,rgba(255,255,255,0.08));
+                    border-radius:8px;
+                    padding:10px 12px;
+                    font-size:12px;
+                  ">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:8px;">
+                      <span style="font-weight:600;color:var(--text-main);">${name}</span>
+                      <span style="color:var(--text-muted);font-size:11px;white-space:nowrap;">${date} · день ${item.delayDays}</span>
+                    </div>
+                    ${
+                      item.messageText
+                        ? html`<div style="
+                            color:var(--text-main);
+                            line-height:1.5;
+                            white-space:pre-wrap;
+                            word-break:break-word;
+                            padding:8px 10px;
+                            background:var(--surface-3,rgba(255,255,255,0.03));
+                            border-radius:6px;
+                          ">${item.messageText}</div>`
+                        : html`
+                            <div style="color: var(--text-muted); font-style: italic; font-size: 11px">
+                              текст не сохранён (отправлено до обновления)
+                            </div>
+                          `
+                    }
+                  </div>
+                `;
+              })}
+            </div>
+          `
+          : props.reEngagementHistoryLoading
+            ? html`
+                <div style="color: var(--text-muted); font-size: 12px">Загрузка...</div>
+              `
+            : html`
+                <div style="color: var(--text-muted); font-size: 12px">
+                  Нажмите «Загрузить» чтобы посмотреть историю отправок
+                </div>
+              `
+      }
+
+      <!-- ── 🔍 AI Traces — полный аудит генерации ──────────────────── -->
+      <div class="tg-prompts-section-title" style="display:flex;align-items:center;justify-content:space-between;margin-top:24px;">
+        <span>🔍 AI Traces — аудит генерации</span>
+        <button type="button" class="btn"
+          style="font-size:11px;padding:2px 10px;"
+          ?disabled=${props.aiTracesLoading}
+          @click=${() => props.onLoadAiTraces(agent.id)}
+        >${props.aiTracesLoading ? "⏳…" : "🔄 Загрузить"}</button>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;">
+        Полный лог: что отправлено в ИИ (промпт, история, настройки) и что он вернул. Последние 30 записей.
+      </div>
+      ${
+        props.aiTraces.length > 0
+          ? html`
+            <div style="display:flex;flex-direction:column;gap:10px;max-height:600px;overflow-y:auto;">
+              ${props.aiTraces.map((trace) => {
+                const date = new Date(trace.createdAt).toLocaleString("ru-RU", {
+                  day: "numeric",
+                  month: "short",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                });
+                const isError = trace.meta?.status === "error";
+                const latency = trace.meta?.latencyMs ? `${trace.meta.latencyMs}ms` : null;
+                const mode = trace.inputData?.mode ?? "?";
+                const finalText = trace.outputData?.finalText ?? null;
+                const rawResponse = trace.outputData?.rawResponse ?? null;
+                const systemPrompt = trace.inputData?.systemPrompt ?? null;
+                const userPrompt = trace.inputData?.userPrompt ?? null;
+                const history = trace.inputData?.history ?? [];
+                const settings = trace.inputData?.settings ?? {};
+
+                return html`
+                  <details style="
+                    background:var(--surface-2,rgba(255,255,255,0.04));
+                    border:1px solid ${isError ? "rgba(239,68,68,0.4)" : "var(--border,rgba(255,255,255,0.08))"};
+                    border-radius:8px;
+                    font-size:12px;
+                  ">
+                    <summary style="
+                      padding:10px 12px;
+                      cursor:pointer;
+                      display:flex;
+                      align-items:center;
+                      gap:8px;
+                      list-style:none;
+                      user-select:none;
+                    ">
+                      <span style="font-size:14px;">${isError ? "❌" : "✅"}</span>
+                      <span style="font-weight:600;flex:1;color:var(--text-main);">
+                        ${mode === "ai" ? "🤖 ИИ генерирует" : "✨ ИИ улучшает шаблон"}
+                        · chat ${trace.chatId}
+                      </span>
+                      <span style="color:var(--text-muted);font-size:11px;white-space:nowrap;">
+                        ${latency ? `${latency} · ` : ""}${date}
+                      </span>
+                    </summary>
+
+                    <div style="padding:0 12px 12px;display:flex;flex-direction:column;gap:10px;">
+
+                      <!-- Итоговый текст -->
+                      <div>
+                        <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.05em;">
+                          ${isError ? "ОШИБКА" : "ИТОГОВЫЙ ТЕКСТ"}
+                        </div>
+                        <div style="
+                          background:var(--surface-3,rgba(255,255,255,0.03));
+                          border:1px solid ${isError ? "rgba(239,68,68,0.3)" : "rgba(61,187,112,0.2)"};
+                          border-radius:6px;
+                          padding:8px 10px;
+                          white-space:pre-wrap;
+                          word-break:break-word;
+                          color:${isError ? "#ef4444" : "var(--text-main)"};
+                          line-height:1.5;
+                        ">
+                          ${
+                            isError
+                              ? (trace.meta?.error ?? "неизвестная ошибка")
+                              : (finalText ?? "(нет)")
+                          }
+                        </div>
+                      </div>
+
+                      <!-- Сырой ответ модели (если отличается) -->
+                      ${
+                        rawResponse && rawResponse !== finalText
+                          ? html`
+                        <div>
+                          <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.05em;">RAW ОТВЕТ МОДЕЛИ</div>
+                          <div style="
+                            background:var(--surface-3,rgba(255,255,255,0.03));
+                            border-radius:6px;
+                            padding:8px 10px;
+                            white-space:pre-wrap;
+                            word-break:break-word;
+                            color:var(--text-muted);
+                            font-style:italic;
+                            line-height:1.5;
+                          ">${rawResponse}</div>
+                        </div>
+                      `
+                          : ""
+                      }
+
+                      <!-- User prompt -->
+                      ${
+                        userPrompt
+                          ? html`
+                        <div>
+                          <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.05em;">USER PROMPT</div>
+                          <pre style="
+                            margin:0;
+                            background:var(--surface-3,rgba(255,255,255,0.03));
+                            border-radius:6px;
+                            padding:8px 10px;
+                            white-space:pre-wrap;
+                            word-break:break-word;
+                            font-size:11px;
+                            color:var(--text-main);
+                            line-height:1.5;
+                            max-height:200px;
+                            overflow-y:auto;
+                          ">${userPrompt}</pre>
+                        </div>
+                      `
+                          : ""
+                      }
+
+                      <!-- System prompt -->
+                      ${
+                        systemPrompt
+                          ? html`
+                        <details>
+                          <summary style="font-size:11px;font-weight:600;color:var(--text-muted);cursor:pointer;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">
+                            SYSTEM PROMPT (развернуть)
+                          </summary>
+                          <pre style="
+                            margin:4px 0 0;
+                            background:var(--surface-3,rgba(255,255,255,0.03));
+                            border-radius:6px;
+                            padding:8px 10px;
+                            white-space:pre-wrap;
+                            word-break:break-word;
+                            font-size:11px;
+                            color:var(--text-muted);
+                            line-height:1.5;
+                            max-height:300px;
+                            overflow-y:auto;
+                          ">${systemPrompt}</pre>
+                        </details>
+                      `
+                          : ""
+                      }
+
+                      <!-- История (кол-во сообщений) -->
+                      ${
+                        (history as Array<unknown>).length > 0
+                          ? html`
+                        <details>
+                          <summary style="font-size:11px;font-weight:600;color:var(--text-muted);cursor:pointer;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">
+                            ИСТОРИЯ (${(history as Array<unknown>).length} сообщений, развернуть)
+                          </summary>
+                          <div style="
+                            margin-top:4px;
+                            max-height:250px;
+                            overflow-y:auto;
+                            display:flex;
+                            flex-direction:column;
+                            gap:4px;
+                          ">
+                            ${(history as Array<{ role: string; content: string }>).map(
+                              (m) => html`
+                              <div style="
+                                padding:4px 8px;
+                                border-radius:4px;
+                                background:${
+                                  m.role === "user"
+                                    ? "rgba(99,102,241,0.08)"
+                                    : "rgba(61,187,112,0.06)"
+                                };
+                                font-size:11px;
+                                color:var(--text-main);
+                                line-height:1.4;
+                              ">
+                                <span style="font-weight:600;color:var(--text-muted);">${m.role === "user" ? "Клиент" : "Агент"}:</span>
+                                ${m.content.slice(0, 300)}${m.content.length > 300 ? "…" : ""}
+                              </div>
+                            `,
+                            )}
+                          </div>
+                        </details>
+                      `
+                          : ""
+                      }
+
+                      <!-- Настройки -->
+                      ${
+                        Object.keys(settings as object).length > 0
+                          ? html`
+                        <details>
+                          <summary style="font-size:11px;font-weight:600;color:var(--text-muted);cursor:pointer;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">
+                            НАСТРОЙКИ (развернуть)
+                          </summary>
+                          <pre style="
+                            margin:4px 0 0;
+                            background:var(--surface-3,rgba(255,255,255,0.03));
+                            border-radius:6px;
+                            padding:8px 10px;
+                            font-size:11px;
+                            color:var(--text-muted);
+                            line-height:1.5;
+                            white-space:pre-wrap;
+                          ">${JSON.stringify(settings, null, 2)}</pre>
+                        </details>
+                      `
+                          : ""
+                      }
+
+                    </div>
+                  </details>
+                `;
+              })}
+            </div>
+          `
+          : props.aiTracesLoading
+            ? html`
+                <div style="color: var(--text-muted); font-size: 12px">Загрузка...</div>
+              `
+            : html`
+                <div style="color: var(--text-muted); font-size: 12px">
+                  Нажмите «Загрузить» — данные появятся после первой реактивации
+                </div>
+              `
+      }
 
       </div><!-- end reeng-content -->
 

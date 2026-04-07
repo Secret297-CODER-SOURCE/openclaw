@@ -277,6 +277,29 @@ export class TelegramStorage {
       this.db.exec("ALTER TABLE tg_flow_nodes ADD COLUMN scope TEXT NOT NULL DEFAULT 'personal'");
       this.db.exec("CREATE INDEX IF NOT EXISTS idx_flow_nodes_scope ON tg_flow_nodes(scope)");
     }
+
+    // Incremental migration: add message_text column to tg_reengagement for existing DBs
+    const reengCols = this.db.prepare("PRAGMA table_info(tg_reengagement)").all() as Array<{
+      name: string;
+    }>;
+    if (!reengCols.some((c) => c.name === "message_text")) {
+      this.db.exec("ALTER TABLE tg_reengagement ADD COLUMN message_text TEXT");
+    }
+
+    // Incremental migration: create ai_traces table for AI generation audit log
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS ai_traces (
+        id          TEXT PRIMARY KEY,
+        agent_id    TEXT NOT NULL,
+        chat_id     TEXT NOT NULL,
+        type        TEXT NOT NULL DEFAULT 'reactivation',
+        input_data  TEXT NOT NULL,
+        output_data TEXT NOT NULL,
+        meta        TEXT NOT NULL,
+        created_at  TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_ai_traces_agent ON ai_traces(agent_id, created_at);
+    `);
   }
 
   // ─── Agents ───────────────────────────────────────────────────────────────
@@ -1162,13 +1185,119 @@ export class TelegramStorage {
     chatId: string,
     delayDays: number,
     periodRef: string,
+    messageText?: string,
   ): void {
     this.db
       .prepare(
-        `INSERT OR IGNORE INTO tg_reengagement (agent_id, chat_id, delay_days, period_ref, sent_at)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO tg_reengagement (agent_id, chat_id, delay_days, period_ref, sent_at, message_text)
+         VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(agentId, chatId, delayDays, periodRef, new Date().toISOString());
+      .run(agentId, chatId, delayDays, periodRef, new Date().toISOString(), messageText ?? null);
+  }
+
+  /**
+   * Return the most recent re-engagement sends for an agent, newest first.
+   * Includes the contact name and the actual message text that was sent.
+   */
+  getReEngagementHistory(
+    agentId: string,
+    limit = 20,
+  ): Array<{
+    chatId: string;
+    firstName: string | null;
+    username: string | null;
+    sentAt: string;
+    delayDays: number;
+    messageText: string | null;
+  }> {
+    return this.db
+      .prepare(
+        `SELECT r.chat_id AS chatId,
+                c.first_name AS firstName,
+                c.username AS username,
+                r.sent_at AS sentAt,
+                r.delay_days AS delayDays,
+                r.message_text AS messageText
+         FROM tg_reengagement r
+         LEFT JOIN tg_contacts c ON c.agent_id = r.agent_id AND c.chat_id = r.chat_id
+         WHERE r.agent_id = ?
+         ORDER BY r.sent_at DESC
+         LIMIT ?`,
+      )
+      .all(agentId, limit) as Array<{
+      chatId: string;
+      firstName: string | null;
+      username: string | null;
+      sentAt: string;
+      delayDays: number;
+      messageText: string | null;
+    }>;
+  }
+
+  // ─── AI Traces (audit log for AI generation) ─────────────────────────────
+
+  /** Save a full AI generation trace (fire-and-forget safe — never throws). */
+  saveAiTrace(trace: {
+    id: string;
+    agentId: string;
+    chatId: string;
+    type: string;
+    inputData: Record<string, unknown>;
+    outputData: Record<string, unknown>;
+    meta: Record<string, unknown>;
+  }): void {
+    try {
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO ai_traces (id, agent_id, chat_id, type, input_data, output_data, meta, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          trace.id,
+          trace.agentId,
+          trace.chatId,
+          trace.type,
+          JSON.stringify(trace.inputData),
+          JSON.stringify(trace.outputData),
+          JSON.stringify(trace.meta),
+          new Date().toISOString(),
+        );
+    } catch {
+      // Never throw — tracing must not affect main flow
+    }
+  }
+
+  /** Return recent AI traces for an agent, newest first. */
+  getAiTraces(
+    agentId: string,
+    limit = 30,
+  ): Array<{
+    id: string;
+    chatId: string;
+    type: string;
+    inputData: string;
+    outputData: string;
+    meta: string;
+    createdAt: string;
+  }> {
+    return this.db
+      .prepare(
+        `SELECT id, chat_id AS chatId, type, input_data AS inputData,
+                output_data AS outputData, meta, created_at AS createdAt
+         FROM ai_traces
+         WHERE agent_id = ?
+         ORDER BY created_at DESC
+         LIMIT ?`,
+      )
+      .all(agentId, limit) as Array<{
+      id: string;
+      chatId: string;
+      type: string;
+      inputData: string;
+      outputData: string;
+      meta: string;
+      createdAt: string;
+    }>;
   }
 
   /**

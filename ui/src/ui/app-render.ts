@@ -113,6 +113,9 @@ import {
   loadAgentSettings,
   saveAgentSettings,
   initLeadsGroup,
+  runReEngagementNow,
+  loadReEngagementHistory,
+  loadAiTraces,
   generateReEngagementTemplate,
   buildFlatPairs,
   applyTrainingEditorSave,
@@ -1101,6 +1104,19 @@ export function renderApp(state: AppViewState) {
                       replyTo: "all",
                     },
                   ).then(() => initLeadsGroup(state, agentId));
+                },
+                onRunReEngagementNow: (agentId: string) => {
+                  void runReEngagementNow(state, agentId);
+                },
+                reEngagementHistory: state.telegramReEngagementHistory,
+                reEngagementHistoryLoading: state.telegramReEngagementHistoryLoading,
+                onLoadReEngagementHistory: (agentId: string) => {
+                  void loadReEngagementHistory(state, agentId);
+                },
+                aiTraces: state.telegramAiTraces,
+                aiTracesLoading: state.telegramAiTracesLoading,
+                onLoadAiTraces: (agentId: string) => {
+                  void loadAiTraces(state, agentId);
                 },
                 telegramTemplateGenerating: state.telegramTemplateGenerating,
                 onGenerateTemplate: (agentId: string) => {

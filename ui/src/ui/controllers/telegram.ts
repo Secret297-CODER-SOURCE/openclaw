@@ -994,6 +994,12 @@ type TelegramScenarioState = TelegramState & {
   /** Prompt/filter summary for the selected agent. */
   telegramPromptSummary: PromptSummary | null;
   telegramPromptSummaryLoading: boolean;
+  /** Recent re-engagement sends history for the selected agent. */
+  telegramReEngagementHistory: ReEngagementHistoryItem[];
+  telegramReEngagementHistoryLoading: boolean;
+  /** AI generation audit traces for the selected agent. */
+  telegramAiTraces: AiTrace[];
+  telegramAiTracesLoading: boolean;
 };
 
 export async function loadTelegramChatNodes(
@@ -3247,6 +3253,95 @@ export async function initLeadsGroup(state: TelegramScenarioState, agentId: stri
     return;
   }
   await state.client!.request("telegram.agent.initLeadsGroup", { agentId }).catch(() => {});
+}
+
+export type AiTrace = {
+  id: string;
+  chatId: string;
+  type: string;
+  inputData: {
+    mode?: string;
+    template?: string;
+    contactName?: string | null;
+    hasHistory?: boolean;
+    systemPrompt?: string;
+    userPrompt?: string;
+    history?: Array<{ role: string; content: string }>;
+    settings?: Record<string, unknown>;
+  };
+  outputData: {
+    rawResponse?: string;
+    cleanedText?: string;
+    finalText?: string | null;
+    usedFallback?: boolean;
+  };
+  meta: {
+    latencyMs?: number;
+    status?: string;
+    error?: string;
+  };
+  createdAt: string;
+};
+
+export type ReEngagementHistoryItem = {
+  chatId: string;
+  firstName: string | null;
+  username: string | null;
+  sentAt: string;
+  delayDays: number;
+  messageText: string | null;
+};
+
+/** Load recent AI generation traces for an agent. */
+export async function loadAiTraces(state: TelegramScenarioState, agentId: string): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  state.telegramAiTracesLoading = true;
+  try {
+    const res = await state.client!.request<{ traces: AiTrace[] }>("telegram.agent.aiTraces", {
+      agentId,
+      limit: 30,
+    });
+    state.telegramAiTraces = res.traces ?? [];
+  } catch {
+    state.telegramAiTraces = [];
+  } finally {
+    state.telegramAiTracesLoading = false;
+  }
+}
+
+/** Load recent re-engagement sends for an agent. */
+export async function loadReEngagementHistory(
+  state: TelegramScenarioState,
+  agentId: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  state.telegramReEngagementHistoryLoading = true;
+  try {
+    const res = await state.client!.request<{ history: ReEngagementHistoryItem[] }>(
+      "telegram.agent.reEngagementHistory",
+      { agentId, limit: 20 },
+    );
+    state.telegramReEngagementHistory = res.history ?? [];
+  } catch {
+    state.telegramReEngagementHistory = [];
+  } finally {
+    state.telegramReEngagementHistoryLoading = false;
+  }
+}
+
+/** Manually trigger re-engagement check right now. */
+export async function runReEngagementNow(
+  state: TelegramScenarioState,
+  agentId: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  await state.client!.request("telegram.agent.runReEngagementNow", { agentId }).catch(() => {});
 }
 
 /** AI-generate a re-engagement template. Returns the template string or null on error. */

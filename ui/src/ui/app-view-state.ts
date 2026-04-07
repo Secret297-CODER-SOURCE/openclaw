@@ -234,6 +234,12 @@ export type AppViewState = {
   /** Prompt/filter summary for the selected agent. */
   telegramPromptSummary: import("./controllers/telegram.ts").PromptSummary | null;
   telegramPromptSummaryLoading: boolean;
+  /** Recent re-engagement history for the selected agent. */
+  telegramReEngagementHistory: import("./controllers/telegram.ts").ReEngagementHistoryItem[];
+  telegramReEngagementHistoryLoading: boolean;
+  /** AI generation audit traces for the selected agent. */
+  telegramAiTraces: import("./controllers/telegram.ts").AiTrace[];
+  telegramAiTracesLoading: boolean;
   /** AI coaching tips per chatId — fetched on demand, persisted to DB. */
   telegramCoachingTips: Record<string, import("./controllers/telegram.ts").CoachingTips>;
   telegramCoachingLoading: Set<string>;
