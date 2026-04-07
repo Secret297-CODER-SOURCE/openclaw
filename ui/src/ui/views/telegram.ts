@@ -313,6 +313,7 @@ export type TelegramProps = {
   reEngagementHistory: import("../controllers/telegram.ts").ReEngagementHistoryItem[];
   reEngagementHistoryLoading: boolean;
   onLoadReEngagementHistory: (agentId: string) => void;
+  onDeleteReEngagementHistoryItem?: (agentId: string, chatId: string, sentAt: string) => void;
   aiTraces: import("../controllers/telegram.ts").AiTrace[];
   aiTracesLoading: boolean;
   onLoadAiTraces: (agentId: string) => void;
@@ -2303,6 +2304,20 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
     if (targetBlock) {
       targetBlock.style.display = "";
     }
+
+    // Auto-load history when switching to history tab
+    if (
+      target === "history" &&
+      props.reEngagementHistory.length === 0 &&
+      !props.reEngagementHistoryLoading
+    ) {
+      props.onLoadReEngagementHistory(agent.id);
+    }
+
+    // Auto-load AI traces when switching to traces tab
+    if (target === "traces" && props.aiTraces.length === 0 && !props.aiTracesLoading) {
+      props.onLoadAiTraces(agent.id);
+    }
   };
 
   const savedSettings = props.agentSettings ?? {
@@ -3554,7 +3569,16 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                   ">
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:8px;">
                       <span style="font-weight:600;color:var(--text-main);">${name}</span>
-                      <span style="color:var(--text-muted);font-size:11px;white-space:nowrap;">${date} · день ${item.delayDays}</span>
+                      <div style="display:flex;align-items:center;gap:8px;">
+                        <span style="color:var(--text-muted);font-size:11px;white-space:nowrap;">${date} · день ${item.delayDays}</span>
+                        <button
+                          type="button"
+                          class="btn btn-xs"
+                          style="color:#ef4444;padding:2px 8px;font-size:11px;"
+                          @click=${() => props.onDeleteReEngagementHistoryItem?.(agent.id, item.chatId, item.sentAt)}
+                          title="Удалить запись"
+                        >🗑</button>
+                      </div>
                     </div>
                     ${
                       item.messageText
@@ -3583,9 +3607,7 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                 <div style="color: var(--text-muted); font-size: 12px">Загрузка...</div>
               `
             : html`
-                <div style="color: var(--text-muted); font-size: 12px">
-                  Нажмите «Загрузить» чтобы посмотреть историю отправок
-                </div>
+                <div style="color: var(--text-muted); font-size: 12px">История пуста</div>
               `
       }
       </div>

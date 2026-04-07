@@ -483,6 +483,28 @@ export class TelegramPlugin implements GatewayPlugin {
           break;
         }
 
+        case "telegram.agent.deleteReEngagementHistoryItem": {
+          if (!p.agentId) {
+            fail("agentId обязателен");
+            break;
+          }
+          if (!p.chatId) {
+            fail("chatId обязателен");
+            break;
+          }
+          if (!p.sentAt) {
+            fail("sentAt обязателен");
+            break;
+          }
+          this.storage.deleteReEngagementHistoryItem(
+            String(p.agentId),
+            String(p.chatId),
+            String(p.sentAt),
+          );
+          respond({ ok: true });
+          break;
+        }
+
         case "telegram.agent.aiTraces": {
           if (!p.agentId) {
             fail("agentId обязателен");

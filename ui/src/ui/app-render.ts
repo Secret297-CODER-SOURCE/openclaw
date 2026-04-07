@@ -115,6 +115,7 @@ import {
   initLeadsGroup,
   runReEngagementNow,
   loadReEngagementHistory,
+  deleteReEngagementHistoryItem,
   loadAiTraces,
   generateReEngagementTemplate,
   buildFlatPairs,
@@ -1112,6 +1113,13 @@ export function renderApp(state: AppViewState) {
                 reEngagementHistoryLoading: state.telegramReEngagementHistoryLoading,
                 onLoadReEngagementHistory: (agentId: string) => {
                   void loadReEngagementHistory(state, agentId);
+                },
+                onDeleteReEngagementHistoryItem: (
+                  agentId: string,
+                  chatId: string,
+                  sentAt: string,
+                ) => {
+                  void deleteReEngagementHistoryItem(state, agentId, chatId, sentAt);
                 },
                 aiTraces: state.telegramAiTraces,
                 aiTracesLoading: state.telegramAiTracesLoading,

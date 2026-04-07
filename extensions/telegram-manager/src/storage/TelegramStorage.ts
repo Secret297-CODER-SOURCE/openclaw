@@ -1234,6 +1234,18 @@ export class TelegramStorage {
     }>;
   }
 
+  /**
+   * Delete a specific re-engagement history item.
+   */
+  deleteReEngagementHistoryItem(agentId: string, chatId: string, sentAt: string): void {
+    this.db
+      .prepare(
+        `DELETE FROM tg_reengagement_history
+         WHERE agent_id = ? AND chat_id = ? AND sent_at = ?`,
+      )
+      .run(agentId, chatId, sentAt);
+  }
+
   // ─── AI Traces (audit log for AI generation) ─────────────────────────────
 
   /** Save a full AI generation trace (fire-and-forget safe — never throws). */

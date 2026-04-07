@@ -3333,6 +3333,29 @@ export async function loadReEngagementHistory(
   }
 }
 
+/** Delete a re-engagement history item. */
+export async function deleteReEngagementHistoryItem(
+  state: TelegramScenarioState,
+  agentId: string,
+  chatId: string,
+  sentAt: string,
+): Promise<void> {
+  if (!isReady(state)) {
+    return;
+  }
+  try {
+    await state.client!.request("telegram.agent.deleteReEngagementHistoryItem", {
+      agentId,
+      chatId,
+      sentAt,
+    });
+    // Reload history after deletion
+    await loadReEngagementHistory(state, agentId);
+  } catch (err) {
+    console.error("Failed to delete re-engagement history item:", err);
+  }
+}
+
 /** Manually trigger re-engagement check right now. */
 export async function runReEngagementNow(
   state: TelegramScenarioState,
