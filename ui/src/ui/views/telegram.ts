@@ -3246,7 +3246,7 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
 
 
       <!-- Re-engagement context block -->
-      <div class="tg-reeng-context-block">
+      <div class="tg-reeng-block tg-reeng-block-context" style="display:block;">
       <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:12px;">
         <div style="display:flex;align-items:center;gap:6px;">
           ${
