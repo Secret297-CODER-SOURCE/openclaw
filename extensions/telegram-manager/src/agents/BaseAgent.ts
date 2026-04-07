@@ -2404,7 +2404,54 @@ export abstract class BaseAgent extends EventEmitter {
 
     // ── Generate reply ────────────────────────────────────────────────────
     const workspaceTools = createWorkspaceTools(this.storage.getAgentWorkspaceDir(this.id));
-    const rawReply = await aiReply(userText, chatKey, systemPrompt, this.storage, workspaceTools);
+    const t0 = Date.now();
+    let rawReply: string;
+    let latencyMs: number;
+    let aiError: Error | null = null;
+
+    try {
+      rawReply = await aiReply(userText, chatKey, systemPrompt, this.storage, workspaceTools);
+      latencyMs = Date.now() - t0;
+    } catch (err) {
+      latencyMs = Date.now() - t0;
+      aiError = err instanceof Error ? err : new Error(String(err));
+
+      // Fire-and-forget error trace
+      this.fireAiTrace({
+        chatId,
+        inputData: {
+          mode: "schema",
+          nodeText: currentNode.text,
+          nodeType: currentNode.type,
+          userText,
+          systemPrompt: systemPrompt.slice(0, 500), // Truncate for storage
+          history: conversationHistory.slice(-8).map((m) => ({
+            role: m.role,
+            content: m.content.slice(0, 200),
+          })),
+          settings: {
+            strict,
+            hasTemplates,
+            buyerMode: settings.schemaDeliveryStyle === "buyer",
+            aggression: settings.buyerAggressionLevel ?? "balanced",
+          },
+        },
+        outputData: {
+          rawReply: null,
+          finalReply: null,
+          source: "error",
+          chosenBranch: null,
+        },
+        meta: {
+          latencyMs,
+          status: "error",
+          error: String(err),
+        },
+      });
+
+      // Re-throw to let caller handle
+      throw err;
+    }
 
     // ── Strip BRANCH: routing tag ─────────────────────────────────────────
     let reply = rawReply;
@@ -2502,6 +2549,40 @@ export abstract class BaseAgent extends EventEmitter {
       signal: _sig3,
       signalLabel: this.getSignalLabel(_sig3),
       clientMessages: this.getTriggerMessages(conversationHistory),
+    });
+
+    // ── Fire-and-forget AI trace for schema reply ─────────────────────────
+    this.fireAiTrace({
+      chatId,
+      inputData: {
+        mode: "schema",
+        nodeText: currentNode.text,
+        nodeType: currentNode.type,
+        userText,
+        systemPrompt,
+        history: conversationHistory.slice(-8).map((m) => ({
+          role: m.role,
+          content: m.content,
+        })),
+        settings: {
+          strict,
+          hasTemplates,
+          buyerMode: settings.schemaDeliveryStyle === "buyer",
+          aggression: settings.buyerAggressionLevel ?? "balanced",
+        },
+      },
+      outputData: {
+        rawReply,
+        finalReply: reply,
+        source: replySource,
+        chosenBranch: chosenNextNodeId ?? null,
+      },
+      meta: {
+        latencyMs,
+        status: "success",
+        signal: _sig3,
+        signalLabel: this.getSignalLabel(_sig3),
+      },
     });
 
     // ── Auto-save validated data to chat memory ───────────────────────────
@@ -3198,6 +3279,50 @@ export abstract class BaseAgent extends EventEmitter {
   }
 
   /**
+   * Fire-and-forget AI trace logger.
+   * Enqueues via setImmediate so it never blocks message delivery.
+   * Retries once on DB error; silently drops if retry also fails.
+   */
+  private fireAiTrace(trace: {
+    chatId: string;
+    inputData: Record<string, unknown>;
+    outputData: Record<string, unknown>;
+    meta: Record<string, unknown>;
+  }): void {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setImmediate(() => {
+      try {
+        this.storage.saveAiTrace({
+          id,
+          agentId: this.id,
+          chatId: trace.chatId,
+          type: "reactivation",
+          inputData: trace.inputData,
+          outputData: trace.outputData,
+          meta: trace.meta,
+        });
+      } catch {
+        // Retry once after short delay
+        setTimeout(() => {
+          try {
+            this.storage.saveAiTrace({
+              id,
+              agentId: this.id,
+              chatId: trace.chatId,
+              type: "reactivation",
+              inputData: trace.inputData,
+              outputData: trace.outputData,
+              meta: trace.meta,
+            });
+          } catch {
+            // Silently drop — tracing must never break main flow
+          }
+        }, 2000);
+      }
+    });
+  }
+
+  /**
    * Build the full system prompt for re-engagement AI calls.
    * Uses the custom override if set, otherwise the hardcoded base prompt
    * with context/anti-hallucination/append injected from re-engagement
@@ -3264,8 +3389,14 @@ export abstract class BaseAgent extends EventEmitter {
    * Use AI to personalise and make a re-engagement message more compelling.
    * Takes the base template (already substituted) and recent conversation history,
    * and returns a short, human-feeling message.
+   * @param contactName - resolved display name for the contact (already substituted into baseMessage).
+   *   Passed separately so the AI prompt can explicitly instruct the model to preserve it.
    */
-  private async enhanceReEngagementMessage(baseMessage: string, chatKey: string): Promise<string> {
+  private async enhanceReEngagementMessage(
+    baseMessage: string,
+    chatKey: string,
+    contactName: string | null,
+  ): Promise<string> {
     try {
       const { callAdapterOnce } = await import("../behaviors/AiReplyEngine.js");
       // Load full history — re-engagement needs the whole context to find
@@ -3300,15 +3431,22 @@ export abstract class BaseAgent extends EventEmitter {
           ? `• ЗАПРЕЩЕНО упоминать конкретное время созвона или встречи за пределами рабочего дня (${erWorkFrom}–${erWorkTo}). Если упоминаешь время — только в рамках ${erWorkFrom}–${erWorkTo}.\n`
           : "";
 
+      // Explicit name-preservation rule — injected when the template already
+      // contains a resolved contact name so the AI doesn't drop it.
+      const nameRule = contactName
+        ? `• Имя контакта — «${contactName}». Если в шаблоне оно уже есть — ОБЯЗАТЕЛЬНО сохрани его в том же месте.\n`
+        : "";
+
       const baseSystemPrompt =
         "Ты — эксперт по реактивации «замёрзших» сделок.\n" +
-        "Клиент давно молчит. Твоя задача: написать ОДНО сообщение которое вернёт его в разговор.\n\n" +
+        "Клиент давно молчит. Твоя задача: УЛУЧШИТЬ готовый шаблон так, чтобы он цеплял именно этого человека.\n\n" +
         "Алгоритм:\n" +
         "1. Прочитай историю и найди: что этому клиенту было реально интересно или важно — его слова, его задача, его боль.\n" +
         "2. Найди точку остановки: на чём именно диалог замер (возражение по цене, нужно подумать, ждал условий, отвлёкся, что-то смутило).\n" +
         "3. НЕ атакуй точку остановки напрямую — зайди с другого угла: дай новую конкретику, результат, или просто напомни о его же цели.\n" +
-        "4. Шаблон используй как скелет — текст перепиши полностью под этого человека.\n\n" +
+        "4. Адаптируй шаблон под этого человека — сохрани его структуру и призыв к действию, но сделай текст живым и конкретным.\n\n" +
         "Правила:\n" +
+        nameRule +
         "• Без 'привет', 'как дела', 'давно не общались', 'не забыл о нас'\n" +
         "• ЗАПРЕЩЕНО использовать слова 'сегодня', 'недавно', 'только что', 'вчера', 'на прошлой неделе' — ты не знаешь когда именно читают сообщение\n" +
         "• Без общих фраз — только конкретика из этого чата\n" +
@@ -3325,16 +3463,61 @@ export abstract class BaseAgent extends EventEmitter {
       const userPrompt =
         `Шаблон-скелет: "${baseMessage}"\n\n` +
         `История диалога:\n${historyText}\n\n` +
-        `Найди его главный интерес и точку остановки — и перепиши шаблон так, чтобы сообщение говорило именно о том, что важно ЕМУ. Призыв к действию сохрани.`;
+        `Найди его главный интерес и точку остановки — адаптируй шаблон так, чтобы сообщение говорило именно о том, что важно ЕМУ. Структуру шаблона и призыв к действию сохрани.`;
 
       // In non-buyer mode the same template applies — professional re-engagement
       // is equally useful regardless of delivery style.
       void erIsBuyer; // already embedded in prompt logic above
 
+      const t0 = Date.now();
       const enhanced = await callAdapterOnce(userPrompt, systemPrompt);
+      const latencyMs = Date.now() - t0;
       const cleaned = enhanced.replace(/^["«»']+|["«»']+$/g, "").trim();
-      return this.applyReEngagementGuards(cleaned, erSettings) || baseMessage;
-    } catch {
+      const final = this.applyReEngagementGuards(cleaned, erSettings) || baseMessage;
+
+      // Fire-and-forget trace (does not block)
+      const chatId = chatKey.split(":")[1] ?? chatKey;
+      this.fireAiTrace({
+        chatId,
+        inputData: {
+          mode: "template+enhance",
+          template: baseMessage,
+          contactName: contactName ?? null,
+          systemPrompt,
+          userPrompt,
+          history: allHistory.map((m) => ({ role: m.role, content: m.content })),
+          settings: {
+            tone: erAggression,
+            reEngagementContext: erSettings.reEngagementContext ?? null,
+            reEngagementAntiHallucination: erSettings.reEngagementAntiHallucination ?? null,
+            reEngagementAppend: erSettings.reEngagementAppend ?? null,
+            reEngagementSystemPromptOverride: erSettings.reEngagementSystemPrompt
+              ? erSettings.reEngagementSystemPrompt.slice(0, 200)
+              : null,
+          },
+        },
+        outputData: {
+          rawResponse: enhanced,
+          cleanedText: cleaned,
+          finalText: final,
+          usedFallback: final === baseMessage && cleaned !== baseMessage,
+        },
+        meta: {
+          latencyMs,
+          status: "success",
+        },
+      });
+
+      return final;
+    } catch (err) {
+      // Trace error case too
+      const chatId = chatKey.split(":")[1] ?? chatKey;
+      this.fireAiTrace({
+        chatId,
+        inputData: { mode: "template+enhance", template: baseMessage, contactName },
+        outputData: { finalText: baseMessage, usedFallback: true },
+        meta: { status: "error", error: String(err) },
+      });
       return baseMessage;
     }
   }
@@ -3433,13 +3616,55 @@ export abstract class BaseAgent extends EventEmitter {
           `представься, скажи что хотел уточнить актуальность, дай один конкретный повод ответить. ` +
           `Без клише, без "рад помочь", без вопросов про нужды. 1–2 предложения максимум.`;
 
+      const t0 = Date.now();
       const result = await callAdapterOnce(userPrompt, systemPrompt);
+      const latencyMs = Date.now() - t0;
       const cleaned = result.replace(/^["«»']+|["«»']+$/g, "").trim();
-      return this.applyReEngagementGuards(cleaned, arSettings) || null;
+      const final = this.applyReEngagementGuards(cleaned, arSettings) || null;
+
+      // Fire-and-forget trace
+      this.fireAiTrace({
+        chatId: contact.chatId,
+        inputData: {
+          mode: "ai",
+          contactName: name ?? null,
+          hasHistory,
+          systemPrompt,
+          userPrompt,
+          history: allHistory.map((m) => ({ role: m.role, content: m.content })),
+          settings: {
+            tone: arAggression,
+            reEngagementContext: arSettings.reEngagementContext ?? null,
+            reEngagementAntiHallucination: arSettings.reEngagementAntiHallucination ?? null,
+            reEngagementAppend: arSettings.reEngagementAppend ?? null,
+            reEngagementSystemPromptOverride: arSettings.reEngagementSystemPrompt
+              ? arSettings.reEngagementSystemPrompt.slice(0, 200)
+              : null,
+          },
+        },
+        outputData: {
+          rawResponse: result,
+          cleanedText: cleaned,
+          finalText: final,
+          usedFallback: final === null,
+        },
+        meta: {
+          latencyMs,
+          status: "success",
+        },
+      });
+
+      return final;
     } catch (e) {
       this.logger.warn(
         `[TG:${this.name}] re-engagement AI generation failed | chat=${contact.chatId}: ${String(e)}`,
       );
+      this.fireAiTrace({
+        chatId: contact.chatId,
+        inputData: { mode: "ai", contactName: contact.firstName ?? null },
+        outputData: { finalText: null },
+        meta: { status: "error", error: String(e) },
+      });
       return null;
     }
   }
@@ -3569,6 +3794,10 @@ export abstract class BaseAgent extends EventEmitter {
       const chatKey = `${this.id}:${contact.chatId}`;
       let message: string;
 
+      // Resolved display name used for name-preservation in AI enhancement
+      const contactDisplayName =
+        contact.firstName ?? (contact.username ? contact.username.replace(/^@/, "") : null);
+
       if (effectiveMode === "ai") {
         // Full AI mode: generate from chat history; fall back to template when history is empty.
         const aiMsg = await this.generateAiReEngagement(contact, chatKey);
@@ -3587,7 +3816,7 @@ export abstract class BaseAgent extends EventEmitter {
             contact.username,
           );
           if (!baseMessage) return false;
-          message = await this.enhanceReEngagementMessage(baseMessage, chatKey);
+          message = await this.enhanceReEngagementMessage(baseMessage, chatKey, contactDisplayName);
         } else {
           message = aiMsg;
         }
@@ -3603,7 +3832,7 @@ export abstract class BaseAgent extends EventEmitter {
         // Optionally enhance with AI (default: true for backward compat)
         const shouldEnhance = settings.reEngagementEnhanceTemplate !== false;
         message = shouldEnhance
-          ? await this.enhanceReEngagementMessage(baseMessage, chatKey)
+          ? await this.enhanceReEngagementMessage(baseMessage, chatKey, contactDisplayName)
           : this.applyReEngagementGuards(baseMessage, settings) || baseMessage;
       }
 
@@ -3615,6 +3844,7 @@ export abstract class BaseAgent extends EventEmitter {
           contact.chatId,
           dayLabel,
           contact.lastClientMsgAt,
+          message,
         );
         this.logger.info(
           `[TG:${this.name}] re-engagement sent | chat=${contact.chatId} day=${dayLabel}`,
