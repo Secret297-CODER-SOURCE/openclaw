@@ -237,7 +237,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.agent.getSettings": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           const settings = this.storage.getAgentSettings(String(p.agentId));
@@ -247,7 +247,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.agent.getPromptSummary": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           const s = this.storage.getAgentSettings(String(p.agentId));
@@ -414,7 +414,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.agent.setSettings": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           const incoming = (p.settings ?? {}) as Record<string, unknown>;
@@ -443,12 +443,12 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.agent.initLeadsGroup": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           const agent = (this.manager as any).pool?.get(String(p.agentId));
           if (!agent) {
-            fail("agent not found or not running");
+            fail("агент не найден или не запущен");
             break;
           }
           await (agent as any).initLeadsGroup();
@@ -456,9 +456,55 @@ export class TelegramPlugin implements GatewayPlugin {
           break;
         }
 
+        case "telegram.agent.runReEngagementNow": {
+          if (!p.agentId) {
+            fail("agentId обязателен");
+            break;
+          }
+          const agent = (this.manager as any).pool?.get(String(p.agentId));
+          if (!agent) {
+            fail("агент не найден или не запущен");
+            break;
+          }
+          // Call the private runReEngagementCheck method
+          await (agent as any).runReEngagementCheck();
+          respond({ ok: true });
+          break;
+        }
+
+        case "telegram.agent.reEngagementHistory": {
+          if (!p.agentId) {
+            fail("agentId обязателен");
+            break;
+          }
+          const limit = typeof p.limit === "number" ? p.limit : 20;
+          const history = this.storage.getReEngagementHistory(String(p.agentId), limit);
+          respond({ history });
+          break;
+        }
+
+        case "telegram.agent.aiTraces": {
+          if (!p.agentId) {
+            fail("agentId обязателен");
+            break;
+          }
+          const limit = typeof p.limit === "number" ? p.limit : 30;
+          const traces = this.storage.getAiTraces(String(p.agentId), limit);
+          // Parse JSON fields before sending
+          respond({
+            traces: traces.map((t) => ({
+              ...t,
+              inputData: JSON.parse(t.inputData) as unknown,
+              outputData: JSON.parse(t.outputData) as unknown,
+              meta: JSON.parse(t.meta) as unknown,
+            })),
+          });
+          break;
+        }
+
         case "telegram.agent.generateReEngagementTemplate": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           const agentRecord = this.manager.get(String(p.agentId));
@@ -518,7 +564,7 @@ export class TelegramPlugin implements GatewayPlugin {
             const cleaned = template.replace(/^["«»']+|["«»']+$/g, "").trim();
             respond({ template: cleaned });
           } catch (e) {
-            fail(`AI generation failed: ${String(e)}`);
+            fail(`Ошибка генерации ИИ: ${String(e)}`);
           }
           break;
         }
@@ -556,15 +602,15 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.agent.assignTask": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           if (!p.chatId) {
-            fail("chatId is required");
+            fail("chatId обязателен");
             break;
           }
           if (!p.task) {
-            fail("task is required");
+            fail("task обязателен");
             break;
           }
 
@@ -659,7 +705,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.agent.getCoreFiles": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           const workspaceDir = this.agentWorkspaceDir(String(p.agentId));
@@ -683,12 +729,12 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.agent.setCoreFile": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           const filename = String(p.filename ?? "");
           if (!(TelegramPlugin.CORE_FILE_NAMES as readonly string[]).includes(filename)) {
-            fail(`Invalid filename. Allowed: ${TelegramPlugin.CORE_FILE_NAMES.join(", ")}`);
+            fail(`Неверное имя файла. Разрешены: ${TelegramPlugin.CORE_FILE_NAMES.join(", ")}`);
             break;
           }
           const workspaceDir = this.agentWorkspaceDir(String(p.agentId));
@@ -700,7 +746,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.agent.getCoreFileContent": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           const filename = String(p.filename ?? "");
@@ -723,15 +769,15 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.mission.create": {
           if (!p.masterAgentId) {
-            fail("masterAgentId is required");
+            fail("masterAgentId обязателен");
             break;
           }
           if (!p.title) {
-            fail("title is required");
+            fail("title обязателен");
             break;
           }
           if (!p.goal) {
-            fail("goal is required");
+            fail("goal обязателен");
             break;
           }
           const mission = this.manager.createMission(
@@ -751,12 +797,12 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.mission.get": {
           if (!p.missionId) {
-            fail("missionId is required");
+            fail("missionId обязателен");
             break;
           }
           const mission = this.manager.getMission(String(p.missionId));
           if (!mission) {
-            fail(`Mission not found: ${p.missionId}`);
+            fail(`Миссия не найдена: ${p.missionId}`);
             break;
           }
           respond(mission);
@@ -765,7 +811,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.mission.complete": {
           if (!p.missionId) {
-            fail("missionId is required");
+            fail("missionId обязателен");
             break;
           }
           this.manager.completeMission(String(p.missionId));
@@ -775,7 +821,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.mission.messages": {
           if (!p.missionId) {
-            fail("missionId is required");
+            fail("missionId обязателен");
             break;
           }
           const messages = this.manager.getMissionMessages(
@@ -853,7 +899,7 @@ export class TelegramPlugin implements GatewayPlugin {
         case "telegram.config.setAnthropicKey": {
           const newKey = String(p.key ?? "").trim();
           if (!newKey) {
-            fail("key is required");
+            fail("key обязателен");
             break;
           }
           // Basic format sanity check — Anthropic keys start with "sk-ant-"
@@ -931,7 +977,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.scenario.getConversationStates": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           // Returns array of {chatId, nodeId} for all chats tracked for this agent.
@@ -944,7 +990,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.leads.list": {
           if (!p.agentId) {
-            fail("agentId required");
+            fail("agentId обязателен");
             break;
           }
           respond({ leads: this.storage.getLeads(String(p.agentId)) });
@@ -953,7 +999,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.leads.save": {
           if (!p.lead || typeof p.lead !== "object") {
-            fail("lead required");
+            fail("lead обязателен");
             break;
           }
           this.storage.saveLead(p.lead as import("./types.js").TelegramLead);
@@ -963,7 +1009,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.leads.delete": {
           if (!p.leadId) {
-            fail("leadId required");
+            fail("leadId обязателен");
             break;
           }
           this.storage.deleteLead(String(p.leadId));
@@ -975,7 +1021,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.scenario.getChatNodes": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           respond(this.storage.getChatNodes(String(p.agentId)));
@@ -984,11 +1030,11 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.scenario.saveChatNode": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           if (!p.node || typeof p.node !== "object") {
-            fail("node is required");
+            fail("node обязателен");
             break;
           }
           const n = p.node as Partial<ChatNode>;
@@ -1010,7 +1056,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.scenario.deleteChatNode": {
           if (!p.nodeId) {
-            fail("nodeId is required");
+            fail("nodeId обязателен");
             break;
           }
           this.storage.deleteChatNode(String(p.nodeId));
@@ -1020,7 +1066,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.scenario.clearChatNodes": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           this.storage.clearChatNodes(String(p.agentId));
@@ -1032,7 +1078,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.scenario.getFlowNodes": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           const fnScope = p.scope === "shared" ? "shared" : "personal";
@@ -1042,11 +1088,11 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.scenario.saveFlowNode": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           if (!p.node || typeof p.node !== "object") {
-            fail("node is required");
+            fail("node обязателен");
             break;
           }
           const fn = p.node as Partial<FlowNode>;
@@ -1072,7 +1118,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.scenario.deleteFlowNode": {
           if (!p.nodeId) {
-            fail("nodeId is required");
+            fail("nodeId обязателен");
             break;
           }
           this.storage.deleteFlowNode(String(p.nodeId));
@@ -1084,7 +1130,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.scenario.getDiagram": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           const gdScope = p.scope === "shared" ? "shared" : "personal";
@@ -1122,7 +1168,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.scenario.listDiagrams": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           const ldScope = p.scope === "shared" ? "shared" : "personal";
@@ -1132,7 +1178,7 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.scenario.deleteDiagram": {
           if (!p.id) {
-            fail("id is required");
+            fail("id обязателен");
             break;
           }
           this.storage.deleteDiagram(String(p.id));
@@ -1142,11 +1188,11 @@ export class TelegramPlugin implements GatewayPlugin {
 
         case "telegram.scenario.renameDiagram": {
           if (!p.id) {
-            fail("id is required");
+            fail("id обязателен");
             break;
           }
           if (typeof p.title !== "string") {
-            fail("title is required");
+            fail("title обязателен");
             break;
           }
           this.storage.renameDiagram(String(p.id), String(p.title));
@@ -1157,11 +1203,11 @@ export class TelegramPlugin implements GatewayPlugin {
         case "telegram.scenario.diagramFromImage": {
           // Receive a base64-encoded image, analyze it with the configured AI provider (vision).
           if (!p.imageBase64 || typeof p.imageBase64 !== "string") {
-            fail("imageBase64 is required");
+            fail("imageBase64 обязателен");
             break;
           }
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           const mediaType = typeof p.mediaType === "string" ? p.mediaType : "image/jpeg";
@@ -1229,11 +1275,11 @@ Rules:
         case "telegram.scenario.diagramFromText": {
           // Generate a new diagram from a text description, or modify the existing diagram.
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           if (!p.prompt || typeof p.prompt !== "string" || !p.prompt.trim()) {
-            fail("prompt is required");
+            fail("prompt обязателен");
             break;
           }
           const dftScope: "personal" | "shared" = p.scope === "shared" ? "shared" : "personal";
@@ -1318,11 +1364,11 @@ Rules:
         case "telegram.scenario.getCoachingTips": {
           // Analyse a single dialogue and return manager coaching tips.
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           if (!Array.isArray(p.pairs) || p.pairs.length === 0) {
-            fail("pairs array is required");
+            fail("pairs array обязателен");
             break;
           }
           const ctPairs = p.pairs as Array<{ input: string; response: string }>;
@@ -1409,7 +1455,7 @@ ${ctProductCtx ? `Продукт/ниша: ${ctProductCtx}\n` : ""}Настро�
         case "telegram.scenario.loadCoachingTips": {
           // Load all persisted coaching tips for an agent.
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           const lctScope: "personal" | "shared" = p.scope === "shared" ? "shared" : "personal";
@@ -1450,7 +1496,7 @@ ${ctProductCtx ? `Продукт/ниша: ${ctProductCtx}\n` : ""}Настро�
         case "telegram.scenario.processTraining": {
           // Parse Telegram export JSON, extract dialogue pairs. Does NOT save to DB.
           if (!p.json || typeof p.json !== "string") {
-            fail("json string is required");
+            fail("json string обязателен");
             break;
           }
           const result = extractTrainingPairs(p.json as string);
@@ -1460,11 +1506,11 @@ ${ctProductCtx ? `Продукт/ниша: ${ctProductCtx}\n` : ""}Настро�
 
         case "telegram.scenario.saveTrainingPairs": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           if (!Array.isArray(p.pairs)) {
-            fail("pairs array is required");
+            fail("pairs array обязателен");
             break;
           }
           const agentId = String(p.agentId);
@@ -1489,7 +1535,7 @@ ${ctProductCtx ? `Продукт/ниша: ${ctProductCtx}\n` : ""}Настро�
 
         case "telegram.scenario.getTrainingPairs": {
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           respond(this.storage.getTrainingPairs(String(p.agentId)));
@@ -1502,11 +1548,11 @@ ${ctProductCtx ? `Продукт/ниша: ${ctProductCtx}\n` : ""}Настро�
           const agentId = String(p.agentId ?? "");
           const scope = String(p.scope ?? "personal");
           if (!agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           if (!p.snapshot || typeof p.snapshot !== "object") {
-            fail("snapshot object is required");
+            fail("snapshot object обязателен");
             break;
           }
           this.storage.saveTrainingSnapshot(agentId, scope, p.snapshot as Record<string, unknown>);
@@ -1519,7 +1565,7 @@ ${ctProductCtx ? `Продукт/ниша: ${ctProductCtx}\n` : ""}Настро�
           const agentId = String(p.agentId ?? "");
           const scope = String(p.scope ?? "personal");
           if (!agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           respond(this.storage.getTrainingSnapshot(agentId, scope));
@@ -1529,7 +1575,7 @@ ${ctProductCtx ? `Продукт/ниша: ${ctProductCtx}\n` : ""}Настро�
         case "telegram.scenario.createNodesFromPairs": {
           // Convert saved training pairs into ChatNodes and FlowNodes
           if (!p.agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           const cnpScope: "personal" | "shared" = p.scope === "shared" ? "shared" : "personal";
@@ -1592,7 +1638,7 @@ ${ctProductCtx ? `Продукт/ниша: ${ctProductCtx}\n` : ""}Настро�
           const agentId = String(p.agentId ?? "");
           const kbScope: "personal" | "shared" = p.scope === "shared" ? "shared" : "personal";
           if (!agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           const raw = this.storage.getKnowledgeBase(agentId, kbScope);
@@ -1613,7 +1659,7 @@ ${ctProductCtx ? `Продукт/ниша: ${ctProductCtx}\n` : ""}Настро�
           const agentId = String(p.agentId ?? "");
           const kbScope2: "personal" | "shared" = p.scope === "shared" ? "shared" : "personal";
           if (!agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
           if (!Array.isArray(p.entries)) {
@@ -1630,7 +1676,7 @@ ${ctProductCtx ? `Продукт/ниша: ${ctProductCtx}\n` : ""}Настро�
           const agentId = String(p.agentId ?? "");
           const distScope: "personal" | "shared" = p.scope === "shared" ? "shared" : "personal";
           if (!agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
 
@@ -1772,7 +1818,7 @@ ${ctProductCtx ? `Продукт/ниша: ${ctProductCtx}\n` : ""}Настро�
           const agentId = String(p.agentId ?? "");
           const bftScope: "personal" | "shared" = p.scope === "shared" ? "shared" : "personal";
           if (!agentId) {
-            fail("agentId is required");
+            fail("agentId обязателен");
             break;
           }
 
