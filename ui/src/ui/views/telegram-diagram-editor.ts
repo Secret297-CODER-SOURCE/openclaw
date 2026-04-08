@@ -384,12 +384,12 @@ export class TgDiagramEditor extends LitElement {
     .kb-panel {
       border-bottom: 1px solid var(--border, #27272a);
       background: #111;
-      padding: 10px 12px;
-      max-height: 340px;
+      padding: 12px 14px;
+      max-height: 560px;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 10px;
     }
     .kb-panel__header {
       display: flex;
@@ -514,98 +514,291 @@ export class TgDiagramEditor extends LitElement {
       color: #e5e7eb;
     }
 
-    .kb-btn-distribute {
-      font-size: 10px;
-      padding: 3px 8px;
-      border-radius: 4px;
-      border: 1px solid rgba(167, 139, 250, 0.4);
-      background: rgba(167, 139, 250, 0.1);
-      color: #a78bfa;
-      cursor: pointer;
-    }
-    .kb-btn-distribute:disabled {
-      opacity: 0.55;
-      cursor: wait;
-    }
+    /* ── KB action buttons ── */
+    .kb-btn-distribute,
+    .kb-btn-edit,
+    .kb-btn-save,
+    .kb-btn-cancel,
     .kb-btn-close {
       font-size: 11px;
-      padding: 2px 7px;
-      border-radius: 4px;
+      font-weight: 500;
+      padding: 4px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition:
+        opacity 0.15s,
+        background 0.15s,
+        border-color 0.15s;
+      line-height: 1.4;
+    }
+    .kb-btn-distribute {
+      border: 1px solid rgba(167, 139, 250, 0.45);
+      background: rgba(167, 139, 250, 0.1);
+      color: #a78bfa;
+    }
+    .kb-btn-distribute:hover:not(:disabled) {
+      background: rgba(167, 139, 250, 0.18);
+    }
+    .kb-btn-distribute:disabled {
+      opacity: 0.45;
+      cursor: wait;
+    }
+
+    .kb-btn-edit {
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.05);
+      color: #d1d5db;
+    }
+    .kb-btn-edit:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.1);
+    }
+    .kb-btn-edit:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+
+    .kb-btn-save {
+      border: none;
+      background: linear-gradient(135deg, #7c3aed, #4f46e5);
+      color: #fff;
+      font-weight: 600;
+    }
+    .kb-btn-save:hover:not(:disabled) {
+      opacity: 0.88;
+    }
+    .kb-btn-save:disabled {
+      opacity: 0.45;
+      cursor: wait;
+    }
+
+    .kb-btn-cancel {
       border: 1px solid rgba(255, 255, 255, 0.1);
       background: transparent;
       color: #9ca3af;
-      cursor: pointer;
+    }
+    .kb-btn-cancel:hover {
+      color: #e5e7eb;
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .kb-btn-close {
+      padding: 3px 8px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: transparent;
+      color: #6b7280;
     }
     .kb-btn-close:hover {
       background: rgba(255, 255, 255, 0.06);
+      color: #e5e7eb;
     }
-    .kb-loading,
-    .kb-empty {
-      font-size: 11px;
+
+    /* ── KB state: loading / empty ── */
+    .kb-loading {
+      font-size: 12px;
       color: #6b7280;
-      padding: 4px 0;
+      padding: 8px 0;
+      text-align: center;
+    }
+    .kb-empty {
+      font-size: 12px;
+      color: #6b7280;
+      padding: 12px 4px;
+      line-height: 1.6;
     }
     .kb-empty p {
-      margin: 2px 0;
+      margin: 0 0 4px;
     }
+
+    /* ── KB entries / nodes ── */
     .kb-entries {
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 10px;
     }
     .kb-node {
-      border: 1px solid rgba(167, 139, 250, 0.2);
-      border-radius: 6px;
-      padding: 6px 8px;
+      border: 1px solid rgba(167, 139, 250, 0.18);
+      border-radius: 10px;
+      overflow: hidden;
     }
     .kb-node__title {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      margin-bottom: 4px;
+      gap: 8px;
+      padding: 8px 12px;
+      background: rgba(167, 139, 250, 0.07);
+      border-bottom: 1px solid rgba(167, 139, 250, 0.12);
     }
     .kb-node__name {
-      font-size: 11px;
+      font-size: 12px;
       font-weight: 600;
-      color: #d1d5db;
+      color: #c4b5fd;
+      flex: 1;
     }
     .kb-node__count {
       font-size: 10px;
       color: #6b7280;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 10px;
+      padding: 1px 7px;
     }
+    .kb-node-add-pair {
+      font-size: 10px;
+      font-weight: 500;
+      padding: 2px 8px;
+      border-radius: 5px;
+      border: 1px dashed rgba(167, 139, 250, 0.4);
+      background: transparent;
+      color: #a78bfa;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .kb-node-add-pair:hover {
+      background: rgba(167, 139, 250, 0.1);
+    }
+
+    /* ── KB pairs — view mode ── */
     .kb-pairs {
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 0;
+      padding: 6px 10px;
     }
     .kb-pair {
       display: flex;
-      gap: 6px;
+      gap: 8px;
       align-items: flex-start;
-      font-size: 10px;
+      font-size: 11px;
+      padding: 5px 4px;
+      border-radius: 6px;
+      transition: background 0.12s;
+    }
+    .kb-pair:hover {
+      background: rgba(255, 255, 255, 0.04);
     }
     .kb-pair__score {
       color: #fbbf24;
       flex-shrink: 0;
       font-size: 9px;
-      padding-top: 1px;
+      padding-top: 2px;
+      min-width: 22px;
     }
     .kb-pair__content {
       display: flex;
       flex-direction: column;
-      gap: 1px;
+      gap: 2px;
+      flex: 1;
+      min-width: 0;
     }
     .kb-pair__q {
       color: #e5e7eb;
+      line-height: 1.4;
     }
     .kb-pair__a {
       color: #9ca3af;
+      line-height: 1.4;
     }
     .kb-more {
       font-size: 10px;
       color: #6b7280;
-      padding-left: 20px;
+      padding: 3px 4px;
     }
+
+    /* ── KB pair — edit mode card ── */
+    .kb-pair--edit {
+      display: block;
+      padding: 0;
+    }
+    .kb-pair-card {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 10px;
+      padding: 11px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+    .kb-pair-card:hover {
+      border-color: rgba(167, 139, 250, 0.25);
+    }
+    .kb-pair-card__role {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .kb-pair-card__role--client {
+      color: #60a5fa;
+    }
+    .kb-pair-card__role--manager {
+      color: #34d399;
+    }
+    .kb-pair-card__textarea {
+      width: 100%;
+      box-sizing: border-box;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.09);
+      border-radius: 7px;
+      padding: 7px 10px;
+      color: #e5e7eb;
+      font-size: 12px;
+      font-family: inherit;
+      resize: vertical;
+      line-height: 1.45;
+      transition: border-color 0.15s;
+    }
+    .kb-pair-card__textarea:focus {
+      outline: none;
+      border-color: rgba(167, 139, 250, 0.5);
+      background: rgba(167, 139, 250, 0.04);
+    }
+    .kb-pair-card__footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 2px;
+    }
+    .kb-score-picker {
+      display: flex;
+      gap: 4px;
+    }
+    .kb-score-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 5px;
+      color: #6b7280;
+      font-size: 10px;
+      padding: 2px 8px;
+      cursor: pointer;
+      transition: all 0.12s;
+      line-height: 1.5;
+    }
+    .kb-score-btn.active {
+      background: rgba(251, 191, 36, 0.15);
+      border-color: rgba(251, 191, 36, 0.45);
+      color: #fbbf24;
+    }
+    .kb-score-btn:hover:not(.active) {
+      background: rgba(255, 255, 255, 0.09);
+      color: #d1d5db;
+    }
+    .kb-pair-del-btn {
+      background: transparent;
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      border-radius: 6px;
+      color: rgba(239, 68, 68, 0.55);
+      font-size: 12px;
+      padding: 3px 9px;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .kb-pair-del-btn:hover {
+      background: rgba(239, 68, 68, 0.1);
+      border-color: rgba(239, 68, 68, 0.5);
+      color: #f87171;
+    }
+
     .kb-panel__footer {
       font-size: 9px;
       color: #4b5563;
@@ -2174,7 +2367,9 @@ export class TgDiagramEditor extends LitElement {
                                 <button class="kb-node-add-pair"
                                   title="Добавить пару"
                                   @click=${() => {
-                                    if (!kb) {return;}
+                                    if (!kb) {
+                                      return;
+                                    }
                                     const newPair = { input: "", response: "", score: 2 };
                                     kb.entries[entryIdx].pairs.push(newPair);
                                     this.requestUpdate();
@@ -2199,57 +2394,68 @@ export class TgDiagramEditor extends LitElement {
                                       </div>
                                     `
                                   : html`
-                                      <div class="kb-pair__edit-content">
-                                        <div class="kb-pair__edit-row">
-                                          <label class="kb-pair__label">Вопрос:</label>
-                                          <textarea class="kb-pair__input"
-                                            rows="2"
-                                            .value=${pair.input}
-                                            @input=${(e: Event) => {
-                                              if (!kb) {return;}
-                                              kb.entries[entryIdx].pairs[pairIdx].input = (
-                                                e.target as HTMLTextAreaElement
-                                              ).value;
-                                            }}
-                                          ></textarea>
-                                        </div>
-                                        <div class="kb-pair__edit-row">
-                                          <label class="kb-pair__label">Ответ:</label>
-                                          <textarea class="kb-pair__input"
-                                            rows="2"
-                                            .value=${pair.response}
-                                            @input=${(e: Event) => {
-                                              if (!kb) {return;}
-                                              kb.entries[entryIdx].pairs[pairIdx].response = (
-                                                e.target as HTMLTextAreaElement
-                                              ).value;
-                                            }}
-                                          ></textarea>
-                                        </div>
-                                        <div class="kb-pair__edit-row">
-                                          <label class="kb-pair__label">Оценка:</label>
-                                          <select class="kb-pair__score-select"
-                                            .value=${String(pair.score)}
-                                            @change=${(e: Event) => {
-                                              if (!kb) {return;}
-                                              kb.entries[entryIdx].pairs[pairIdx].score = parseInt(
-                                                (e.target as HTMLSelectElement).value,
-                                                10,
-                                              );
-                                            }}>
-                                            <option value="1">★ (1)</option>
-                                            <option value="2">★★ (2)</option>
-                                            <option value="3">★★★ (3)</option>
-                                          </select>
-                                          <button class="kb-pair__delete"
+                                      <div class="kb-pair-card">
+                                        <div class="kb-pair-card__role kb-pair-card__role--client">👤 Клиент</div>
+                                        <textarea
+                                          class="kb-pair-card__textarea"
+                                          rows="2"
+                                          .value=${pair.input}
+                                          placeholder="Сообщение клиента…"
+                                          @input=${(e: Event) => {
+                                            if (!kb) {
+                                              return;
+                                            }
+                                            kb.entries[entryIdx].pairs[pairIdx].input = (
+                                              e.target as HTMLTextAreaElement
+                                            ).value;
+                                          }}
+                                        ></textarea>
+                                        <div class="kb-pair-card__role kb-pair-card__role--manager">🤖 Менеджер</div>
+                                        <textarea
+                                          class="kb-pair-card__textarea"
+                                          rows="2"
+                                          .value=${pair.response}
+                                          placeholder="Ответ менеджера…"
+                                          @input=${(e: Event) => {
+                                            if (!kb) {
+                                              return;
+                                            }
+                                            kb.entries[entryIdx].pairs[pairIdx].response = (
+                                              e.target as HTMLTextAreaElement
+                                            ).value;
+                                          }}
+                                        ></textarea>
+                                        <div class="kb-pair-card__footer">
+                                          <div class="kb-score-picker">
+                                            ${[1, 2, 3].map(
+                                              (n) => html`
+                                                <button
+                                                  type="button"
+                                                  class="kb-score-btn ${pair.score === n ? "active" : ""}"
+                                                  title="Оценка ${n}"
+                                                  @click=${() => {
+                                                    if (!kb) {
+                                                      return;
+                                                    }
+                                                    kb.entries[entryIdx].pairs[pairIdx].score = n;
+                                                    this.requestUpdate();
+                                                  }}
+                                                >${"★".repeat(n)}</button>
+                                              `,
+                                            )}
+                                          </div>
+                                          <button
+                                            type="button"
+                                            class="kb-pair-del-btn"
                                             title="Удалить пару"
                                             @click=${() => {
-                                              if (!kb) {return;}
+                                              if (!kb) {
+                                                return;
+                                              }
                                               kb.entries[entryIdx].pairs.splice(pairIdx, 1);
                                               this.requestUpdate();
-                                            }}>
-                                            🗑️ Удалить
-                                          </button>
+                                            }}
+                                          >🗑️</button>
                                         </div>
                                       </div>
                                     `

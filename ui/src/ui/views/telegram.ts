@@ -238,6 +238,12 @@ export type TelegramProps = {
   onTrainingScopeChange: (agentId: string, scope: TrainingScope) => void;
   onTrainingDeletePair: (chatId: string, pairIdx: number) => void;
   onTrainingDeleteGroup: (chatId: string) => void;
+  // Inline pair editing
+  editingPair: { chatId: string; pairIdx: number; input: string; response: string } | null;
+  onTrainingEditPair: (chatId: string, pairIdx: number) => void;
+  onTrainingEditPairChange: (field: "input" | "response", value: string) => void;
+  onTrainingEditPairSave: () => void;
+  onTrainingEditPairCancel: () => void;
   // Inline JSON editor
   trainingEditorOpen: boolean;
   trainingEditorJson: string;
@@ -310,10 +316,15 @@ export type TelegramProps = {
   onWorkModeApply: (agentId: string) => void;
   onInitLeadsGroup: (agentId: string) => void;
   onRunReEngagementNow: (agentId: string) => void;
+  /** Active top-level re-engagement tab: "main" | "prompts" | "history" | "traces" */
+  reEngTab: string;
+  onSwitchReEngTab: (tab: string) => void;
   reEngagementHistory: import("../controllers/telegram.ts").ReEngagementHistoryItem[];
   reEngagementHistoryLoading: boolean;
   onLoadReEngagementHistory: (agentId: string) => void;
   onDeleteReEngagementHistoryItem?: (agentId: string, chatId: string, sentAt: string) => void;
+  /** Open the chat for a re-engagement history item (switches to Chat panel + selects dialog). */
+  onOpenChatFromHistory?: (agentId: string, chatId: string, name: string) => void;
   aiTraces: import("../controllers/telegram.ts").AiTrace[];
   aiTracesLoading: boolean;
   onLoadAiTraces: (agentId: string) => void;
@@ -2018,6 +2029,11 @@ function renderDetail(props: TelegramProps) {
     onTrainingScopeChange: props.onTrainingScopeChange,
     onTrainingDeletePair: props.onTrainingDeletePair,
     onTrainingDeleteGroup: props.onTrainingDeleteGroup,
+    editingPair: props.editingPair,
+    onTrainingEditPair: props.onTrainingEditPair,
+    onTrainingEditPairChange: props.onTrainingEditPairChange,
+    onTrainingEditPairSave: props.onTrainingEditPairSave,
+    onTrainingEditPairCancel: props.onTrainingEditPairCancel,
     trainingEditorOpen: props.trainingEditorOpen,
     trainingEditorJson: props.trainingEditorJson,
     trainingEditorError: props.trainingEditorError,
@@ -2303,20 +2319,6 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
     const targetBlock = panel.querySelector(`.tg-reeng-block-${target}`) as HTMLElement;
     if (targetBlock) {
       targetBlock.style.display = "";
-    }
-
-    // Auto-load history when switching to history tab
-    if (
-      target === "history" &&
-      props.reEngagementHistory.length === 0 &&
-      !props.reEngagementHistoryLoading
-    ) {
-      props.onLoadReEngagementHistory(agent.id);
-    }
-
-    // Auto-load AI traces when switching to traces tab
-    if (target === "traces" && props.aiTraces.length === 0 && !props.aiTracesLoading) {
-      props.onLoadAiTraces(agent.id);
     }
   };
 
@@ -2791,54 +2793,28 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
       <!-- ═══════════ RE-ENGAGEMENT TAB ═══════════ -->
       <div class="tg-prompts-reeng-content" style="display:none;">
 
-      <!-- Toggle buttons for Reactivation / Prompts -->
-      <div class="tg-toggle-group" style="margin-bottom:18px;align-self:flex-start;">
-        <label class="tg-toggle-option tg-reeng-main-tab tg-toggle-option--active"
-          @click=${(e: Event) => {
-            const panel = (e.target as HTMLElement).closest(
-              ".tg-prompts-reeng-content",
-            ) as HTMLElement;
-            panel?.querySelector(".tg-reeng-main-tab")?.classList.add("tg-toggle-option--active");
-            panel
-              ?.querySelector(".tg-reeng-prompts-tab")
-              ?.classList.remove("tg-toggle-option--active");
-            const mainBlock = panel?.querySelector(".tg-reeng-main-block") as HTMLElement;
-            const promptsBlock = panel?.querySelector(".tg-reeng-prompts-block") as HTMLElement;
-            if (mainBlock) {
-              mainBlock.style.display = "";
-            }
-            if (promptsBlock) {
-              promptsBlock.style.display = "none";
-            }
-          }}>
+      <!-- Toggle buttons: Реактивация / Промпты / История / AI Traces -->
+      <div class="tg-toggle-group" style="margin-bottom:18px;align-self:flex-start;flex-wrap:wrap;">
+        <label class="tg-toggle-option ${props.reEngTab === "main" ? "tg-toggle-option--active" : ""}"
+          @click=${() => props.onSwitchReEngTab("main")}>
           🔁 Реактивация
         </label>
-        <label class="tg-toggle-option tg-reeng-prompts-tab"
-          @click=${(e: Event) => {
-            const panel = (e.target as HTMLElement).closest(
-              ".tg-prompts-reeng-content",
-            ) as HTMLElement;
-            panel
-              ?.querySelector(".tg-reeng-prompts-tab")
-              ?.classList.add("tg-toggle-option--active");
-            panel
-              ?.querySelector(".tg-reeng-main-tab")
-              ?.classList.remove("tg-toggle-option--active");
-            const mainBlock = panel?.querySelector(".tg-reeng-main-block") as HTMLElement;
-            const promptsBlock = panel?.querySelector(".tg-reeng-prompts-block") as HTMLElement;
-            if (mainBlock) {
-              mainBlock.style.display = "none";
-            }
-            if (promptsBlock) {
-              promptsBlock.style.display = "";
-            }
-          }}>
-          🧠 Промпты реактивации
+        <label class="tg-toggle-option ${props.reEngTab === "prompts" ? "tg-toggle-option--active" : ""}"
+          @click=${() => props.onSwitchReEngTab("prompts")}>
+          🧠 Промпты
+        </label>
+        <label class="tg-toggle-option ${props.reEngTab === "history" ? "tg-toggle-option--active" : ""}"
+          @click=${() => props.onSwitchReEngTab("history")}>
+          📋 История
+        </label>
+        <label class="tg-toggle-option ${props.reEngTab === "traces" ? "tg-toggle-option--active" : ""}"
+          @click=${() => props.onSwitchReEngTab("traces")}>
+          🔍 AI Traces
         </label>
       </div>
 
       <!-- ── 🔁 Реактивация block ────────────────────────────────────────── -->
-      <div class="tg-reeng-main-block">
+      <div class="tg-reeng-main-block" style=${props.reEngTab === "main" ? "" : "display:none;"}>
       <div class="tg-prompts-section-title">🔁 Реактивация</div>
 
       <div class="tg-setting-row">
@@ -3221,7 +3197,7 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
       </div><!-- end tg-reeng-main-block -->
 
       <!-- ── 🧠 Промпты реактивации block ─────────────────────────────────── -->
-      <div class="tg-reeng-prompts-block" style="display:none;">
+      <div class="tg-reeng-prompts-block" style=${props.reEngTab === "prompts" ? "" : "display:none;"}>
       <div class="tg-prompts-section-title">🧠 Промпты реактивации</div>
       <div style="font-size:11px;color:var(--text-muted);line-height:1.5;margin-bottom:12px;">
         Настройте промпт, контекст и правила, которые ИИ использует при генерации сообщений реактивации.
@@ -3255,8 +3231,6 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
         <label class="tg-toggle-option tg-reeng-tab" data-target="append" @click=${switchReengTab}>✏️ Доп. инструкции</label>
         <label class="tg-toggle-option tg-reeng-tab" data-target="sysprompt" @click=${switchReengTab}>📝 Системный промпт</label>
         <label class="tg-toggle-option tg-reeng-tab" data-target="tplgen" @click=${switchReengTab}>🎲 Генерация шаблонов</label>
-        <label class="tg-toggle-option tg-reeng-tab" data-target="history" @click=${switchReengTab}>📋 История</label>
-        <label class="tg-toggle-option tg-reeng-tab" data-target="traces" @click=${switchReengTab}>🔍 AI Traces</label>
       </div>
 
 
@@ -3535,8 +3509,14 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
       </div>
       </div>
 
-      <!-- ── 📋 История реактивации block ─────────────────────────────────── -->
-      <div class="tg-reeng-block tg-reeng-block-history" style="display:none;">
+      </div><!-- end tg-reeng-prompts-block -->
+
+      <!-- ── 📋 История реактивации (top-level) ─────────────────────────────── -->
+      <div style=${props.reEngTab === "history" ? "" : "display:none;"}>
+      <div class="tg-prompts-section-title">📋 История отправок</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">
+        Последние сообщения, отправленные агентом в рамках реактивации — чтобы понять, что именно пишет ИИ.
+      </div>
       <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:12px;">
         <button type="button" class="btn"
           style="font-size:11px;padding:2px 10px;"
@@ -3544,13 +3524,10 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
           @click=${() => props.onLoadReEngagementHistory(agent.id)}
         >${props.reEngagementHistoryLoading ? "⏳…" : "🔄 Загрузить"}</button>
       </div>
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;">
-        Последние сообщения, отправленные агентом в рамках реактивации — чтобы понять, что именно пишет ИИ.
-      </div>
       ${
         props.reEngagementHistory.length > 0
           ? html`
-            <div style="display:flex;flex-direction:column;gap:8px;max-height:400px;overflow-y:auto;">
+            <div style="display:flex;flex-direction:column;gap:8px;max-height:480px;overflow-y:auto;">
               ${props.reEngagementHistory.map((item) => {
                 const name = item.firstName ?? (item.username ? `@${item.username}` : item.chatId);
                 const date = new Date(item.sentAt).toLocaleString("ru-RU", {
@@ -3560,15 +3537,35 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                   minute: "2-digit",
                 });
                 return html`
-                  <div style="
-                    background:var(--surface-2,rgba(255,255,255,0.04));
-                    border:1px solid var(--border,rgba(255,255,255,0.08));
-                    border-radius:8px;
-                    padding:10px 12px;
-                    font-size:12px;
-                  ">
+                  <div
+                    style="
+                      background:var(--surface-2,rgba(255,255,255,0.04));
+                      border:1px solid var(--border,rgba(255,255,255,0.08));
+                      border-radius:8px;
+                      padding:10px 12px;
+                      font-size:12px;
+                      cursor:pointer;
+                      transition:border-color 0.15s;
+                    "
+                    @click=${(e: Event) => {
+                      // Don't open chat if clicking the delete button
+                      if ((e.target as HTMLElement).closest("button")) {
+                        return;
+                      }
+                      props.onOpenChatFromHistory?.(agent.id, item.chatId, name);
+                    }}
+                    @mouseenter=${(e: Event) => {
+                      (e.currentTarget as HTMLElement).style.borderColor =
+                        "var(--accent,rgba(99,102,241,0.6))";
+                    }}
+                    @mouseleave=${(e: Event) => {
+                      (e.currentTarget as HTMLElement).style.borderColor =
+                        "var(--border,rgba(255,255,255,0.08))";
+                    }}
+                    title="Открыть чат"
+                  >
                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:8px;">
-                      <span style="font-weight:600;color:var(--text-main);">${name}</span>
+                      <span style="font-weight:600;color:var(--text-main);">💬 ${name}</span>
                       <div style="display:flex;align-items:center;gap:8px;">
                         <span style="color:var(--text-muted);font-size:11px;white-space:nowrap;">${date} · день ${item.delayDays}</span>
                         <button
@@ -3597,6 +3594,36 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                             </div>
                           `
                     }
+                    ${
+                      item.reasonText
+                        ? html`
+                            <details style="margin-top:6px;">
+                              <summary style="
+                                cursor:pointer;
+                                font-size:11px;
+                                color:var(--text-muted);
+                                user-select:none;
+                                list-style:none;
+                                display:flex;
+                                align-items:center;
+                                gap:4px;
+                              ">💡 Анализ ИИ</summary>
+                              <div style="
+                                margin-top:5px;
+                                padding:7px 10px;
+                                background:rgba(251,191,36,0.06);
+                                border-left:2px solid rgba(251,191,36,0.4);
+                                border-radius:4px;
+                                font-size:11px;
+                                color:var(--text-muted);
+                                line-height:1.5;
+                                white-space:pre-wrap;
+                                word-break:break-word;
+                              ">${item.reasonText}</div>
+                            </details>
+                          `
+                        : ""
+                    }
                   </div>
                 `;
               })}
@@ -3607,13 +3634,16 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                 <div style="color: var(--text-muted); font-size: 12px">Загрузка...</div>
               `
             : html`
-                <div style="color: var(--text-muted); font-size: 12px">История пуста</div>
+                <div style="color: var(--text-muted); font-size: 12px">
+                  История пуста — данные появятся после первой отправки
+                </div>
               `
       }
-      </div>
+      </div><!-- end history block -->
 
-      <!-- ── 🔍 AI Traces — полный аудит генерации block ──────────────────── -->
-      <div class="tg-reeng-block tg-reeng-block-traces" style="display:none;">
+      <!-- ── 🔍 AI Traces — полный аудит генерации (top-level) ─────────────── -->
+      <div style=${props.reEngTab === "traces" ? "" : "display:none;"}>
+      <div class="tg-prompts-section-title">🔍 AI Traces — аудит генерации</div>
       <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:12px;">
         <button type="button" class="btn"
           style="font-size:11px;padding:2px 10px;"
@@ -3627,7 +3657,7 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
       ${
         props.aiTraces.length > 0
           ? html`
-            <div style="display:flex;flex-direction:column;gap:10px;max-height:600px;overflow-y:auto;">
+            <div style="display:flex;flex-direction:column;gap:10px;">
               ${props.aiTraces.map((trace) => {
                 const date = new Date(trace.createdAt).toLocaleString("ru-RU", {
                   day: "numeric",
@@ -3645,6 +3675,21 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                 const history = trace.inputData?.history ?? [];
                 const settings = trace.inputData?.settings ?? {};
 
+                const modeLabel =
+                  mode === "ai"
+                    ? "🤖 ИИ генерирует"
+                    : mode === "template+enhance"
+                      ? "✨ ИИ улучшает шаблон"
+                      : mode === "template-only"
+                        ? "📋 Шаблон (без ИИ)"
+                        : mode === "schema"
+                          ? "🔄 Схема AI-ответ"
+                          : `⚙️ ${mode}`;
+                const template = (trace.inputData?.template as string | null) ?? null;
+                const contactName = (trace.inputData?.contactName as string | null) ?? null;
+
+                const usedFallback = (trace.outputData?.usedFallback as boolean) ?? false;
+
                 return html`
                   <details style="
                     background:var(--surface-2,rgba(255,255,255,0.04));
@@ -3653,192 +3698,168 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                     font-size:12px;
                   ">
                     <summary style="
-                      padding:10px 12px;
+                      padding:10px 14px;
                       cursor:pointer;
                       display:flex;
                       align-items:center;
                       gap:8px;
                       list-style:none;
                       user-select:none;
+                      border-bottom:1px solid rgba(255,255,255,0.06);
                     ">
-                      <span style="font-size:14px;">${isError ? "❌" : "✅"}</span>
-                      <span style="font-weight:600;flex:1;color:var(--text-main);">
-                        ${mode === "ai" ? "🤖 ИИ генерирует" : "✨ ИИ улучшает шаблон"}
-                        · chat ${trace.chatId}
+                      <span style="font-size:13px;">${isError ? "❌" : "✅"}</span>
+                      <span style="font-weight:600;flex:1;color:rgba(220,220,220,0.9);font-size:12px;">
+                        ${modeLabel}
+                        ${contactName ? html`· <span style="color:#4f8ef7;">${contactName}</span>` : ""}
+                        <span style="color:rgba(150,150,150,0.8);font-weight:400;"> · chat ${trace.chatId}</span>
                       </span>
-                      <span style="color:var(--text-muted);font-size:11px;white-space:nowrap;">
+                      <span style="color:rgba(150,150,150,0.8);font-size:11px;white-space:nowrap;">
                         ${latency ? `${latency} · ` : ""}${date}
                       </span>
                     </summary>
 
-                    <div style="padding:0 12px 12px;display:flex;flex-direction:column;gap:10px;">
+                    <div style="padding:12px 14px;display:flex;flex-direction:column;gap:12px;overflow-y:auto;max-height:700px;">
 
-                      <!-- Итоговый текст -->
+                      <!-- ① Отправлено клиенту -->
                       <div>
-                        <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.05em;">
-                          ${isError ? "ОШИБКА" : "ИТОГОВЫЙ ТЕКСТ"}
+                        <div style="font-size:10px;font-weight:700;color:${isError ? "#ef4444" : "rgba(61,187,112,0.9)"};margin-bottom:5px;text-transform:uppercase;letter-spacing:0.07em;">
+                          ${isError ? "⛔ ОШИБКА" : "✉️ ОТПРАВЛЕНО КЛИЕНТУ"}
+                          ${
+                            usedFallback
+                              ? html`
+                                  <span style="color: #f59e0b; margin-left: 6px">⚠ фоллбэк (AI сбросил)</span>
+                                `
+                              : ""
+                          }
                         </div>
                         <div style="
                           background:var(--surface-3,rgba(255,255,255,0.03));
                           border:1px solid ${isError ? "rgba(239,68,68,0.3)" : "rgba(61,187,112,0.2)"};
                           border-radius:6px;
-                          padding:8px 10px;
+                          padding:10px 12px;
                           white-space:pre-wrap;
                           word-break:break-word;
                           color:${isError ? "#ef4444" : "var(--text-main)"};
-                          line-height:1.5;
+                          line-height:1.6;
+                          font-size:12px;
                         ">
-                          ${
-                            isError
-                              ? (trace.meta?.error ?? "неизвестная ошибка")
-                              : (finalText ?? "(нет)")
-                          }
+                          ${isError ? (trace.meta?.error ?? "неизвестная ошибка") : (finalText ?? "(нет)")}
                         </div>
                       </div>
 
-                      <!-- Сырой ответ модели (если отличается) -->
+                      <!-- ② Шаблон до обработки (если есть и отличается от финала) -->
                       ${
-                        rawResponse && rawResponse !== finalText
+                        template && template !== finalText
                           ? html`
                         <div>
-                          <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.05em;">RAW ОТВЕТ МОДЕЛИ</div>
+                          <div style="font-size:10px;font-weight:700;color:var(--text-muted);margin-bottom:5px;text-transform:uppercase;letter-spacing:0.07em;">📄 ШАБЛОН (до ИИ)</div>
                           <div style="
-                            background:var(--surface-3,rgba(255,255,255,0.03));
+                            background:var(--surface-3,rgba(255,255,255,0.02));
+                            border:1px solid var(--border,rgba(255,255,255,0.06));
                             border-radius:6px;
-                            padding:8px 10px;
+                            padding:10px 12px;
                             white-space:pre-wrap;
                             word-break:break-word;
                             color:var(--text-muted);
+                            line-height:1.6;
+                            font-size:12px;
                             font-style:italic;
-                            line-height:1.5;
+                          ">${template}</div>
+                        </div>
+                      `
+                          : ""
+                      }
+
+                      <!-- ③ Raw AI ответ (если отличается от финала и от шаблона) -->
+                      ${
+                        rawResponse && rawResponse !== finalText && rawResponse !== template
+                          ? html`
+                        <div>
+                          <div style="font-size:10px;font-weight:700;color:var(--text-muted);margin-bottom:5px;text-transform:uppercase;letter-spacing:0.07em;">🤖 RAW ОТВЕТ ИИ (до чистки)</div>
+                          <div style="
+                            background:var(--surface-3,rgba(255,255,255,0.02));
+                            border-radius:6px;
+                            padding:10px 12px;
+                            white-space:pre-wrap;
+                            word-break:break-word;
+                            color:var(--text-muted);
+                            line-height:1.6;
+                            font-size:12px;
                           ">${rawResponse}</div>
                         </div>
                       `
                           : ""
                       }
 
-                      <!-- Полный итоговый запрос в ИИ -->
-                      ${
-                        systemPrompt || userPrompt
-                          ? html`
-                        <details open>
-                          <summary style="font-size:11px;font-weight:600;color:#4f8ef7;cursor:pointer;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">
-                            📤 ПОЛНЫЙ ЗАПРОС В ИИ (развернуть)
-                          </summary>
-                          <div style="
-                            margin:4px 0 0;
-                            background:var(--surface-3,rgba(79,142,247,0.08));
-                            border:1px solid rgba(79,142,247,0.3);
-                            border-radius:6px;
-                            padding:10px 12px;
-                            max-height:400px;
-                            overflow-y:auto;
-                          ">
-                            ${
-                              systemPrompt
-                                ? html`
-                              <div style="margin-bottom:12px;">
-                                <div style="font-size:10px;font-weight:600;color:rgba(79,142,247,0.9);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em;">SYSTEM:</div>
-                                <pre style="
-                                  margin:0;
-                                  white-space:pre-wrap;
-                                  word-break:break-word;
-                                  font-size:11px;
-                                  color:var(--text-main);
-                                  line-height:1.5;
-                                  font-family:var(--font-mono,monospace);
-                                ">${systemPrompt}</pre>
-                              </div>
-                            `
-                                : ""
-                            }
-                            ${
-                              userPrompt
-                                ? html`
-                              <div>
-                                <div style="font-size:10px;font-weight:600;color:rgba(79,142,247,0.9);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em;">USER:</div>
-                                <pre style="
-                                  margin:0;
-                                  white-space:pre-wrap;
-                                  word-break:break-word;
-                                  font-size:11px;
-                                  color:var(--text-main);
-                                  line-height:1.5;
-                                  font-family:var(--font-mono,monospace);
-                                ">${userPrompt}</pre>
-                              </div>
-                            `
-                                : ""
-                            }
-                          </div>
-                        </details>
-                      `
-                          : ""
-                      }
-
-                      <!-- User prompt -->
+                      <!-- ④ USER PROMPT — collapsible -->
                       ${
                         userPrompt
                           ? html`
                         <details>
-                          <summary style="font-size:11px;font-weight:600;color:var(--text-muted);cursor:pointer;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">
-                            USER PROMPT (развернуть)
-                          </summary>
-                          <pre style="
-                            margin:4px 0 0;
-                            background:var(--surface-3,rgba(255,255,255,0.03));
+                          <summary style="
+                            font-size:10px;font-weight:700;color:rgba(79,142,247,0.9);
+                            cursor:pointer;text-transform:uppercase;letter-spacing:0.07em;
+                            user-select:none;list-style:none;
+                          ">📤 USER PROMPT (что отправили ИИ) ▶</summary>
+                          <div style="
+                            margin-top:5px;
+                            background:rgba(79,142,247,0.06);
+                            border:1px solid rgba(79,142,247,0.2);
                             border-radius:6px;
-                            padding:8px 10px;
+                            padding:10px 12px;
                             white-space:pre-wrap;
                             word-break:break-word;
                             font-size:11px;
-                            color:var(--text-main);
-                            line-height:1.5;
-                            max-height:200px;
+                            color:rgba(220,220,220,0.9);
+                            line-height:1.6;
+                            max-height:350px;
                             overflow-y:auto;
-                          ">${userPrompt}</pre>
+                          ">${userPrompt}</div>
                         </details>
                       `
                           : ""
                       }
 
-                      <!-- System prompt -->
+                      <!-- ⑤ SYSTEM PROMPT — collapsible -->
                       ${
                         systemPrompt
                           ? html`
                         <details>
-                          <summary style="font-size:11px;font-weight:600;color:var(--text-muted);cursor:pointer;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">
-                            SYSTEM PROMPT (развернуть)
-                          </summary>
-                          <pre style="
-                            margin:4px 0 0;
-                            background:var(--surface-3,rgba(255,255,255,0.03));
+                          <summary style="
+                            font-size:10px;font-weight:700;color:rgba(79,142,247,0.7);
+                            cursor:pointer;text-transform:uppercase;letter-spacing:0.07em;
+                            user-select:none;list-style:none;
+                          ">🔧 SYSTEM PROMPT ▶</summary>
+                          <div style="
+                            margin-top:5px;
+                            background:rgba(79,142,247,0.04);
+                            border:1px solid rgba(79,142,247,0.15);
                             border-radius:6px;
-                            padding:8px 10px;
+                            padding:10px 12px;
                             white-space:pre-wrap;
                             word-break:break-word;
                             font-size:11px;
-                            color:var(--text-muted);
-                            line-height:1.5;
-                            max-height:300px;
+                            color:rgba(180,180,180,0.85);
+                            line-height:1.6;
+                            max-height:400px;
                             overflow-y:auto;
-                          ">${systemPrompt}</pre>
+                          ">${systemPrompt}</div>
                         </details>
                       `
                           : ""
                       }
 
-                      <!-- История (кол-во сообщений) -->
+                      <!-- ⑥ История диалога — collapsed (может быть длинной) -->
                       ${
                         (history as Array<unknown>).length > 0
                           ? html`
                         <details>
-                          <summary style="font-size:11px;font-weight:600;color:var(--text-muted);cursor:pointer;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">
-                            ИСТОРИЯ (${(history as Array<unknown>).length} сообщений, развернуть)
+                          <summary style="font-size:10px;font-weight:700;color:var(--text-muted);cursor:pointer;text-transform:uppercase;letter-spacing:0.07em;user-select:none;list-style:none;">
+                            💬 ИСТОРИЯ ДИАЛОГА (${(history as Array<unknown>).length} сообщ.) ▶
                           </summary>
                           <div style="
-                            margin-top:4px;
-                            max-height:250px;
+                            margin-top:6px;
+                            max-height:280px;
                             overflow-y:auto;
                             display:flex;
                             flex-direction:column;
@@ -3847,19 +3868,15 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                             ${(history as Array<{ role: string; content: string }>).map(
                               (m) => html`
                               <div style="
-                                padding:4px 8px;
-                                border-radius:4px;
-                                background:${
-                                  m.role === "user"
-                                    ? "rgba(99,102,241,0.08)"
-                                    : "rgba(61,187,112,0.06)"
-                                };
+                                padding:5px 8px;
+                                border-radius:5px;
+                                background:${m.role === "user" ? "rgba(99,102,241,0.08)" : "rgba(61,187,112,0.06)"};
                                 font-size:11px;
                                 color:var(--text-main);
-                                line-height:1.4;
+                                line-height:1.5;
                               ">
-                                <span style="font-weight:600;color:var(--text-muted);">${m.role === "user" ? "Клиент" : "Агент"}:</span>
-                                ${m.content.slice(0, 300)}${m.content.length > 300 ? "…" : ""}
+                                <span style="font-weight:600;color:var(--text-muted);font-size:10px;text-transform:uppercase;">${m.role === "user" ? "Клиент" : "Агент"}:</span>
+                                ${m.content}
                               </div>
                             `,
                             )}
@@ -3869,24 +3886,25 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                           : ""
                       }
 
-                      <!-- Настройки -->
+                      <!-- ⑦ Настройки — collapsed -->
                       ${
                         Object.keys(settings as object).length > 0
                           ? html`
                         <details>
-                          <summary style="font-size:11px;font-weight:600;color:var(--text-muted);cursor:pointer;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">
-                            НАСТРОЙКИ (развернуть)
+                          <summary style="font-size:10px;font-weight:700;color:rgba(160,160,160,0.8);cursor:pointer;text-transform:uppercase;letter-spacing:0.07em;user-select:none;list-style:none;">
+                            ⚙️ НАСТРОЙКИ АГЕНТА ▶
                           </summary>
-                          <pre style="
-                            margin:4px 0 0;
-                            background:var(--surface-3,rgba(255,255,255,0.03));
+                          <div style="
+                            margin:6px 0 0;
+                            background:rgba(255,255,255,0.02);
                             border-radius:6px;
                             padding:8px 10px;
                             font-size:11px;
-                            color:var(--text-muted);
+                            color:rgba(160,160,160,0.8);
                             line-height:1.5;
                             white-space:pre-wrap;
-                          ">${JSON.stringify(settings, null, 2)}</pre>
+                            word-break:break-word;
+                          ">${JSON.stringify(settings, null, 2)}</div>
                         </details>
                       `
                           : ""
@@ -3908,8 +3926,7 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
                 </div>
               `
       }
-      </div><!-- end tg-reeng-block-traces -->
-      </div><!-- end tg-reeng-prompts-block -->
+      </div><!-- end traces block -->
 
       </div><!-- end reeng-content -->
 

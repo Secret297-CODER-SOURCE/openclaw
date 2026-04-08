@@ -234,6 +234,8 @@ export type AppViewState = {
   /** Prompt/filter summary for the selected agent. */
   telegramPromptSummary: import("./controllers/telegram.ts").PromptSummary | null;
   telegramPromptSummaryLoading: boolean;
+  /** Active top-level re-engagement tab: "main" | "prompts" | "history" | "traces" */
+  telegramReEngTab: string;
   /** Recent re-engagement history for the selected agent. */
   telegramReEngagementHistory: import("./controllers/telegram.ts").ReEngagementHistoryItem[];
   telegramReEngagementHistoryLoading: boolean;
@@ -267,6 +269,8 @@ export type AppViewState = {
   telegramTrainingPersonalStats: { chats: number; pairs: number } | null;
   /** Cached chat/pair counts for the shared scope (set when that scope was last active). */
   telegramTrainingSharedStats: { chats: number; pairs: number } | null;
+  /** Pair currently being edited inline (chatId + index in group). */
+  telegramEditingPair: { chatId: string; pairIdx: number; input: string; response: string } | null;
   /** Whether the inline training JSON editor is open. */
   telegramTrainingEditorOpen: boolean;
   /** Current text in the inline JSON editor. */

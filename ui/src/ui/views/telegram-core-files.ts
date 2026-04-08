@@ -42,11 +42,11 @@ export function renderTelegramCoreFiles(props: TelegramCoreFilesProps) {
     <section class="card">
       <div class="card-header-row" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
         <div>
-          <div class="card-title">Core Files</div>
-          <div class="card-sub">Bootstrap persona, identity, and tool guidance.</div>
+          <div class="card-title">Основные файлы</div>
+          <div class="card-sub">Начальная персона, идентичность и руководство по инструментам.</div>
         </div>
         <button class="btn btn-sm" @click=${onRefresh} ?disabled=${loading}>
-          ${loading ? "Loading…" : "Refresh"}
+          ${loading ? "Загрузка…" : "Обновить"}
         </button>
       </div>
 
@@ -130,7 +130,7 @@ function renderFileCard(
             ? html`
                 <span
                   style="font-size: 10px; padding: 1px 5px; border-radius: 3px; background: #5c1a1a; color: #f88"
-                  >MISSING</span
+                  >ОТСУТСТВУЕТ</span
                 >
               `
             : nothing

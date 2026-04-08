@@ -2836,6 +2836,119 @@ select.input:focus {
   border-color: var(--danger);
 }
 
+/* ── Pair action buttons (edit + delete row) ──────────────── */
+
+.tg-pair-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+  padding: 0 4px;
+}
+.tg-pair-block:hover .tg-pair-actions {
+  opacity: 1;
+}
+
+.tg-pair-action-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--card);
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+  padding: 0;
+}
+.tg-pair-action-btn--edit:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: var(--accent);
+}
+.tg-pair-action-btn--delete:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+/* ── Inline pair edit form ────────────────────────────────── */
+
+.tg-pair-block--editing {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  padding: 8px;
+}
+
+.tg-pair-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tg-pair-edit-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tg-pair-edit-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--input-bg, var(--card));
+  color: var(--text-main);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+  line-height: 1.4;
+}
+.tg-pair-edit-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.tg-pair-edit-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
+.tg-pair-edit-save {
+  padding: 4px 12px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tg-pair-edit-save:hover {
+  opacity: 0.85;
+}
+
+.tg-pair-edit-cancel {
+  padding: 4px 12px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  cursor: pointer;
+}
+.tg-pair-edit-cancel:hover {
+  background: color-mix(in srgb, var(--border) 40%, transparent);
+}
+
 /* ─── Nodes graph ──────────────────────────────────────────────────────────── */
 
 .tg-graph-switch {

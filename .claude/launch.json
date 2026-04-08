@@ -3,10 +3,13 @@
   "configurations": [
     {
       "name": "gateway-dev",
-      "runtimeExecutable": "pnpm",
+      "runtimeExecutable": "/Users/worker/Library/pnpm/pnpm",
       "runtimeArgs": ["gateway:dev"],
       "port": 18789,
-      "autoPort": false
+      "autoPort": false,
+      "env": {
+        "PATH": "/Users/worker/Library/pnpm:/Users/worker/.nvm/versions/node/v22.22.1/bin:/usr/local/bin:/usr/bin:/bin"
+      }
     },
     {
       "name": "docs-dev",

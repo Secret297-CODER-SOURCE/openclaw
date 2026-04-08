@@ -315,6 +315,7 @@ export class OpenClawApp extends LitElement {
   @state() telegramLeadsError: string | null = null;
   @state() telegramPromptSummary: import("./controllers/telegram.ts").PromptSummary | null = null;
   @state() telegramPromptSummaryLoading = false;
+  @state() telegramReEngTab = "main";
   @state()
   telegramReEngagementHistory: import("./controllers/telegram.ts").ReEngagementHistoryItem[] = [];
   @state() telegramReEngagementHistoryLoading = false;
@@ -342,6 +343,12 @@ export class OpenClawApp extends LitElement {
   @state() telegramTrainingScope: import("./controllers/telegram.ts").TrainingScope = "personal";
   @state() telegramTrainingPersonalStats: { chats: number; pairs: number } | null = null;
   @state() telegramTrainingSharedStats: { chats: number; pairs: number } | null = null;
+  @state() telegramEditingPair: {
+    chatId: string;
+    pairIdx: number;
+    input: string;
+    response: string;
+  } | null = null;
   @state() telegramTrainingEditorOpen = false;
   @state() telegramTrainingEditorJson = "";
   @state() telegramTrainingEditorError: string | null = null;

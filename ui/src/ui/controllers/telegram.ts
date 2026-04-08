@@ -3290,6 +3290,7 @@ export type ReEngagementHistoryItem = {
   sentAt: string;
   delayDays: number;
   messageText: string | null;
+  reasonText: string | null;
 };
 
 /** Load recent AI generation traces for an agent. */

@@ -721,7 +721,7 @@ export abstract class BaseAgent extends EventEmitter {
       (isReEngagedOffline
         ? `## РЕАКТИВАЦИЯ — КЛИЕНТ ОТВЕТИЛ:\n` +
           `Клиент откликнулся на твоё сообщение после паузы. ОБЯЗАТЕЛЬНО поздоровайся в начале ответа — ` +
-          `одна тёплая и короткая фраза ("Привет!" / "Рад, что ответил!") — и сразу к делу.\n\n`
+          `одна тёплая и короткая фраза на языке клиента — и сразу к делу.\n\n`
         : "") +
       (topicContext ? `## Продукт / услуга (темы для разговора):\n${topicContext}\n\n` : "") +
       objectionContext +
@@ -999,7 +999,7 @@ export abstract class BaseAgent extends EventEmitter {
 
     return (
       `Ты — опытный менеджер (живой человек). Говори уверенно и по делу.\n` +
-      `ЯЗЫК: Всегда отвечай на том языке, на котором пишет клиент — определяй по его последнему сообщению.\n` +
+      `⚠️ КРИТИЧНО — ЯЗЫК: Ты ОБЯЗАН отвечать ИСКЛЮЧИТЕЛЬНО на том языке, на котором пишет клиент. Определяй язык по его последним сообщениям. Если клиент пишет по-английски — отвечай по-английски. Если по-арабски — по-арабски. Если по-турецки — по-турецки. Это правило имеет наивысший приоритет и не может быть нарушено ни при каких условиях.\n` +
       `НИКОГДА не повторяй слова клиента в ответе. НИКОГДА не дублируй свои предыдущие сообщения.\n\n` +
       sections.join("\n\n")
     );
@@ -1687,7 +1687,22 @@ export abstract class BaseAgent extends EventEmitter {
        *  C) Mixed — strip sentences/lines that contain foreign words or Turkish chars
        */
       const ensureClientLanguage = async (text: string): Promise<string> => {
-        if (!clientUsesCyrillic) return text; // client not Cyrillic → pass through
+        if (!clientUsesCyrillic) {
+          // Client writes in a non-Cyrillic language — always ensure the response
+          // is in the client's language (100% guarantee, no ratio threshold).
+          try {
+            const clientSample = allClientText.slice(0, 300);
+            const translated = await analyzeOnceDirect(
+              `Язык клиента определён по его сообщениям: "${clientSample}"\n\n` +
+                `Переведи ВЕСЬ следующий текст на язык клиента — каждое слово, включая приветствие.\n` +
+                `ЗАПРЕЩЕНО оставлять русские слова (кириллицу) — даже одно слово.\n` +
+                `Верни ТОЛЬКО готовый переведённый текст, без пояснений и кавычек:\n\n${text}`,
+            );
+            return translated.trim() || text;
+          } catch {
+            return text;
+          }
+        }
 
         const hasForeign = foreignWordPattern.test(text) || hasTurkishChars(text);
         const cyrillicRatio = (text.match(/[а-яёА-ЯЁ]/g)?.length ?? 0) / Math.max(text.length, 1);
@@ -1852,11 +1867,11 @@ export abstract class BaseAgent extends EventEmitter {
         `"${template}"\n\n` +
         (isFirstGreeting
           ? `## ПЕРВОЕ СООБЩЕНИЕ:\n` +
-            `Поздоровайся + представься: "Привет! Меня зовут ${agentDisplayName}." + 1 фраза о чём можешь помочь. Всё одной мыслью, без вопросов.\n\n`
+            `Поздоровайся на языке клиента + представься: "Меня зовут ${agentDisplayName}." + 1 фраза о чём можешь помочь. Всё одной мыслью, без вопросов.\n\n`
           : isReEngaged
             ? `## РЕАКТИВАЦИЯ — КЛИЕНТ ОТВЕТИЛ:\n` +
-              `Клиент откликнулся на твоё сообщение после паузы. ОБЯЗАТЕЛЬНО поздоровайся — ` +
-              `одна тёплая и короткая фраза ("Привет!" / "Рад, что ответил!") — и сразу переходи к делу. ` +
+              `Клиент откликнулся на твоё сообщение после паузы. ОБЯЗАТЕЛЬНО поздоровайся на языке клиента — ` +
+              `одна тёплая и короткая фраза — и сразу переходи к делу. ` +
               `Не затягивай с приветствием, не делай его многословным.\n\n`
             : isReturningClient
               ? `## ВОЗВРАЩАЮЩИЙСЯ КЛИЕНТ — используй память:\n` +
@@ -3362,6 +3377,52 @@ export abstract class BaseAgent extends EventEmitter {
   }
 
   /**
+   * Ensure a re-engagement message is in the client's language AND starts with a greeting.
+   * Loads recent client messages from history, detects the language,
+   * translates the response if needed, and guarantees a greeting is present.
+   * Called before every send.
+   */
+  private async enforceReEngagementLanguage(text: string, chatKey: string): Promise<string> {
+    try {
+      const { analyzeOnceDirect } = await import("../behaviors/AiReplyEngine.js");
+      const history = this.storage.loadConversationHistory(chatKey);
+      const clientSample = history
+        .filter((m) => m.role === "user")
+        .map((m) => m.content)
+        .join(" ")
+        .slice(0, 400);
+
+      const clientUsesCyrillic = clientSample.trim() ? /[а-яёА-ЯЁ]{3,}/.test(clientSample) : true; // no history → assume Russian
+
+      // Common greeting patterns across languages
+      const hasGreeting =
+        /^(привет|здравств|добрый|рад|hi\b|hello|hey\b|merhaba|hola|bonjour|ciao|سلام|مرحبا|你好|こんにちは|안녕)/i.test(
+          text.trim(),
+        );
+
+      if (clientUsesCyrillic) {
+        // Russian client — ensure Russian greeting if missing
+        if (!hasGreeting) {
+          return `Привет! ${text}`;
+        }
+        return text;
+      }
+
+      // Non-Cyrillic client — translate entire message AND ensure greeting is present
+      const translated = await analyzeOnceDirect(
+        `Язык клиента определён по его сообщениям: "${clientSample.slice(0, 200)}"\n\n` +
+          `Выполни два действия:\n` +
+          `1. Переведи ВЕСЬ следующий текст на язык клиента — каждое слово включая приветствие. ЗАПРЕЩЕНО оставлять кириллицу.\n` +
+          `2. Убедись что сообщение начинается с короткого приветствия на языке клиента (Hi! / Merhaba! / Hello! и т.д.). Если приветствия нет — добавь его в начало.\n` +
+          `Верни ТОЛЬКО готовый текст, без пояснений и кавычек:\n\n${text}`,
+      );
+      return translated.trim() || text;
+    } catch {
+      return text;
+    }
+  }
+
+  /**
    * Apply post-processing guards to a re-engagement message.
    * Respects the reEngagementApplyGuards toggle (default: true).
    */
@@ -3386,6 +3447,51 @@ export abstract class BaseAgent extends EventEmitter {
   }
 
   /**
+   * Strip analysis preamble that some models output before the actual message.
+   * Returns { preamble, message } where preamble is the analysis text (if any)
+   * and message is the actual message to send.
+   */
+  private stripAiPreamble(text: string): { preamble: string | null; message: string } {
+    // Known label patterns the model uses before the actual message
+    const labelPatterns = [
+      /адаптированный текст:\s*/i,
+      /итоговый текст:\s*/i,
+      /итоговое сообщение:\s*/i,
+      /готовый текст:\s*/i,
+      /текст сообщения:\s*/i,
+      /сообщение:\s*/i,
+      /^message:\s*/im,
+      /^result:\s*/im,
+      /^текст:\s*/im,
+      /^итог:\s*/im,
+    ];
+    for (const pattern of labelPatterns) {
+      const match = text.match(pattern);
+      if (match && match.index !== undefined) {
+        const after = text.slice(match.index + match[0].length).trim();
+        if (after.length > 0 && after.length < text.length * 0.8) {
+          const preamble = text.slice(0, match.index).trim() || null;
+          return { preamble, message: after };
+        }
+      }
+    }
+    // Fallback: 2+ paragraphs and last is ≤3 sentences → last paragraph is the message
+    const paragraphs = text
+      .split(/\n{2,}/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (paragraphs.length >= 2) {
+      const last = paragraphs[paragraphs.length - 1];
+      const sentenceCount = (last.match(/[.!?]/g) ?? []).length;
+      if (sentenceCount <= 3 && last.length < text.length * 0.6) {
+        const preamble = paragraphs.slice(0, -1).join("\n\n");
+        return { preamble, message: last };
+      }
+    }
+    return { preamble: null, message: text };
+  }
+
+  /**
    * Use AI to personalise and make a re-engagement message more compelling.
    * Takes the base template (already substituted) and recent conversation history,
    * and returns a short, human-feeling message.
@@ -3396,7 +3502,7 @@ export abstract class BaseAgent extends EventEmitter {
     baseMessage: string,
     chatKey: string,
     contactName: string | null,
-  ): Promise<string> {
+  ): Promise<{ message: string; reason: string | null }> {
     try {
       const { callAdapterOnce } = await import("../behaviors/AiReplyEngine.js");
       // Load full history — re-engagement needs the whole context to find
@@ -3439,7 +3545,8 @@ export abstract class BaseAgent extends EventEmitter {
 
       const baseSystemPrompt =
         "Ты — эксперт по реактивации «замёрзших» сделок.\n" +
-        "Клиент давно молчит. Твоя задача: УЛУЧШИТЬ готовый шаблон так, чтобы он цеплял именно этого человека.\n\n" +
+        "Клиент давно молчит. Твоя задача: УЛУЧШИТЬ готовый шаблон так, чтобы он цеплял именно этого человека.\n" +
+        "⚠️ КРИТИЧНО — ЯЗЫК: Пиши ИСКЛЮЧИТЕЛЬНО на том языке, на котором писал клиент в истории. Это правило важнее всех остальных.\n\n" +
         "Алгоритм:\n" +
         "1. Прочитай историю и найди: что этому клиенту было реально интересно или важно — его слова, его задача, его боль.\n" +
         "2. Найди точку остановки: на чём именно диалог замер (возражение по цене, нужно подумать, ждал условий, отвлёкся, что-то смутило).\n" +
@@ -3447,23 +3554,29 @@ export abstract class BaseAgent extends EventEmitter {
         "4. Адаптируй шаблон под этого человека — сохрани его структуру и призыв к действию, но сделай текст живым и конкретным.\n\n" +
         "Правила:\n" +
         nameRule +
-        "• Без 'привет', 'как дела', 'давно не общались', 'не забыл о нас'\n" +
+        "• ОБЯЗАТЕЛЬНО начинай с короткого приветствия на языке клиента — определи язык по истории и используй соответствующее слово ('Привет!' / 'Hi!' / 'Merhaba!' и т.д.) — приветствие должно быть частью первого предложения, не отдельной строкой\n" +
+        "• Без 'как дела', 'давно не общались', 'не забыл о нас'\n" +
         "• ЗАПРЕЩЕНО использовать слова 'сегодня', 'недавно', 'только что', 'вчера', 'на прошлой неделе' — ты не знаешь когда именно читают сообщение\n" +
         "• Без общих фраз — только конкретика из этого чата\n" +
+        "• ЗАПРЕЩЕНО использовать размытые слова без уточнения: 'возможности', 'результаты', 'точка для входа', 'интересные условия', 'хорошее время' — всегда уточняй ЧТО именно: какой продукт, услуга, задача клиента\n" +
         "• Говори про ЕГО выгоду, ЕГО ситуацию — не про свой продукт\n" +
         `• ${aggressionLine}\n` +
         erWorkHoursRule +
         "• 1–2 предложения максимум\n" +
         "• Пиши на языке клиента (определи по истории)\n" +
         "• СТРОГО первое лицо ЕДИНСТВЕННОГО числа: 'я', 'могу', 'предлагаю', 'звоню' — ЗАПРЕЩЕНО 'мы', 'можем', 'предлагаем' на любом языке\n" +
-        "• Только готовый текст сообщения — без кавычек, пояснений, заголовков";
+        "• ЗАПРЕЩЕНО предполагать сферу деятельности (IT, айти, бизнес и т.д.) — используй только то, что клиент сам назвал; если сфера известна, можешь использовать формулу 'заметил, что немало людей из [сфера] сейчас этим занимаются'\n" +
+        "• ЗАПРЕЩЕНО упоминать здоровье, самочувствие, медицину\n" +
+        "• ЗАПРЕЩЕНО выводить анализ клиента, описание его интересов, точку остановки — это внутренняя работа, она не идёт в ответ\n" +
+        "• ЗАПРЕЩЕНЫ любые метки и заголовки перед сообщением: 'Адаптированный текст:', 'Сообщение:', 'Текст:', 'Итог:' и т.п.\n" +
+        "• Верни ТОЛЬКО готовый текст сообщения — без кавычек, без пояснений, без заголовков, без анализа";
 
       const systemPrompt = this.buildReEngagementSystemPrompt(baseSystemPrompt, erSettings);
 
       const userPrompt =
         `Шаблон-скелет: "${baseMessage}"\n\n` +
         `История диалога:\n${historyText}\n\n` +
-        `Найди его главный интерес и точку остановки — адаптируй шаблон так, чтобы сообщение говорило именно о том, что важно ЕМУ. Структуру шаблона и призыв к действию сохрани.`;
+        `Адаптируй шаблон под этого клиента исходя из его истории. Сохрани структуру шаблона и призыв к действию. Верни только готовый текст сообщения — без анализа, без заголовков, без пояснений.`;
 
       // In non-buyer mode the same template applies — professional re-engagement
       // is equally useful regardless of delivery style.
@@ -3472,7 +3585,9 @@ export abstract class BaseAgent extends EventEmitter {
       const t0 = Date.now();
       const enhanced = await callAdapterOnce(userPrompt, systemPrompt);
       const latencyMs = Date.now() - t0;
-      const cleaned = enhanced.replace(/^["«»']+|["«»']+$/g, "").trim();
+      // Strip analysis preamble (save it as reason), then outer quotes
+      const { preamble: aiReason, message: strippedMsg } = this.stripAiPreamble(enhanced.trim());
+      const cleaned = strippedMsg.replace(/^["«»']+|["«»']+$/g, "").trim();
       const final = this.applyReEngagementGuards(cleaned, erSettings) || baseMessage;
 
       // Fire-and-forget trace (does not block)
@@ -3500,6 +3615,7 @@ export abstract class BaseAgent extends EventEmitter {
           rawResponse: enhanced,
           cleanedText: cleaned,
           finalText: final,
+          aiReason: aiReason ?? null,
           usedFallback: final === baseMessage && cleaned !== baseMessage,
         },
         meta: {
@@ -3508,7 +3624,7 @@ export abstract class BaseAgent extends EventEmitter {
         },
       });
 
-      return final;
+      return { message: final, reason: aiReason };
     } catch (err) {
       // Trace error case too
       const chatId = chatKey.split(":")[1] ?? chatKey;
@@ -3518,7 +3634,7 @@ export abstract class BaseAgent extends EventEmitter {
         outputData: { finalText: baseMessage, usedFallback: true },
         meta: { status: "error", error: String(err) },
       });
-      return baseMessage;
+      return { message: baseMessage, reason: null };
     }
   }
 
@@ -3534,7 +3650,7 @@ export abstract class BaseAgent extends EventEmitter {
       username: string | null;
     },
     chatKey: string,
-  ): Promise<string | null> {
+  ): Promise<{ message: string | null; reason: string | null }> {
     try {
       const { callAdapterOnce } = await import("../behaviors/AiReplyEngine.js");
       const allHistory = this.storage.loadConversationHistory(chatKey);
@@ -3583,7 +3699,8 @@ export abstract class BaseAgent extends EventEmitter {
 
       const baseSystemPrompt =
         "Ты — эксперт по реактивации «замёрзших» сделок.\n" +
-        "Клиент давно молчит. Одно сообщение — вернуть его в разговор.\n\n" +
+        "Клиент давно молчит. Одно сообщение — вернуть его в разговор.\n" +
+        "⚠️ КРИТИЧНО — ЯЗЫК: Пиши ИСКЛЮЧИТЕЛЬНО на том языке, на котором писал клиент в истории. Это правило важнее всех остальных.\n\n" +
         "Шаги (не пиши их — только используй для формулировки):\n" +
         "① Найди главный интерес клиента из истории: его задачу, боль, цель — его же словами.\n" +
         "② Найди точку остановки: на чём конкретно замер диалог " +
@@ -3593,14 +3710,18 @@ export abstract class BaseAgent extends EventEmitter {
         "конкретный результат/кейс, напоминание о его же задаче.\n" +
         "④ Напиши сообщение которое говорит о ЕГО выгоде — не о продукте.\n\n" +
         "Правила:\n" +
-        "• Без 'привет', 'как дела', 'давно не общались', 'напоминаю о себе'\n" +
+        "• ОБЯЗАТЕЛЬНО начинай с короткого приветствия на языке клиента — определи язык по истории и используй соответствующее слово ('Привет!' / 'Hi!' / 'Merhaba!' и т.д.) — приветствие должно быть частью первого предложения, не отдельной строкой\n" +
+        "• Без 'как дела', 'давно не общались', 'напоминаю о себе'\n" +
         "• ЗАПРЕЩЕНО использовать слова 'сегодня', 'недавно', 'только что', 'вчера', 'на прошлой неделе' — ты не знаешь когда именно читают сообщение\n" +
         "• Ноль обобщений — только конкретика из этого чата\n" +
+        "• ЗАПРЕЩЕНО использовать размытые слова без уточнения: 'возможности', 'результаты', 'точка для входа', 'интересные условия', 'хорошее время' — всегда уточняй ЧТО именно: какой продукт, услуга, задача клиента\n" +
         "• Говори его языком (определи по истории)\n" +
         `• ${aggressionHint}\n` +
         workHoursRule +
         "• 1–2 предложения максимум\n" +
         "• СТРОГО первое лицо ЕДИНСТВЕННОГО числа: 'я', 'могу', 'предлагаю' — ЗАПРЕЩЕНО 'мы', 'можем', 'предлагаем' на любом языке\n" +
+        "• ЗАПРЕЩЕНО предполагать сферу деятельности (IT, айти, бизнес и т.д.) — используй только то, что клиент сам назвал; если сфера известна, можешь использовать формулу 'заметил, что немало людей из [сфера] сейчас этим занимаются'\n" +
+        "• ЗАПРЕЩЕНО упоминать здоровье, самочувствие, медицину\n" +
         "• Только готовый текст — без кавычек, пояснений, заголовков";
 
       const systemPrompt = this.buildReEngagementSystemPrompt(baseSystemPrompt, arSettings);
@@ -3612,14 +3733,15 @@ export abstract class BaseAgent extends EventEmitter {
           `напиши одно сообщение которое говорит о ЕГО цели и даёт повод ответить.`
         : `${nameHint}\n\n` +
           `История диалога отсутствует — это первый контакт или история была сброшена.\n\n` +
-          `Напиши короткое живое сообщение-касание от первого лица: ` +
-          `представься, скажи что хотел уточнить актуальность, дай один конкретный повод ответить. ` +
-          `Без клише, без "рад помочь", без вопросов про нужды. 1–2 предложения максимум.`;
+          `Напиши короткое живое сообщение-касание от первого лица. ` +
+          `Используй формулу социального доказательства: "Заметил, что немало людей в похожей ситуации сейчас этим занимаются — ловят момент, чтобы выделиться или укрепить позиции." ` +
+          `Добавь один конкретный повод ответить. Без клише, без "рад помочь", без предположений о сфере, без упоминания здоровья. 1–2 предложения максимум.`;
 
       const t0 = Date.now();
       const result = await callAdapterOnce(userPrompt, systemPrompt);
       const latencyMs = Date.now() - t0;
-      const cleaned = result.replace(/^["«»']+|["«»']+$/g, "").trim();
+      const { preamble: aiReason, message: strippedMsg } = this.stripAiPreamble(result.trim());
+      const cleaned = strippedMsg.replace(/^["«»']+|["«»']+$/g, "").trim();
       const final = this.applyReEngagementGuards(cleaned, arSettings) || null;
 
       // Fire-and-forget trace
@@ -3646,6 +3768,7 @@ export abstract class BaseAgent extends EventEmitter {
           rawResponse: result,
           cleanedText: cleaned,
           finalText: final,
+          aiReason: aiReason ?? null,
           usedFallback: final === null,
         },
         meta: {
@@ -3654,7 +3777,7 @@ export abstract class BaseAgent extends EventEmitter {
         },
       });
 
-      return final;
+      return { message: final, reason: aiReason };
     } catch (e) {
       this.logger.warn(
         `[TG:${this.name}] re-engagement AI generation failed | chat=${contact.chatId}: ${String(e)}`,
@@ -3665,7 +3788,7 @@ export abstract class BaseAgent extends EventEmitter {
         outputData: { finalText: null },
         meta: { status: "error", error: String(e) },
       });
-      return null;
+      return { message: null, reason: null };
     }
   }
 
@@ -3793,6 +3916,7 @@ export abstract class BaseAgent extends EventEmitter {
 
       const chatKey = `${this.id}:${contact.chatId}`;
       let message: string;
+      let reason: string | null = null;
 
       // Resolved display name used for name-preservation in AI enhancement
       const contactDisplayName =
@@ -3800,8 +3924,8 @@ export abstract class BaseAgent extends EventEmitter {
 
       if (effectiveMode === "ai") {
         // Full AI mode: generate from chat history; fall back to template when history is empty.
-        const aiMsg = await this.generateAiReEngagement(contact, chatKey);
-        if (!aiMsg) {
+        const aiResult = await this.generateAiReEngagement(contact, chatKey);
+        if (!aiResult.message) {
           if (!template) {
             this.logger.warn(
               `[TG:${this.name}] re-engagement skip | chat=${contact.chatId}: AI generation returned null and no template set`,
@@ -3816,9 +3940,16 @@ export abstract class BaseAgent extends EventEmitter {
             contact.username,
           );
           if (!baseMessage) return false;
-          message = await this.enhanceReEngagementMessage(baseMessage, chatKey, contactDisplayName);
+          const enhanced = await this.enhanceReEngagementMessage(
+            baseMessage,
+            chatKey,
+            contactDisplayName,
+          );
+          message = enhanced.message;
+          reason = enhanced.reason;
         } else {
-          message = aiMsg;
+          message = aiResult.message;
+          reason = aiResult.reason;
         }
       } else {
         // Template mode: fill template placeholders
@@ -3831,10 +3962,36 @@ export abstract class BaseAgent extends EventEmitter {
         if (!baseMessage) return false;
         // Optionally enhance with AI (default: true for backward compat)
         const shouldEnhance = settings.reEngagementEnhanceTemplate !== false;
-        message = shouldEnhance
-          ? await this.enhanceReEngagementMessage(baseMessage, chatKey, contactDisplayName)
-          : this.applyReEngagementGuards(baseMessage, settings) || baseMessage;
+        if (shouldEnhance) {
+          const enhanced = await this.enhanceReEngagementMessage(
+            baseMessage,
+            chatKey,
+            contactDisplayName,
+          );
+          message = enhanced.message;
+          reason = enhanced.reason;
+        } else {
+          // Template-only: no AI call, but still record a trace so the UI shows what was sent
+          message = this.applyReEngagementGuards(baseMessage, settings) || baseMessage;
+          this.fireAiTrace({
+            chatId: contact.chatId,
+            inputData: {
+              mode: "template-only",
+              template: baseMessage,
+              contactName: contactDisplayName ?? null,
+              settings: {
+                reEngagementContext: settings.reEngagementContext ?? null,
+                tone: settings.reEngagementTone ?? null,
+              },
+            },
+            outputData: { finalText: message },
+            meta: { status: "success", latencyMs: 0 },
+          });
+        }
       }
+
+      // Enforce client language 100% — translate if model responded in wrong language
+      message = await this.enforceReEngagementLanguage(message, chatKey);
 
       try {
         await this.callTool("sendMessage", { target: contact.chatId, message });
@@ -3845,6 +4002,7 @@ export abstract class BaseAgent extends EventEmitter {
           dayLabel,
           contact.lastClientMsgAt,
           message,
+          reason ?? undefined,
         );
         this.logger.info(
           `[TG:${this.name}] re-engagement sent | chat=${contact.chatId} day=${dayLabel}`,

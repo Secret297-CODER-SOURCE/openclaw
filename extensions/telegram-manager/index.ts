@@ -133,6 +133,7 @@ const TELEGRAM_METHODS = [
   "telegram.leads.delete",
   "telegram.agent.initLeadsGroup",
   "telegram.agent.runReEngagementNow",
+  "telegram.agent.getPromptSummary",
   "telegram.agent.reEngagementHistory",
   "telegram.agent.deleteReEngagementHistoryItem",
   "telegram.agent.aiTraces",

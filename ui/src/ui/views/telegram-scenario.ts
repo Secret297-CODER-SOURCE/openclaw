@@ -48,6 +48,11 @@ export type ScenarioProps = {
   onTrainingScopeChange: (agentId: string, scope: TrainingScope) => void;
   onTrainingDeletePair: (chatId: string, pairIdx: number) => void;
   onTrainingDeleteGroup: (chatId: string) => void;
+  editingPair: { chatId: string; pairIdx: number; input: string; response: string } | null;
+  onTrainingEditPair: (chatId: string, pairIdx: number) => void;
+  onTrainingEditPairChange: (field: "input" | "response", value: string) => void;
+  onTrainingEditPairSave: () => void;
+  onTrainingEditPairCancel: () => void;
   // Inline JSON editor
   trainingEditorOpen: boolean;
   trainingEditorJson: string;
@@ -1190,7 +1195,59 @@ function renderTrainingView(props: ScenarioProps, agent: TelegramAgentRecord) {
 
               <!-- Bubbles -->
               <div class="tg-msng-bubbles">
-                ${selectedGroup.pairs.map((pair) => {
+                ${selectedGroup.pairs.map((pair, pairIdx) => {
+                  const isEditing =
+                    props.editingPair?.chatId === selectedGroup.chatId &&
+                    props.editingPair?.pairIdx === pairIdx;
+
+                  if (isEditing && props.editingPair) {
+                    // ── Inline edit form ──────────────────────────────────
+                    return html`
+                      <div class="tg-pair-block tg-pair-block--editing">
+                        <div class="tg-pair-edit-form">
+                          <label class="tg-pair-edit-label">Клиент</label>
+                          <textarea
+                            class="tg-pair-edit-textarea"
+                            rows="3"
+                            .value=${props.editingPair.input}
+                            @input=${(e: Event) =>
+                              props.onTrainingEditPairChange(
+                                "input",
+                                (e.target as HTMLTextAreaElement).value,
+                              )}
+                          ></textarea>
+                          <label class="tg-pair-edit-label">Менеджер</label>
+                          <textarea
+                            class="tg-pair-edit-textarea"
+                            rows="3"
+                            .value=${props.editingPair.response}
+                            @input=${(e: Event) =>
+                              props.onTrainingEditPairChange(
+                                "response",
+                                (e.target as HTMLTextAreaElement).value,
+                              )}
+                          ></textarea>
+                          <div class="tg-pair-edit-actions">
+                            <button
+                              type="button"
+                              class="tg-pair-edit-save"
+                              @click=${() => props.onTrainingEditPairSave()}
+                            >
+                              ✓ Сохранить
+                            </button>
+                            <button
+                              type="button"
+                              class="tg-pair-edit-cancel"
+                              @click=${() => props.onTrainingEditPairCancel()}
+                            >
+                              Отмена
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    `;
+                  }
+
                   // Trigger translations if needed
                   if (props.translateEnabled) {
                     if (pair.input && !props.translations[pair.input]) {
@@ -1211,6 +1268,25 @@ function renderTrainingView(props: ScenarioProps, agent: TelegramAgentRecord) {
 
                   return html`
                     <div class="tg-pair-block">
+                      <!-- pair action buttons -->
+                      <div class="tg-pair-actions">
+                        <button
+                          type="button"
+                          class="tg-pair-action-btn tg-pair-action-btn--edit"
+                          title="Редактировать пару"
+                          @click=${() => props.onTrainingEditPair(selectedGroup.chatId, pairIdx)}
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          type="button"
+                          class="tg-pair-action-btn tg-pair-action-btn--delete"
+                          title="Удалить пару"
+                          @click=${() => props.onTrainingDeletePair(selectedGroup.chatId, pairIdx)}
+                        >
+                          🗑️
+                        </button>
+                      </div>
                       <div class="tg-msng-bubble tg-msng-bubble--client">
                         <div class="tg-msng-bubble-label">Клиент</div>
                         <div class="tg-msng-bubble-text">

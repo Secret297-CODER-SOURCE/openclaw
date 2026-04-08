@@ -278,12 +278,15 @@ export class TelegramStorage {
       this.db.exec("CREATE INDEX IF NOT EXISTS idx_flow_nodes_scope ON tg_flow_nodes(scope)");
     }
 
-    // Incremental migration: add message_text column to tg_reengagement for existing DBs
+    // Incremental migrations for tg_reengagement columns
     const reengCols = this.db.prepare("PRAGMA table_info(tg_reengagement)").all() as Array<{
       name: string;
     }>;
     if (!reengCols.some((c) => c.name === "message_text")) {
       this.db.exec("ALTER TABLE tg_reengagement ADD COLUMN message_text TEXT");
+    }
+    if (!reengCols.some((c) => c.name === "reason_text")) {
+      this.db.exec("ALTER TABLE tg_reengagement ADD COLUMN reason_text TEXT");
     }
 
     // Incremental migration: create ai_traces table for AI generation audit log
@@ -1186,13 +1189,22 @@ export class TelegramStorage {
     delayDays: number,
     periodRef: string,
     messageText?: string,
+    reasonText?: string,
   ): void {
     this.db
       .prepare(
-        `INSERT OR IGNORE INTO tg_reengagement (agent_id, chat_id, delay_days, period_ref, sent_at, message_text)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO tg_reengagement (agent_id, chat_id, delay_days, period_ref, sent_at, message_text, reason_text)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(agentId, chatId, delayDays, periodRef, new Date().toISOString(), messageText ?? null);
+      .run(
+        agentId,
+        chatId,
+        delayDays,
+        periodRef,
+        new Date().toISOString(),
+        messageText ?? null,
+        reasonText ?? null,
+      );
   }
 
   /**
@@ -1217,7 +1229,8 @@ export class TelegramStorage {
                 c.username AS username,
                 r.sent_at AS sentAt,
                 r.delay_days AS delayDays,
-                r.message_text AS messageText
+                r.message_text AS messageText,
+                r.reason_text AS reasonText
          FROM tg_reengagement r
          LEFT JOIN tg_contacts c ON c.agent_id = r.agent_id AND c.chat_id = r.chat_id
          WHERE r.agent_id = ?
@@ -1231,6 +1244,7 @@ export class TelegramStorage {
       sentAt: string;
       delayDays: number;
       messageText: string | null;
+      reasonText: string | null;
     }>;
   }
 
@@ -1238,12 +1252,28 @@ export class TelegramStorage {
    * Delete a specific re-engagement history item.
    */
   deleteReEngagementHistoryItem(agentId: string, chatId: string, sentAt: string): void {
+    // Delete the re-engagement record
     this.db
       .prepare(
-        `DELETE FROM tg_reengagement_history
+        `DELETE FROM tg_reengagement
          WHERE agent_id = ? AND chat_id = ? AND sent_at = ?`,
       )
       .run(agentId, chatId, sentAt);
+
+    // Delete AI traces for the same contact created within ±60s of sent_at
+    // (trace fires via setImmediate so created_at ≈ sent_at)
+    try {
+      this.db
+        .prepare(
+          `DELETE FROM ai_traces
+           WHERE agent_id = ? AND chat_id = ?
+             AND created_at >= datetime(?, '-60 seconds')
+             AND created_at <= datetime(?, '+60 seconds')`,
+        )
+        .run(agentId, chatId, sentAt, sentAt);
+    } catch {
+      // ai_traces may not exist on older installs — safe to ignore
+    }
   }
 
   // ─── AI Traces (audit log for AI generation) ─────────────────────────────

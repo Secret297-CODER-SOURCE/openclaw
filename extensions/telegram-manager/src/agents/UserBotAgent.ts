@@ -580,6 +580,13 @@ export class UserBotAgent extends BaseAgent {
     switch (tool) {
       case "sendMessage": {
         const { target, message, parseMode } = args as any;
+        // Route through sendWithFloodGuard so entity resolution fallback
+        // (BigInt → getInputEntity → getDialogs) applies to proactive sends
+        // like re-engagement where the peer may not be in the session cache.
+        if (!parseMode) {
+          await this.sendWithFloodGuard(String(target), message);
+          return;
+        }
         return this.client.sendMessage(target, { message, parseMode });
       }
 

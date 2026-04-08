@@ -82,18 +82,22 @@ export type CronProps = {
   }) => void | Promise<void>;
 };
 
-const RUN_STATUS_OPTIONS: Array<{ value: CronRunsStatusValue; label: string }> = [
-  { value: "ok", label: "OK" },
-  { value: "error", label: "Error" },
-  { value: "skipped", label: "Skipped" },
-];
+function getRunStatusOptions(): Array<{ value: CronRunsStatusValue; label: string }> {
+  return [
+    { value: "ok", label: t("cronView.statusOk") },
+    { value: "error", label: t("cronView.statusError") },
+    { value: "skipped", label: t("cronView.statusSkipped") },
+  ];
+}
 
-const RUN_DELIVERY_OPTIONS: Array<{ value: CronDeliveryStatus; label: string }> = [
-  { value: "delivered", label: "Delivered" },
-  { value: "not-delivered", label: "Not delivered" },
-  { value: "unknown", label: "Unknown" },
-  { value: "not-requested", label: "Not requested" },
-];
+function getRunDeliveryOptions(): Array<{ value: CronDeliveryStatus; label: string }> {
+  return [
+    { value: "delivered", label: t("cronView.deliveredLabel") },
+    { value: "not-delivered", label: t("cronView.notDeliveredLabel") },
+    { value: "unknown", label: t("cronView.unknownLabel") },
+    { value: "not-requested", label: t("cronView.notRequestedLabel") },
+  ];
+}
 
 function toggleSelection<T extends string>(selected: T[], value: T, checked: boolean): T[] {
   const set = new Set(selected);
@@ -244,10 +248,12 @@ function fieldLabelForKey(
   deliveryMode: CronFormState["deliveryMode"],
 ) {
   if (key === "payloadText") {
-    return form.payloadKind === "systemEvent" ? "Main timeline message" : "Assistant task prompt";
+    return form.payloadKind === "systemEvent"
+      ? t("cronView.mainTimelineMsg")
+      : t("cronView.assistantTaskPrompt");
   }
   if (key === "deliveryTo") {
-    return deliveryMode === "webhook" ? "Webhook URL" : "To";
+    return deliveryMode === "webhook" ? t("cronView.webhookUrlLabel") : t("cronView.toField");
   }
   const labels: Record<CronFieldKey, string> = {
     name: t("cronView.nameLabel"),
@@ -334,14 +340,16 @@ export function renderCron(props: CronProps) {
       ? "all jobs"
       : (selectedJob?.name ?? props.runsJobId ?? "(select a job)");
   const runs = props.runs;
-  const selectedStatusLabels = RUN_STATUS_OPTIONS.filter((option) =>
-    props.runsStatuses.includes(option.value),
-  ).map((option) => option.label);
-  const selectedDeliveryLabels = RUN_DELIVERY_OPTIONS.filter((option) =>
-    props.runsDeliveryStatuses.includes(option.value),
-  ).map((option) => option.label);
-  const statusSummary = summarizeSelection(selectedStatusLabels, "All statuses");
-  const deliverySummary = summarizeSelection(selectedDeliveryLabels, "All delivery");
+  const runStatusOptions = getRunStatusOptions();
+  const runDeliveryOptions = getRunDeliveryOptions();
+  const selectedStatusLabels = runStatusOptions
+    .filter((option) => props.runsStatuses.includes(option.value))
+    .map((option) => option.label);
+  const selectedDeliveryLabels = runDeliveryOptions
+    .filter((option) => props.runsDeliveryStatuses.includes(option.value))
+    .map((option) => option.label);
+  const statusSummary = summarizeSelection(selectedStatusLabels, t("cronView.allStatuses"));
+  const deliverySummary = summarizeSelection(selectedDeliveryLabels, t("cronView.allDelivery"));
   const supportsAnnounce =
     props.form.sessionTarget === "isolated" && props.form.payloadKind === "agentTurn";
   const selectedDeliveryMode =
@@ -530,9 +538,9 @@ export function renderCron(props: CronProps) {
             <div class="cron-run-filters__row cron-run-filters__row--secondary">
               ${renderRunFilterDropdown({
                 id: "status",
-                title: "Status",
+                title: t("debug.statusLabel"),
                 summary: statusSummary,
-                options: RUN_STATUS_OPTIONS,
+                options: runStatusOptions,
                 selected: props.runsStatuses,
                 onToggle: (value, checked) => {
                   const next = toggleSelection(
@@ -548,9 +556,9 @@ export function renderCron(props: CronProps) {
               })}
               ${renderRunFilterDropdown({
                 id: "delivery",
-                title: "Delivery",
+                title: t("cronView.deliveryField"),
                 summary: deliverySummary,
-                options: RUN_DELIVERY_OPTIONS,
+                options: runDeliveryOptions,
                 selected: props.runsDeliveryStatuses,
                 onToggle: (value, checked) => {
                   const next = toggleSelection(
@@ -600,7 +608,7 @@ export function renderCron(props: CronProps) {
       </div>
 
       <section class="card cron-workspace-form">
-        <div class="card-title">${isEditing ? "Edit Job" : "New Job"}</div>
+        <div class="card-title">${isEditing ? t("cronView.editJobTitle") : t("cronView.newJobTitle")}</div>
         <div class="card-sub">
           ${isEditing ? "Update the selected scheduled job." : "Create a scheduled wakeup or agent run."}
         </div>
@@ -609,11 +617,11 @@ export function renderCron(props: CronProps) {
             <span class="cron-required-marker" aria-hidden="true">*</span> Required
           </div>
           <section class="cron-form-section">
-            <div class="cron-form-section__title">Basics</div>
-            <div class="cron-form-section__sub">Name it, choose the assistant, and set enabled state.</div>
+            <div class="cron-form-section__title">${t("cronView.sectionBasics")}</div>
+            <div class="cron-form-section__sub">${t("cronView.sectionBasicsSub")}</div>
             <div class="form-grid cron-form-grid">
               <label class="field">
-                ${renderFieldLabel("Name", true)}
+                ${renderFieldLabel(t("cronView.nameField"), true)}
                 <input
                   id="cron-name"
                   .value=${props.form.name}
@@ -628,16 +636,16 @@ export function renderCron(props: CronProps) {
                 ${renderFieldError(props.fieldErrors.name, errorIdForField("name"))}
               </label>
               <label class="field">
-                <span>Description</span>
+                <span>${t("cronView.descriptionField")}</span>
                 <input
                   .value=${props.form.description}
-                  placeholder="Optional context for this job"
+                  placeholder=""
                   @input=${(e: Event) =>
                     props.onFormChange({ description: (e.target as HTMLInputElement).value })}
                 />
               </label>
               <label class="field">
-                ${renderFieldLabel("Agent ID")}
+                ${renderFieldLabel(t("cronView.agentIdField"))}
                 <input
                   id="cron-agent-id"
                   .value=${props.form.agentId}
@@ -658,17 +666,17 @@ export function renderCron(props: CronProps) {
                   @change=${(e: Event) =>
                     props.onFormChange({ enabled: (e.target as HTMLInputElement).checked })}
                 />
-                <span class="field-checkbox__label">Enabled</span>
+                <span class="field-checkbox__label">${t("cronView.enabledLabel2")}</span>
               </label>
             </div>
           </section>
 
           <section class="cron-form-section">
-            <div class="cron-form-section__title">Schedule</div>
+            <div class="cron-form-section__title">${t("cronView.scheduleField")}</div>
             <div class="cron-form-section__sub">Control when this job runs.</div>
             <div class="form-grid cron-form-grid">
               <label class="field cron-span-2">
-                ${renderFieldLabel("Schedule")}
+                ${renderFieldLabel(t("cronView.scheduleField"))}
                 <select
                   id="cron-schedule-kind"
                   .value=${props.form.scheduleKind}
@@ -688,11 +696,11 @@ export function renderCron(props: CronProps) {
           </section>
 
           <section class="cron-form-section">
-            <div class="cron-form-section__title">Execution</div>
+            <div class="cron-form-section__title">${t("cronView.sectionExecution")}</div>
             <div class="cron-form-section__sub">Choose when to wake, and what this job should do.</div>
             <div class="form-grid cron-form-grid">
               <label class="field">
-                ${renderFieldLabel("Session")}
+                ${renderFieldLabel(t("cronView.sessionField"))}
                 <select
                   id="cron-session-target"
                   .value=${props.form.sessionTarget}
@@ -708,7 +716,7 @@ export function renderCron(props: CronProps) {
                 <div class="cron-help">Main posts a system event. Isolated runs a dedicated agent turn.</div>
               </label>
               <label class="field">
-                ${renderFieldLabel("Wake mode")}
+                ${renderFieldLabel(t("cronView.wakeModeField"))}
                 <select
                   id="cron-wake-mode"
                   .value=${props.form.wakeMode}
@@ -723,7 +731,7 @@ export function renderCron(props: CronProps) {
                 <div class="cron-help">Now triggers immediately. Next heartbeat waits for the next cycle.</div>
               </label>
               <label class="field ${isAgentTurn ? "" : "cron-span-2"}">
-                ${renderFieldLabel("What should run?")}
+                ${renderFieldLabel(t("cronView.wakeModeField"))}
                 <select
                   id="cron-payload-kind"
                   .value=${props.form.payloadKind}
@@ -748,7 +756,7 @@ export function renderCron(props: CronProps) {
                 isAgentTurn
                   ? html`
                       <label class="field">
-                        ${renderFieldLabel("Timeout (seconds)")}
+                        ${renderFieldLabel(t("cronView.timeoutField"))}
                         <input
                           id="cron-timeout-seconds"
                           .value=${props.form.timeoutSeconds}
@@ -801,11 +809,11 @@ export function renderCron(props: CronProps) {
           </section>
 
           <section class="cron-form-section">
-            <div class="cron-form-section__title">Delivery</div>
+            <div class="cron-form-section__title">${t("cronView.sectionDelivery")}</div>
             <div class="cron-form-section__sub">Choose where run summaries are sent.</div>
             <div class="form-grid cron-form-grid">
               <label class="field ${selectedDeliveryMode === "none" ? "cron-span-2" : ""}">
-                ${renderFieldLabel("Result delivery")}
+                ${renderFieldLabel(t("cronView.deliveryField"))}
                 <select
                   id="cron-delivery-mode"
                   .value=${selectedDeliveryMode}
@@ -831,7 +839,7 @@ export function renderCron(props: CronProps) {
                 selectedDeliveryMode !== "none"
                   ? html`
                       <label class="field ${selectedDeliveryMode === "webhook" ? "cron-span-2" : ""}">
-                        ${renderFieldLabel(selectedDeliveryMode === "webhook" ? "Webhook URL" : "Channel", selectedDeliveryMode === "webhook")}
+                        ${renderFieldLabel(selectedDeliveryMode === "webhook" ? t("cronView.webhookUrlLabel") : t("cronView.channelLabel"), selectedDeliveryMode === "webhook")}
                         ${
                           selectedDeliveryMode === "webhook"
                             ? html`
@@ -961,7 +969,7 @@ export function renderCron(props: CronProps) {
                       </label>
                       <div class="cron-stagger-group cron-span-2">
                         <label class="field">
-                          ${renderFieldLabel("Stagger window")}
+                          ${renderFieldLabel(t("cronView.staggerField"))}
                           <input
                             id="cron-stagger-amount"
                             .value=${props.form.staggerAmount}
@@ -1006,7 +1014,7 @@ export function renderCron(props: CronProps) {
                 isAgentTurn
                   ? html`
                       <label class="field">
-                        ${renderFieldLabel("Model")}
+                        ${renderFieldLabel(t("cronView.modelField"))}
                         <input
                           id="cron-payload-model"
                           .value=${props.form.payloadModel}
@@ -1022,7 +1030,7 @@ export function renderCron(props: CronProps) {
                         </div>
                       </label>
                       <label class="field">
-                        ${renderFieldLabel("Thinking")}
+                        ${renderFieldLabel(t("cronView.thinkingField"))}
                         <input
                           id="cron-payload-thinking"
                           .value=${props.form.payloadThinking}
@@ -1086,7 +1094,7 @@ export function renderCron(props: CronProps) {
         }
         <div class="row cron-form-actions">
           <button class="btn primary" ?disabled=${props.busy || !props.canSubmit} @click=${props.onAdd}>
-            ${props.busy ? "Saving..." : isEditing ? "Save changes" : "Add job"}
+            ${props.busy ? t("ui.saving") : isEditing ? t("cronView.saveChanges") : t("cronView.addJob")}
           </button>
           ${
             submitDisabledReason
@@ -1269,7 +1277,7 @@ function renderJob(job: CronJob, props: CronProps) {
               selectAnd(() => props.onToggle(job, !job.enabled));
             }}
           >
-            ${job.enabled ? "Disable" : "Enable"}
+            ${job.enabled ? t("cronView.disableJob") : t("cronView.enableJob")}
           </button>
           <button
             class="btn"

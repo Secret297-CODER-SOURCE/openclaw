@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import type { ConfigUiHints } from "../types.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
@@ -281,21 +282,24 @@ const sidebarIcons = {
   `,
 };
 
-// Section definitions
-const SECTIONS: Array<{ key: string; label: string }> = [
-  { key: "env", label: "Environment" },
-  { key: "update", label: "Updates" },
-  { key: "agents", label: "Agents" },
-  { key: "auth", label: "Authentication" },
-  { key: "channels", label: "Channels" },
-  { key: "messages", label: "Messages" },
-  { key: "commands", label: "Commands" },
-  { key: "hooks", label: "Hooks" },
-  { key: "skills", label: "Skills" },
-  { key: "tools", label: "Tools" },
-  { key: "gateway", label: "Gateway" },
-  { key: "wizard", label: "Setup Wizard" },
+// Section definitions — labels resolved at render time via i18n
+const SECTION_KEYS: Array<{ key: string; i18nKey: string }> = [
+  { key: "env", i18nKey: "configView.sectionEnv" },
+  { key: "update", i18nKey: "configView.sectionUpdate" },
+  { key: "agents", i18nKey: "configView.sectionAgents" },
+  { key: "auth", i18nKey: "configView.sectionAuth" },
+  { key: "channels", i18nKey: "configView.sectionChannels" },
+  { key: "messages", i18nKey: "configView.sectionMessages" },
+  { key: "commands", i18nKey: "configView.sectionCommands" },
+  { key: "hooks", i18nKey: "configView.sectionHooks" },
+  { key: "skills", i18nKey: "configView.sectionSkills" },
+  { key: "tools", i18nKey: "configView.sectionTools" },
+  { key: "gateway", i18nKey: "configView.sectionGateway" },
+  { key: "wizard", i18nKey: "configView.sectionWizard" },
 ];
+function getSections() {
+  return SECTION_KEYS.map((s) => ({ key: s.key, label: t(s.i18nKey) }));
+}
 
 type SubsectionEntry = {
   key: string;
@@ -409,10 +413,11 @@ export function renderConfig(props: ConfigProps) {
 
   // Get available sections from schema
   const schemaProps = analysis.schema?.properties ?? {};
-  const availableSections = SECTIONS.filter((s) => s.key in schemaProps);
+  const sections = getSections();
+  const availableSections = sections.filter((s) => s.key in schemaProps);
 
   // Add any sections in schema but not in our list
-  const knownKeys = new Set(SECTIONS.map((s) => s.key));
+  const knownKeys = new Set(sections.map((s) => s.key));
   const extraSections = Object.keys(schemaProps)
     .filter((k) => !knownKeys.has(k))
     .map((k) => ({ key: k, label: k.charAt(0).toUpperCase() + k.slice(1) }));
@@ -599,13 +604,13 @@ export function renderConfig(props: ConfigProps) {
               ?disabled=${props.schemaLoading || !props.schema}
               @click=${() => props.onFormModeChange("form")}
             >
-              Form
+              ${t("configView.formTab")}
             </button>
             <button
               class="config-mode-toggle__btn ${props.formMode === "raw" ? "active" : ""}"
               @click=${() => props.onFormModeChange("raw")}
             >
-              Raw
+              ${t("configView.rawTab")}
             </button>
           </div>
         </div>
@@ -628,7 +633,7 @@ export function renderConfig(props: ConfigProps) {
                   >
                 `
                 : html`
-                    <span class="config-status muted">No changes</span>
+                    <span class="config-status muted">${t("configView.noChanges")}</span>
                   `
             }
           </div>
@@ -638,28 +643,28 @@ export function renderConfig(props: ConfigProps) {
               ?disabled=${props.loading}
               @click=${props.onReload}
             >
-              ${props.loading ? "Loading…" : "Reload"}
+              ${props.loading ? t("configView.reloading") : t("configView.reload")}
             </button>
             <button
               class="btn btn--sm primary"
               ?disabled=${!canSave}
               @click=${props.onSave}
             >
-              ${props.saving ? "Saving…" : "Save"}
+              ${props.saving ? t("ui.saving") : t("ui.save")}
             </button>
             <button
               class="btn btn--sm"
               ?disabled=${!canApply}
               @click=${props.onApply}
             >
-              ${props.applying ? "Applying…" : "Apply"}
+              ${props.applying ? t("configView.applying") : t("configView.apply")}
             </button>
             <button
               class="btn btn--sm"
               ?disabled=${!canUpdate}
               @click=${props.onUpdate}
             >
-              ${props.updating ? "Updating…" : "Update"}
+              ${props.updating ? t("configView.updating") : t("configView.update")}
             </button>
           </div>
         </div>

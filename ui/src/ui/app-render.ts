@@ -1109,6 +1109,29 @@ export function renderApp(state: AppViewState) {
                 onRunReEngagementNow: (agentId: string) => {
                   void runReEngagementNow(state, agentId);
                 },
+                reEngTab: state.telegramReEngTab,
+                onSwitchReEngTab: (tab: string) => {
+                  state.telegramReEngTab = tab;
+                  const selectedId = state.telegramSelectedId;
+                  if (!selectedId) {
+                    return;
+                  }
+                  // Auto-load on first visit to history/traces tabs
+                  if (
+                    tab === "history" &&
+                    state.telegramReEngagementHistory.length === 0 &&
+                    !state.telegramReEngagementHistoryLoading
+                  ) {
+                    void loadReEngagementHistory(state, selectedId);
+                  }
+                  if (
+                    tab === "traces" &&
+                    state.telegramAiTraces.length === 0 &&
+                    !state.telegramAiTracesLoading
+                  ) {
+                    void loadAiTraces(state, selectedId);
+                  }
+                },
                 reEngagementHistory: state.telegramReEngagementHistory,
                 reEngagementHistoryLoading: state.telegramReEngagementHistoryLoading,
                 onLoadReEngagementHistory: (agentId: string) => {
@@ -1120,6 +1143,26 @@ export function renderApp(state: AppViewState) {
                   sentAt: string,
                 ) => {
                   void deleteReEngagementHistoryItem(state, agentId, chatId, sentAt);
+                },
+                onOpenChatFromHistory: (agentId: string, chatId: string, _name: string) => {
+                  // Switch to Chat panel, load dialogs if needed, then select the dialog
+                  state.telegramActivePanel = "chat";
+                  if (!state.telegramWebchatDialogs?.length) {
+                    void loadWebchatFolders(state, agentId);
+                    void loadWebchatDialogs(state, agentId);
+                  }
+                  state.telegramWebchatSelectedId = chatId;
+                  state.telegramWebchatMessages = [];
+                  void loadWebchatMessages(state, agentId, chatId);
+                  // Start polling
+                  if (state._telegramWebchatPollTimer !== null) {
+                    clearInterval(state._telegramWebchatPollTimer);
+                  }
+                  state._telegramWebchatPollTimer = window.setInterval(() => {
+                    if (state.telegramWebchatSelectedId === chatId && state.telegramSelectedId) {
+                      void loadWebchatMessages(state, state.telegramSelectedId, chatId, true);
+                    }
+                  }, 4000);
                 },
                 aiTraces: state.telegramAiTraces,
                 aiTracesLoading: state.telegramAiTracesLoading,
@@ -1220,6 +1263,52 @@ export function renderApp(state: AppViewState) {
                   state.telegramAnalysisResults = results;
                   state.telegramTrainingPairs = buildFlatPairs(groups, agentId);
                   void saveTrainingToGateway(state, agentId, state.telegramTrainingScope);
+                },
+                editingPair: state.telegramEditingPair,
+                onTrainingEditPair: (chatId, pairIdx) => {
+                  const group = state.telegramTrainingGroups.find((g) => g.chatId === chatId);
+                  if (!group) {
+                    return;
+                  }
+                  const pair = group.pairs[pairIdx];
+                  if (!pair) {
+                    return;
+                  }
+                  state.telegramEditingPair = {
+                    chatId,
+                    pairIdx,
+                    input: pair.input,
+                    response: pair.response,
+                  };
+                },
+                onTrainingEditPairChange: (field, value) => {
+                  if (!state.telegramEditingPair) {
+                    return;
+                  }
+                  state.telegramEditingPair = { ...state.telegramEditingPair, [field]: value };
+                },
+                onTrainingEditPairSave: () => {
+                  if (!state.telegramEditingPair) {
+                    return;
+                  }
+                  const { chatId, pairIdx, input, response } = state.telegramEditingPair;
+                  const agentId = state.telegramSelectedId ?? "";
+                  const groups = state.telegramTrainingGroups.map((g) => {
+                    if (g.chatId !== chatId) {
+                      return g;
+                    }
+                    return {
+                      ...g,
+                      pairs: g.pairs.map((p, i) => (i === pairIdx ? { input, response } : p)),
+                    };
+                  });
+                  state.telegramTrainingGroups = groups;
+                  state.telegramTrainingPairs = buildFlatPairs(groups, agentId);
+                  state.telegramEditingPair = null;
+                  void saveTrainingToGateway(state, agentId, state.telegramTrainingScope);
+                },
+                onTrainingEditPairCancel: () => {
+                  state.telegramEditingPair = null;
                 },
                 onSelectChatSubPanel: (sub) => {
                   state.telegramChatSubPanel = sub;
