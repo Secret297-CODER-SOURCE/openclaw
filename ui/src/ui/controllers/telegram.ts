@@ -2136,9 +2136,30 @@ async function analyzeMegaBatch(
     });
     const inner: { results?: BatchResultItem[] } = ((res as Record<string, unknown>)?.data ??
       res) as { results?: BatchResultItem[] };
-    return inner.results ?? [];
+    const results = inner.results ?? [];
+
+    // Fallback: if mega-batch returned all nulls (model failed to produce valid JSON array),
+    // retry each dialog individually so we don't silently lose the whole chunk.
+    const allNull = results.length > 0 && results.every((r) => r === null);
+    if (allNull) {
+      return await Promise.all(
+        groups.map((g) =>
+          analyzeDialogChat(state, agentId, g).then((r) =>
+            r ? ({ chatId: g.chatId, ...r } as BatchResultItem) : null,
+          ),
+        ),
+      );
+    }
+    return results;
   } catch {
-    return groups.map(() => null);
+    // On total failure, retry individually
+    return await Promise.all(
+      groups.map((g) =>
+        analyzeDialogChat(state, agentId, g).then((r) =>
+          r ? ({ chatId: g.chatId, ...r } as BatchResultItem) : null,
+        ),
+      ),
+    );
   }
 }
 
@@ -2192,7 +2213,8 @@ async function analyzeDialogsBatch(
 // Direct adapter (ANTHROPIC_API_KEY etc.) → parallel AI calls per dialog
 // Gateway adapter → mega-batch: N dialogs in ONE AI call = N× speedup
 const STRATEGY_DIRECT = { concurrency: 5, innerBatch: 8, mega: false, flushEvery: 40 };
-const STRATEGY_GATEWAY = { concurrency: 4, innerBatch: 15, mega: true, flushEvery: 60 };
+// Reduced innerBatch from 15 to 4: smaller mega-batches produce valid JSON arrays more reliably.
+const STRATEGY_GATEWAY = { concurrency: 3, innerBatch: 4, mega: true, flushEvery: 20 };
 
 export async function runBatchAnalysis(
   state: TelegramScenarioState,
@@ -2213,14 +2235,20 @@ export async function runBatchAnalysis(
   const trivial = candidates.filter((g) => g.pairs.length < 2);
   const toAnalyze = candidates.filter((g) => g.pairs.length >= 2);
   for (const g of trivial) {
+    const trivialResult = {
+      status: "neutral" as TrainingLabel,
+      score: 0,
+      reason: "Слишком мало сообщений",
+      analyzedAt: trivialNow,
+    };
     state.telegramAnalysisResults = {
       ...state.telegramAnalysisResults,
-      [g.chatId]: {
-        status: "neutral",
-        score: 0,
-        reason: "Слишком мало сообщений",
-        analyzedAt: trivialNow,
-      },
+      [g.chatId]: trivialResult,
+    };
+    // Also persist the label so it shows up in stats and survives reload
+    state.telegramTrainingLabels = {
+      ...state.telegramTrainingLabels,
+      [g.chatId]: "neutral",
     };
   }
 
@@ -2269,9 +2297,10 @@ export async function runBatchAnalysis(
   const processResult = (group: TrainingGroup, result: DialogAnalysisResult | null) => {
     if (result) {
       accumulated[group.chatId] = result;
-      if (!accumulatedLabels[group.chatId]) {
-        accumulatedLabels[group.chatId] = result.status;
-      }
+      // Always overwrite label with fresh AI result — never skip.
+      // The old guard `if (!accumulatedLabels[...])` caused a bug where a previous
+      // run that stored "neutral" for every dialog would block all subsequent re-analyses.
+      accumulatedLabels[group.chatId] = result.status;
     }
     completedCount++;
     state.telegramBatchProgress = completedCount;

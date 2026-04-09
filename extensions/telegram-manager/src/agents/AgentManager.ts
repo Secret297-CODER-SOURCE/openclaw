@@ -298,18 +298,24 @@ export class AgentManager {
       return { results: [] };
     }
 
-    // Build one prompt with all dialogs clearly separated
+    // Build one prompt with all dialogs clearly separated.
+    // Strip the single-dialog format line ("Ответ верни строго в JSON: {...}") from
+    // the criteria prompt — it conflicts with our array instruction below and causes
+    // models to return a single JSON object instead of an array (all results → null).
+    const criteriaOnly = (prompt ?? "").replace(/\nОтвет верни строго в JSON[\s\S]*/i, "").trim();
+
     const dialogsText = dialogs
       .map((d, i) => `=== Диалог ${i + 1} (chatId: ${d.chatId}) ===\n${d.dialog}`)
       .join("\n\n");
 
-    const megaPrompt = `${prompt ?? ""}
+    const megaPrompt = `${criteriaOnly}
 
-Проанализируй каждый из ${dialogs.length} диалогов ниже.
-Верни ТОЛЬКО JSON-массив без лишнего текста:
+Проанализируй каждый из ${dialogs.length} диалогов ниже и верни ТОЛЬКО JSON-массив (без лишнего текста):
 [{"chatId":"...","status":"success"|"fail"|"neutral","score":0-100,"reason":"кратко"},...]
 
-${dialogsText}`;
+${dialogsText}
+
+Верни строго JSON-массив из ${dialogs.length} объектов, по одному на каждый диалог.`;
 
     const text = await analyzeOnce(megaPrompt);
 
