@@ -916,8 +916,12 @@ export class TelegramStorage {
     agentId: string,
     chatId: string,
     info: { firstName?: string; lastName?: string; username?: string },
+    /** Explicit timestamp for last client message. Defaults to now (live messages).
+     *  For backfill passes the actual dialog date; only updates if newer than stored. */
+    lastMsgAt?: string,
   ): void {
     const now = new Date().toISOString();
+    const msgAt = lastMsgAt ?? now;
     this.db
       .prepare(
         `INSERT INTO tg_contacts (agent_id, chat_id, first_name, last_name, username, last_client_msg_at, first_msg_at)
@@ -926,7 +930,11 @@ export class TelegramStorage {
            first_name         = COALESCE(excluded.first_name, first_name),
            last_name          = COALESCE(excluded.last_name, last_name),
            username           = COALESCE(excluded.username, username),
-           last_client_msg_at = excluded.last_client_msg_at`,
+           last_client_msg_at = CASE
+             WHEN excluded.last_client_msg_at > last_client_msg_at
+             THEN excluded.last_client_msg_at
+             ELSE last_client_msg_at
+           END`,
       )
       .run(
         agentId,
@@ -934,8 +942,8 @@ export class TelegramStorage {
         info.firstName ?? null,
         info.lastName ?? null,
         info.username ?? null,
-        now,
-        now,
+        msgAt,
+        msgAt,
       );
   }
 

@@ -3222,10 +3222,11 @@ export abstract class BaseAgent extends EventEmitter {
   protected saveContactInfo(
     chatId: string,
     info: { firstName?: string; lastName?: string; username?: string },
+    lastMsgAt?: string,
   ): void {
     if (!chatId) return;
     try {
-      this.storage.upsertContact(this.id, chatId, info);
+      this.storage.upsertContact(this.id, chatId, info, lastMsgAt);
     } catch (e) {
       this.logger.warn(`[TG:${this.name}] saveContactInfo failed: ${String(e)}`);
     }
@@ -3379,7 +3380,8 @@ export abstract class BaseAgent extends EventEmitter {
   /**
    * Ensure a re-engagement message is in the client's language AND starts with a greeting.
    * Loads recent client messages from history, detects the language,
-   * translates the response if needed, and guarantees a greeting is present.
+   * translates the message to the client's language if needed.
+   * Does NOT add or remove greetings — preserves the original template structure.
    * Called before every send.
    */
   private async enforceReEngagementLanguage(text: string, chatKey: string): Promise<string> {
@@ -3392,28 +3394,16 @@ export abstract class BaseAgent extends EventEmitter {
         .join(" ")
         .slice(0, 400);
 
-      const clientUsesCyrillic = clientSample.trim() ? /[а-яёА-ЯЁ]{3,}/.test(clientSample) : true; // no history → assume Russian
+      const clientUsesCyrillic = clientSample.trim() ? /[а-яёА-ЯЁ]{3,}/.test(clientSample) : true;
 
-      // Common greeting patterns across languages
-      const hasGreeting =
-        /^(привет|здравств|добрый|рад|hi\b|hello|hey\b|merhaba|hola|bonjour|ciao|سلام|مرحبا|你好|こんにちは|안녕)/i.test(
-          text.trim(),
-        );
+      // Russian client — no translation needed
+      if (clientUsesCyrillic) return text;
 
-      if (clientUsesCyrillic) {
-        // Russian client — ensure Russian greeting if missing
-        if (!hasGreeting) {
-          return `Привет! ${text}`;
-        }
-        return text;
-      }
-
-      // Non-Cyrillic client — translate entire message AND ensure greeting is present
+      // Non-Cyrillic client — translate the entire message preserving structure
       const translated = await analyzeOnceDirect(
         `Язык клиента определён по его сообщениям: "${clientSample.slice(0, 200)}"\n\n` +
-          `Выполни два действия:\n` +
-          `1. Переведи ВЕСЬ следующий текст на язык клиента — каждое слово включая приветствие. ЗАПРЕЩЕНО оставлять кириллицу.\n` +
-          `2. Убедись что сообщение начинается с короткого приветствия на языке клиента (Hi! / Merhaba! / Hello! и т.д.). Если приветствия нет — добавь его в начало.\n` +
+          `Переведи ВЕСЬ следующий текст на язык клиента — каждое слово. ЗАПРЕЩЕНО оставлять кириллицу.\n` +
+          `Сохрани структуру сообщения как есть — не добавляй и не убирай приветствия.\n` +
           `Верни ТОЛЬКО готовый текст, без пояснений и кавычек:\n\n${text}`,
       );
       return translated.trim() || text;
@@ -4041,6 +4031,10 @@ export abstract class BaseAgent extends EventEmitter {
       await new Promise((r) => setTimeout(r, delay));
     };
 
+    // Per-run dedup: even if a contact falls into multiple day-windows (due to ±36h overlap),
+    // send at most ONE message per cron run.
+    const sentInThisRun = new Set<string>();
+
     // Process each specific day in the range.
     for (const days of delays) {
       const targetMs = days * 24 * 60 * 60 * 1000;
@@ -4079,9 +4073,19 @@ export abstract class BaseAgent extends EventEmitter {
         );
       }
       for (const contact of contacts) {
+        // Skip if already sent to this contact in this cron run (window overlap guard)
+        if (sentInThisRun.has(contact.chatId)) {
+          this.logger.info(
+            `[TG:${this.name}] re-engagement day=${days} skip | chat=${contact.chatId} already sent in this run`,
+          );
+          continue;
+        }
         await maybePause();
         const sent = await sendReEngagement(contact, days);
-        if (sent) sentCount++;
+        if (sent) {
+          sentCount++;
+          sentInThisRun.add(contact.chatId);
+        }
       }
     }
 

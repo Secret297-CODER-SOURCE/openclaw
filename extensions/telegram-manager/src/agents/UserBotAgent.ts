@@ -505,6 +505,10 @@ export class UserBotAgent extends BaseAgent {
       this.catchUpUnread().catch((e) =>
         this.logger.warn(`[TG:${this.name}] catch-up error`, { e: String(e) }),
       );
+      // Populate tg_contacts from existing dialogs so re-engagement works on fresh installs.
+      this.backfillContactsFromDialogs().catch((e) =>
+        this.logger.warn(`[TG:${this.name}] backfill contacts error`, { e: String(e) }),
+      );
     } catch (err) {
       this.setStatus("error", String(err));
       throw err;
@@ -918,6 +922,92 @@ export class UserBotAgent extends BaseAgent {
       // Small delay between chats to avoid rate limits.
       await new Promise((r) => setTimeout(r, 2000));
     }
+  }
+
+  /**
+   * Backfill tg_contacts from the most recent Telegram dialogs so re-engagement
+   * works on fresh installs before any live messages have been processed.
+   * Fetches up to 500 recent dialogs and upserts each non-bot user contact with
+   * the last INCOMING message date as last_client_msg_at.
+   * Also backfills conversation history (last 30 msgs) for contacts without any
+   * stored history, so re-engagement AI can personalise messages.
+   * Safe to call multiple times — only updates if timestamp is newer.
+   */
+  private async backfillContactsFromDialogs(): Promise<void> {
+    if (!this.client) return;
+    let dialogs: any[];
+    try {
+      dialogs = await this.client.getDialogs({ limit: 500 });
+    } catch (e) {
+      this.logger.warn(`[TG:${this.name}] backfill: getDialogs failed`, { e: String(e) });
+      return;
+    }
+
+    let contactCount = 0;
+    let historyCount = 0;
+
+    for (const dialog of dialogs) {
+      const entity = dialog.entity as any;
+      // Only individual user chats — skip bots, groups, channels
+      if (!entity || entity.bot || entity.megagroup || entity.broadcast || entity.gigagroup)
+        continue;
+
+      const chatId = String(dialog.id);
+      const lastMsg = dialog.message as any;
+      if (!lastMsg?.date) continue;
+
+      // Only count INCOMING messages for last_client_msg_at.
+      // If the last message is outgoing (we sent it), the timestamp would break
+      // the period_ref dedup and cause duplicate re-engagement sends.
+      if (!lastMsg.out) {
+        const lastMsgAt = new Date((lastMsg.date as number) * 1000).toISOString();
+        this.saveContactInfo(
+          chatId,
+          {
+            firstName: entity.firstName,
+            lastName: entity.lastName,
+            username: entity.username,
+          },
+          lastMsgAt,
+        );
+        contactCount++;
+      }
+
+      // Backfill conversation history only for contacts without any stored history.
+      // Limits API calls — skip dialogs that already have history.
+      const chatKey = `${this.id}:${chatId}`;
+      const existing = this.storage.loadConversationHistory(chatKey);
+      if (existing.length > 0) continue;
+
+      try {
+        // Small delay to avoid hitting Telegram rate limits
+        await new Promise((r) => setTimeout(r, 300));
+        const msgs = await this.client.getMessages(chatId, { limit: 30 });
+        if (!msgs || msgs.length === 0) continue;
+
+        // Build history oldest-first, map incoming → "user", outgoing → "assistant"
+        const history: { role: "user" | "assistant"; content: string }[] = [];
+        for (const m of [...msgs].reverse()) {
+          const text = (m as any).message as string | undefined;
+          if (!text?.trim()) continue;
+          history.push({
+            role: (m as any).out ? "assistant" : "user",
+            content: text.trim(),
+          });
+        }
+
+        if (history.length > 0) {
+          this.storage.saveConversationHistory(chatKey, history);
+          historyCount++;
+        }
+      } catch {
+        // History backfill is best-effort — skip on error
+      }
+    }
+
+    this.logger.info(
+      `[TG:${this.name}] backfill: synced ${contactCount} contacts, ${historyCount} histories from dialogs`,
+    );
   }
 
   protected async onBehaviorsChanged(behaviors: BehaviorConfig[]): Promise<void> {

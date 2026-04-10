@@ -343,6 +343,38 @@ export type TelegramProps = {
   onLoadPromptSummary: (agentId: string) => void;
 };
 
+// ─── Silence-interval unit helpers ───────────────────────────────────────────
+
+type SilenceUnit = "дней" | "недель" | "месяцев";
+
+/** Convert stored days value to the most human-friendly unit + number. */
+function daysToDisplay(totalDays: number): { value: number; unit: SilenceUnit } {
+  if (totalDays >= 30 && totalDays % 30 === 0) {
+    return { value: totalDays / 30, unit: "месяцев" };
+  }
+  if (totalDays >= 14 && totalDays % 7 === 0) {
+    return { value: totalDays / 7, unit: "недель" };
+  }
+  return { value: totalDays, unit: "дней" };
+}
+
+/** Convert display value + unit back to days for storage. */
+function displayToDays(value: number, unit: SilenceUnit): number {
+  if (unit === "недель") {
+    return value * 7;
+  }
+  if (unit === "месяцев") {
+    return value * 30;
+  }
+  return value;
+}
+
+/** Render a human-readable label like "3 дня", "2 недели", "1 месяц". */
+function silenceLabel(totalDays: number): string {
+  const { value, unit } = daysToDisplay(totalDays);
+  return `${value} ${unit}`;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function statusChipClass(status: string): string {
@@ -2873,54 +2905,101 @@ function renderPromptsPanel(props: TelegramProps, agent: TelegramAgentRecord) {
             <div class="tg-reeng-panel">
 
               <!-- Day range -->
-              <div class="tg-reeng-section-title">Интервал молчания (дней)</div>
-              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
-                <span style="font-size:13px;color:var(--text-muted);">от</span>
-                <input
-                  type="number"
-                  min="0"
-                  max="365"
-                  class="input"
-                  style="width:64px;font-size:13px;text-align:center;"
-                  .value=${String(settings.reEngagementDelayFrom ?? 1)}
-                  @change=${(e: Event) => {
-                    const v = parseInt((e.target as HTMLInputElement).value, 10);
-                    if (!isNaN(v) && v >= 0) {
-                      saveNow({ reEngagementDelayFrom: v });
-                    }
-                  }}
-                />
-                <span style="font-size:13px;color:var(--text-muted);">до</span>
-                <input
-                  type="number"
-                  min="0"
-                  max="365"
-                  class="input"
-                  style="width:64px;font-size:13px;text-align:center;"
-                  .value=${String(settings.reEngagementDelayTo ?? 7)}
-                  @change=${(e: Event) => {
-                    const v = parseInt((e.target as HTMLInputElement).value, 10);
-                    if (!isNaN(v) && v >= 0) {
-                      saveNow({ reEngagementDelayTo: v });
-                    }
-                  }}
-                />
-                <span style="font-size:13px;color:var(--text-muted);">дней</span>
-                <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;margin-left:4px;">
-                  <input
-                    type="checkbox"
-                    ?checked=${!!settings.reEngagementDelayMore}
-                    @change=${(e: Event) =>
-                      saveNow({
-                        reEngagementDelayMore: (e.target as HTMLInputElement).checked,
-                      })}
-                  />
-                  <span style="color:var(--text-muted);">и более</span>
-                </label>
-              </div>
+              <div class="tg-reeng-section-title">Интервал молчания</div>
+              ${(() => {
+                const fromD = daysToDisplay(settings.reEngagementDelayFrom ?? 1);
+                const toD = daysToDisplay(settings.reEngagementDelayTo ?? 7);
+                const unitOptions = (selected: SilenceUnit) =>
+                  (["дней", "недель", "месяцев"] as SilenceUnit[]).map(
+                    (u) => html`<option value=${u} ?selected=${u === selected}>${u}</option>`,
+                  );
+                return html`
+                  <div class="tg-si-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+                    <span style="font-size:13px;color:var(--text-muted);">от</span>
+                    <input
+                      type="number" min="1" max="999"
+                      class="input"
+                      style="width:60px;font-size:13px;text-align:center;"
+                      .value=${String(fromD.value)}
+                      @change=${(e: Event) => {
+                        const row = (e.target as HTMLElement).closest(".tg-si-row") as HTMLElement;
+                        const unit =
+                          ((row?.querySelector(".tg-si-unit-from") as HTMLSelectElement)
+                            ?.value as SilenceUnit) ?? "дней";
+                        const v = parseInt((e.target as HTMLInputElement).value, 10);
+                        if (!isNaN(v) && v >= 1) {
+                          saveNow({ reEngagementDelayFrom: displayToDays(v, unit) });
+                        }
+                      }}
+                    />
+                    <select
+                      class="tg-si-unit-from input"
+                      style="font-size:13px;padding:2px 4px;"
+                      @change=${(e: Event) => {
+                        const row = (e.target as HTMLElement).closest(".tg-si-row") as HTMLElement;
+                        const numEl = row?.querySelector("input[type=number]") as HTMLInputElement;
+                        const v = parseInt(numEl?.value ?? "1", 10);
+                        if (!isNaN(v) && v >= 1) {
+                          saveNow({
+                            reEngagementDelayFrom: displayToDays(
+                              v,
+                              (e.target as HTMLSelectElement).value as SilenceUnit,
+                            ),
+                          });
+                        }
+                      }}
+                    >${unitOptions(fromD.unit)}</select>
+                    <span style="font-size:13px;color:var(--text-muted);">до</span>
+                    <input
+                      type="number" min="1" max="999"
+                      class="input"
+                      style="width:60px;font-size:13px;text-align:center;"
+                      .value=${String(toD.value)}
+                      @change=${(e: Event) => {
+                        const row = (e.target as HTMLElement).closest(".tg-si-row") as HTMLElement;
+                        const unit =
+                          ((row?.querySelector(".tg-si-unit-to") as HTMLSelectElement)
+                            ?.value as SilenceUnit) ?? "дней";
+                        const v = parseInt((e.target as HTMLInputElement).value, 10);
+                        if (!isNaN(v) && v >= 1) {
+                          saveNow({ reEngagementDelayTo: displayToDays(v, unit) });
+                        }
+                      }}
+                    />
+                    <select
+                      class="tg-si-unit-to input"
+                      style="font-size:13px;padding:2px 4px;"
+                      @change=${(e: Event) => {
+                        const row = (e.target as HTMLElement).closest(".tg-si-row") as HTMLElement;
+                        const inputs = row?.querySelectorAll("input[type=number]");
+                        const numEl = inputs?.[1] as HTMLInputElement;
+                        const v = parseInt(numEl?.value ?? "7", 10);
+                        if (!isNaN(v) && v >= 1) {
+                          saveNow({
+                            reEngagementDelayTo: displayToDays(
+                              v,
+                              (e.target as HTMLSelectElement).value as SilenceUnit,
+                            ),
+                          });
+                        }
+                      }}
+                    >${unitOptions(toD.unit)}</select>
+                    <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;margin-left:4px;">
+                      <input
+                        type="checkbox"
+                        ?checked=${!!settings.reEngagementDelayMore}
+                        @change=${(e: Event) =>
+                          saveNow({
+                            reEngagementDelayMore: (e.target as HTMLInputElement).checked,
+                          })}
+                      />
+                      <span style="color:var(--text-muted);">и более</span>
+                    </label>
+                  </div>`;
+              })()}
               <div class="tg-setting-hint" style="margin-bottom:6px;">
-                Агент пишет контактам, молчавшим от <b>${settings.reEngagementDelayFrom ?? 1}</b>
-                до <b>${settings.reEngagementDelayTo ?? 7}</b> дней${settings.reEngagementDelayMore ? `, а также всем кто молчит дольше` : ""}. <span style="color:var(--ok,#3dbb70);">✓ сохраняется автоматически</span>
+                Агент пишет контактам, молчавшим от <b>${silenceLabel(settings.reEngagementDelayFrom ?? 1)}</b>
+                до <b>${silenceLabel(settings.reEngagementDelayTo ?? 7)}</b>${settings.reEngagementDelayMore ? `, а также всем кто молчит дольше` : ""}. <span style="color:var(--ok,#3dbb70);">✓ сохраняется автоматически</span>
               </div>
               <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:8px 12px;margin-top:8px;">
                 <div style="display:flex;align-items:center;gap:8px;">
